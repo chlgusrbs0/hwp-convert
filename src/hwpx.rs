@@ -8,15 +8,20 @@ use zip::ZipArchive;
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
 
 pub fn read_preview_text(input_path: &Path) -> Result<String, Box<dyn Error>> {
+    let paragraphs = read_paragraphs(input_path)?;
+    Ok(paragraphs.join("\n"))
+}
+
+pub fn read_paragraphs(input_path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
     let bytes = fs::read(input_path)?;
 
-    match read_preview_text_with_rhwp(&bytes) {
-        Ok(Some(text)) => Ok(text),
+    match read_paragraphs_with_rhwp(&bytes) {
+        Ok(Some(paragraphs)) => Ok(paragraphs),
         Ok(None) | Err(_) => read_preview_text_from_archive(&bytes),
     }
 }
 
-fn read_preview_text_with_rhwp(bytes: &[u8]) -> Result<Option<String>, Box<dyn Error>> {
+fn read_paragraphs_with_rhwp(bytes: &[u8]) -> Result<Option<Vec<String>>, Box<dyn Error>> {
     let document = rhwp::parse_document(bytes).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -24,37 +29,36 @@ fn read_preview_text_with_rhwp(bytes: &[u8]) -> Result<Option<String>, Box<dyn E
         )
     })?;
 
-    if let Some(text) = extract_body_text(&document) {
-        return Ok(Some(text));
+    if let Some(paragraphs) = extract_body_paragraphs(&document) {
+        return Ok(Some(paragraphs));
     }
 
     Ok(document
         .preview
         .and_then(|preview| preview.text)
-        .map(|text| normalize_newlines(&text)))
+        .map(|text| split_preview_text_to_paragraphs(&text)))
 }
 
-fn extract_body_text(document: &rhwp::model::document::Document) -> Option<String> {
-    let mut text = String::new();
+fn extract_body_paragraphs(document: &rhwp::model::document::Document) -> Option<Vec<String>> {
+    let mut paragraphs = Vec::new();
 
     for section in &document.sections {
         for paragraph in &section.paragraphs {
+            let text = normalize_newlines(&paragraph.text);
             if !text.is_empty() {
-                text.push('\n');
+                paragraphs.push(text);
             }
-            text.push_str(&paragraph.text);
         }
     }
 
-    let normalized = normalize_newlines(&text);
-    if normalized.trim().is_empty() {
+    if paragraphs.is_empty() {
         None
     } else {
-        Some(normalized)
+        Some(paragraphs)
     }
 }
 
-fn read_preview_text_from_archive(bytes: &[u8]) -> Result<String, Box<dyn Error>> {
+fn read_preview_text_from_archive(bytes: &[u8]) -> Result<Vec<String>, Box<dyn Error>> {
     let cursor = Cursor::new(bytes);
     let mut archive = ZipArchive::new(cursor).map_err(|error| {
         io::Error::new(
@@ -80,11 +84,20 @@ fn read_preview_text_from_archive(bytes: &[u8]) -> Result<String, Box<dyn Error>
         )
     })?;
 
-    Ok(normalize_newlines(&preview_text))
+    Ok(split_preview_text_to_paragraphs(&preview_text))
 }
 
 fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn split_preview_text_to_paragraphs(text: &str) -> Vec<String> {
+    normalize_newlines(text)
+        .split('\n')
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 #[cfg(test)]
@@ -101,7 +114,7 @@ mod tests {
     use zip::write::SimpleFileOptions;
 
     #[test]
-    fn extracts_body_text_from_rhwp_document() {
+    fn extracts_body_paragraphs_from_rhwp_document() {
         let document = Document {
             sections: vec![
                 Section {
@@ -128,11 +141,25 @@ mod tests {
             ..Default::default()
         };
 
-        let text = extract_body_text(&document);
+        let paragraphs = extract_body_paragraphs(&document);
 
         assert_eq!(
-            text,
-            Some("first paragraph\nsecond paragraph\nthird paragraph".to_string())
+            paragraphs,
+            Some(vec![
+                "first paragraph".to_string(),
+                "second paragraph".to_string(),
+                "third paragraph".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn splits_preview_text_into_paragraphs() {
+        let paragraphs = split_preview_text_to_paragraphs("first line\r\n\r\nsecond line\r\n");
+
+        assert_eq!(
+            paragraphs,
+            vec!["first line".to_string(), "second line".to_string()]
         );
     }
 
@@ -146,10 +173,13 @@ mod tests {
         writer.write_all(b"first line\r\nsecond line")?;
         writer.finish()?;
 
-        let preview_text = read_preview_text(&path)?;
+        let preview_text = read_paragraphs(&path)?;
         fs::remove_file(&path)?;
 
-        assert_eq!(preview_text, "first line\nsecond line");
+        assert_eq!(
+            preview_text,
+            vec!["first line".to_string(), "second line".to_string()]
+        );
 
         Ok(())
     }
