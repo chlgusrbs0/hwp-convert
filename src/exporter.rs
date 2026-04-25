@@ -40,20 +40,22 @@ fn validate_input_path(input_path: &Path) -> Result<(), io::Error> {
         ));
     }
 
-    if !has_hwpx_extension(input_path) {
+    if !has_supported_input_extension(input_path) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "현재 버전은 .hwpx 파일만 지원합니다.",
+            "현재 버전은 .hwp, .hwpx 파일만 지원합니다.",
         ));
     }
 
     Ok(())
 }
 
-fn has_hwpx_extension(path: &Path) -> bool {
+fn has_supported_input_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("hwpx"))
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("hwp") || extension.eq_ignore_ascii_case("hwpx")
+        })
 }
 
 fn create_output_path(input_path: &Path, format: OutputFormat) -> PathBuf {
@@ -184,10 +186,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejects_non_hwpx_extension() {
-        assert!(!has_hwpx_extension(Path::new("sample.txt")));
-        assert!(has_hwpx_extension(Path::new("sample.hwpx")));
-        assert!(has_hwpx_extension(Path::new("sample.HWPX")));
+    fn rejects_unsupported_extension() {
+        assert!(!has_supported_input_extension(Path::new("sample.txt")));
+        assert!(has_supported_input_extension(Path::new("sample.hwp")));
+        assert!(has_supported_input_extension(Path::new("sample.HWP")));
+        assert!(has_supported_input_extension(Path::new("sample.hwpx")));
+        assert!(has_supported_input_extension(Path::new("sample.HWPX")));
     }
 
     #[test]
