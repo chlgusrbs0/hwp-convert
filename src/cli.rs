@@ -50,6 +50,7 @@ impl fmt::Display for OutputFormat {
 pub struct CliArgs {
     pub input_path: PathBuf,
     pub format: OutputFormat,
+    pub recursive: bool,
 }
 
 pub fn parse_args<I, T>(args: I) -> Result<Option<CliArgs>, io::Error>
@@ -70,41 +71,67 @@ where
     }
 
     let input_path = PathBuf::from(first);
-    let Some(flag) = args.next() else {
+    let mut format = None;
+    let mut recursive = false;
+
+    while let Some(arg) = args.next() {
+        match arg.to_string_lossy().as_ref() {
+            "--to" => {
+                if format.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--to는 한 번만 사용할 수 있습니다.",
+                    ));
+                }
+
+                let Some(value) = args.next() else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "출력 형식을 지정해야 합니다. 예: hwp-convert sample.hwpx --to svg",
+                    ));
+                };
+
+                format = Some(OutputFormat::parse(&value.to_string_lossy())?);
+            }
+            "--recursive" => {
+                if recursive {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--recursive는 한 번만 사용할 수 있습니다.",
+                    ));
+                }
+
+                recursive = true;
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "알 수 없는 인자입니다. 예: hwp-convert sample.hwpx --to svg [--recursive]"
+                    ),
+                ));
+            }
+        }
+    }
+
+    let Some(format) = format else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "출력 형식을 지정해야 합니다. 예: hwp-convert sample.hwpx --to svg",
         ));
     };
-    let Some(format) = args.next() else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "출력 형식을 지정해야 합니다. 예: hwp-convert sample.hwpx --to svg",
-        ));
-    };
 
-    if args.next().is_some() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "인자가 너무 많습니다. 예: hwp-convert sample.hwpx --to svg",
-        ));
-    }
-
-    if flag.to_string_lossy() != "--to" {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "두 번째 인자는 --to 여야 합니다.",
-        ));
-    }
-
-    let format = OutputFormat::parse(&format.to_string_lossy())?;
-
-    Ok(Some(CliArgs { input_path, format }))
+    Ok(Some(CliArgs {
+        input_path,
+        format,
+        recursive,
+    }))
 }
 
 pub fn print_usage() {
     println!("사용법");
     println!("  hwp-convert <입력 파일> --to <출력 형식>");
+    println!("  hwp-convert <입력 디렉토리> --to <출력 형식> --recursive");
     println!();
     println!("지원 형식");
     println!("  txt");
@@ -119,6 +146,7 @@ pub fn print_usage() {
     println!("  hwp-convert sample.hwpx --to json");
     println!("  hwp-convert sample.hwpx --to html");
     println!("  hwp-convert sample.hwpx --to markdown");
+    println!("  hwp-convert ./documents --to svg --recursive");
 }
 
 #[cfg(test)]
@@ -134,6 +162,7 @@ mod tests {
             Some(CliArgs {
                 input_path: PathBuf::from("sample.hwpx"),
                 format: OutputFormat::Txt,
+                recursive: false,
             })
         );
     }
@@ -147,6 +176,7 @@ mod tests {
             Some(CliArgs {
                 input_path: PathBuf::from("sample.hwpx"),
                 format: OutputFormat::Svg,
+                recursive: false,
             })
         );
     }
@@ -160,6 +190,7 @@ mod tests {
             Some(CliArgs {
                 input_path: PathBuf::from("sample.hwpx"),
                 format: OutputFormat::Json,
+                recursive: false,
             })
         );
     }
@@ -173,6 +204,7 @@ mod tests {
             Some(CliArgs {
                 input_path: PathBuf::from("sample.hwpx"),
                 format: OutputFormat::Html,
+                recursive: false,
             })
         );
     }
@@ -186,6 +218,35 @@ mod tests {
             Some(CliArgs {
                 input_path: PathBuf::from("sample.hwpx"),
                 format: OutputFormat::Markdown,
+                recursive: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_recursive_directory_arguments() {
+        let args = parse_args(["hwp-convert", "documents", "--to", "svg", "--recursive"]).unwrap();
+
+        assert_eq!(
+            args,
+            Some(CliArgs {
+                input_path: PathBuf::from("documents"),
+                format: OutputFormat::Svg,
+                recursive: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_recursive_flag_before_to() {
+        let args = parse_args(["hwp-convert", "documents", "--recursive", "--to", "json"]).unwrap();
+
+        assert_eq!(
+            args,
+            Some(CliArgs {
+                input_path: PathBuf::from("documents"),
+                format: OutputFormat::Json,
+                recursive: true,
             })
         );
     }
@@ -200,6 +261,21 @@ mod tests {
     #[test]
     fn rejects_unknown_format() {
         let error = parse_args(["hwp-convert", "sample.hwpx", "--to", "pdf"]).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn rejects_missing_to_value() {
+        let error = parse_args(["hwp-convert", "sample.hwpx", "--to"]).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn rejects_unknown_flag() {
+        let error =
+            parse_args(["hwp-convert", "sample.hwpx", "--to", "txt", "--verbose"]).unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }

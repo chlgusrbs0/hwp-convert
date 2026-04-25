@@ -8,57 +8,153 @@ use serde::Serialize;
 use crate::cli::{CliArgs, OutputFormat};
 use crate::hwpx;
 
-pub fn export(args: &CliArgs) -> Result<PathBuf, Box<dyn Error>> {
-    validate_input_path(&args.input_path)?;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportedFile {
+    pub input_path: PathBuf,
+    pub output_path: PathBuf,
+}
 
-    let output_path = create_output_path(&args.input_path, args.format);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportReport {
+    converted_files: Vec<ExportedFile>,
+}
 
-    match args.format {
+impl ExportReport {
+    pub fn converted_files(&self) -> &[ExportedFile] {
+        &self.converted_files
+    }
+}
+
+pub fn export(args: &CliArgs) -> Result<ExportReport, Box<dyn Error>> {
+    validate_input_path(&args.input_path, args.recursive)?;
+
+    if args.input_path.is_dir() {
+        export_directory_recursively(&args.input_path, args.format)
+    } else {
+        let exported_file = export_file(&args.input_path, args.format)?;
+        Ok(ExportReport {
+            converted_files: vec![exported_file],
+        })
+    }
+}
+
+fn export_directory_recursively(
+    input_dir: &Path,
+    format: OutputFormat,
+) -> Result<ExportReport, Box<dyn Error>> {
+    let mut input_files = Vec::new();
+    collect_supported_input_files(input_dir, &mut input_files)?;
+
+    if input_files.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "디렉토리 안에서 변환할 .hwp 또는 .hwpx 파일을 찾을 수 없습니다: {}",
+                input_dir.display()
+            ),
+        )
+        .into());
+    }
+
+    let mut converted_files = Vec::with_capacity(input_files.len());
+    for input_path in input_files {
+        converted_files.push(export_file(&input_path, format)?);
+    }
+
+    Ok(ExportReport { converted_files })
+}
+
+fn export_file(input_path: &Path, format: OutputFormat) -> Result<ExportedFile, Box<dyn Error>> {
+    validate_supported_file(input_path)?;
+
+    let output_path = create_output_path(input_path, format);
+
+    match format {
         OutputFormat::Txt => {
-            let document_text = hwpx::read_preview_text(&args.input_path)?;
+            let document_text = hwpx::read_preview_text(input_path)?;
             write_txt_output(&output_path, &document_text)?;
         }
         OutputFormat::Svg => {
-            let paragraphs = hwpx::read_paragraphs(&args.input_path)?;
-            write_svg_output(&args.input_path, &output_path, &paragraphs)?;
+            let paragraphs = hwpx::read_paragraphs(input_path)?;
+            write_svg_output(input_path, &output_path, &paragraphs)?;
         }
         OutputFormat::Json => {
-            let paragraphs = hwpx::read_paragraphs(&args.input_path)?;
-            write_json_output(&args.input_path, &output_path, &paragraphs)?;
+            let paragraphs = hwpx::read_paragraphs(input_path)?;
+            write_json_output(input_path, &output_path, &paragraphs)?;
         }
         OutputFormat::Html => {
-            let paragraphs = hwpx::read_paragraphs(&args.input_path)?;
-            write_html_output(&args.input_path, &output_path, &paragraphs)?;
+            let paragraphs = hwpx::read_paragraphs(input_path)?;
+            write_html_output(input_path, &output_path, &paragraphs)?;
         }
         OutputFormat::Markdown => {
-            let paragraphs = hwpx::read_paragraphs(&args.input_path)?;
+            let paragraphs = hwpx::read_paragraphs(input_path)?;
             write_markdown_output(&output_path, &paragraphs)?;
         }
     }
 
-    Ok(output_path)
+    Ok(ExportedFile {
+        input_path: input_path.to_path_buf(),
+        output_path,
+    })
 }
 
-fn validate_input_path(input_path: &Path) -> Result<(), io::Error> {
+fn validate_input_path(input_path: &Path, recursive: bool) -> Result<(), io::Error> {
     if !input_path.exists() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("입력 파일을 찾을 수 없습니다: {}", input_path.display()),
+            format!("입력 경로를 찾을 수 없습니다: {}", input_path.display()),
         ));
+    }
+
+    if input_path.is_dir() {
+        if !recursive {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "디렉토리 입력은 --recursive와 함께 사용해야 합니다.",
+            ));
+        }
+
+        return Ok(());
     }
 
     if !input_path.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("입력 경로가 파일이 아닙니다: {}", input_path.display()),
+            format!(
+                "입력 경로가 파일 또는 디렉토리가 아닙니다: {}",
+                input_path.display()
+            ),
         ));
     }
 
+    validate_supported_file(input_path)
+}
+
+fn validate_supported_file(input_path: &Path) -> Result<(), io::Error> {
     if !has_supported_input_extension(input_path) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "현재 버전은 .hwp, .hwpx 파일만 지원합니다.",
         ));
+    }
+
+    Ok(())
+}
+
+fn collect_supported_input_files(
+    input_dir: &Path,
+    input_files: &mut Vec<PathBuf>,
+) -> Result<(), io::Error> {
+    let mut entries = fs::read_dir(input_dir)?.collect::<Result<Vec<_>, io::Error>>()?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_supported_input_files(&path, input_files)?;
+        } else if path.is_file() && has_supported_input_extension(&path) {
+            input_files.push(path);
+        }
     }
 
     Ok(())
@@ -369,6 +465,12 @@ fn starts_with_ordered_list_marker(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use zip::ZipWriter;
+    use zip::write::SimpleFileOptions;
 
     #[test]
     fn rejects_unsupported_extension() {
@@ -377,6 +479,73 @@ mod tests {
         assert!(has_supported_input_extension(Path::new("sample.HWP")));
         assert!(has_supported_input_extension(Path::new("sample.hwpx")));
         assert!(has_supported_input_extension(Path::new("sample.HWPX")));
+    }
+
+    #[test]
+    fn collects_supported_files_recursively_in_sorted_order() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("collect");
+        fs::create_dir_all(root.join("b"))?;
+        fs::create_dir_all(root.join("a"))?;
+        fs::write(root.join("ignore.txt"), "ignore")?;
+        fs::write(root.join("b").join("two.hwp"), "binary placeholder")?;
+        fs::write(root.join("a").join("one.hwpx"), "zip placeholder")?;
+
+        let mut input_files = Vec::new();
+        collect_supported_input_files(&root, &mut input_files)?;
+
+        assert_eq!(
+            input_files,
+            vec![
+                root.join("a").join("one.hwpx"),
+                root.join("b").join("two.hwp")
+            ]
+        );
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn exports_directory_recursively_to_txt() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("recursive-export");
+        fs::create_dir_all(root.join("nested"))?;
+        write_preview_hwpx(&root.join("alpha.hwpx"), "first line")?;
+        write_preview_hwpx(&root.join("nested").join("beta.hwpx"), "second line")?;
+        fs::write(root.join("nested").join("ignore.txt"), "ignore")?;
+
+        let args = CliArgs {
+            input_path: root.clone(),
+            format: OutputFormat::Txt,
+            recursive: true,
+        };
+
+        let report = export(&args)?;
+
+        assert_eq!(report.converted_files().len(), 2);
+        assert_eq!(fs::read_to_string(root.join("alpha.txt"))?, "first line");
+        assert_eq!(
+            fs::read_to_string(root.join("nested").join("beta.txt"))?,
+            "second line"
+        );
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_directory_input_without_recursive_flag() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("dir-validation");
+        fs::create_dir_all(&root)?;
+
+        let error = validate_input_path(&root, false).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
     }
 
     #[test]
@@ -451,5 +620,28 @@ mod tests {
         assert!(markdown.contains("\\# heading"));
         assert!(markdown.contains("\\1. ordered"));
         assert!(markdown.contains("line one  \nline two"));
+    }
+
+    fn write_preview_hwpx(path: &Path, preview_text: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::create(path)?;
+        let mut writer = ZipWriter::new(file);
+
+        writer.start_file("Preview/PrvText.txt", SimpleFileOptions::default())?;
+        writer.write_all(preview_text.as_bytes())?;
+        writer.finish()?;
+
+        Ok(())
+    }
+
+    fn temp_fixture_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+
+        std::env::temp_dir().join(format!(
+            "hwp-convert-exporter-{label}-{}-{nanos}",
+            std::process::id()
+        ))
     }
 }

@@ -26,12 +26,19 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let output_path = exporter::export(&args)?;
+    let report = exporter::export(&args)?;
 
     println!("hwp-convert");
-    println!("입력 파일: {}", args.input_path.display());
+    println!("입력 경로: {}", args.input_path.display());
     println!("출력 형식: {}", args.format);
-    println!("출력 파일: {}", output_path.display());
+
+    if report.converted_files().len() == 1 {
+        let exported_file = &report.converted_files()[0];
+        println!("출력 파일: {}", exported_file.output_path.display());
+    } else {
+        println!("변환 파일 수: {}", report.converted_files().len());
+    }
+
     println!("변환 완료");
 
     Ok(())
