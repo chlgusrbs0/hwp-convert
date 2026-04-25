@@ -24,10 +24,34 @@ fn read_preview_text_with_rhwp(bytes: &[u8]) -> Result<Option<String>, Box<dyn E
         )
     })?;
 
+    if let Some(text) = extract_body_text(&document) {
+        return Ok(Some(text));
+    }
+
     Ok(document
         .preview
         .and_then(|preview| preview.text)
         .map(|text| normalize_newlines(&text)))
+}
+
+fn extract_body_text(document: &rhwp::model::document::Document) -> Option<String> {
+    let mut text = String::new();
+
+    for section in &document.sections {
+        for paragraph in &section.paragraphs {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&paragraph.text);
+        }
+    }
+
+    let normalized = normalize_newlines(&text);
+    if normalized.trim().is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
 }
 
 fn read_preview_text_from_archive(bytes: &[u8]) -> Result<String, Box<dyn Error>> {
@@ -71,8 +95,46 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use rhwp::model::document::{Document, Section};
+    use rhwp::model::paragraph::Paragraph;
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn extracts_body_text_from_rhwp_document() {
+        let document = Document {
+            sections: vec![
+                Section {
+                    paragraphs: vec![
+                        Paragraph {
+                            text: "first paragraph".to_string(),
+                            ..Default::default()
+                        },
+                        Paragraph {
+                            text: "second paragraph".to_string(),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                },
+                Section {
+                    paragraphs: vec![Paragraph {
+                        text: "third paragraph".to_string(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let text = extract_body_text(&document);
+
+        assert_eq!(
+            text,
+            Some("first paragraph\nsecond paragraph\nthird paragraph".to_string())
+        );
+    }
 
     #[test]
     fn falls_back_to_preview_archive_entry() -> Result<(), Box<dyn Error>> {
