@@ -1,8 +1,11 @@
 package io.github.chlgusrbs0.hwpconvert;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 public class Main {
     public static void main(String[] args) {
@@ -72,13 +75,41 @@ public class Main {
     }
 
     private static void writeTxtOutput(Path inputPath, Path outputPath, String format) throws IOException {
-        String content = """
-                hwp-convert 변환 결과
-                입력 파일: %s
-                출력 형식: %s
-                """.formatted(inputPath.getFileName(), format);
+        StringBuilder content = new StringBuilder();
 
-        Files.writeString(outputPath, content);
+        content.append("hwp-convert 변환 결과\n");
+        content.append("입력 파일: ").append(inputPath.getFileName()).append("\n");
+        content.append("출력 형식: ").append(format).append("\n\n");
+
+        content.append("HWPX 내부 파일 목록:\n");
+
+        try {
+            appendHwpxZipEntries(inputPath, content);
+        } catch (IOException e) {
+            content.append("오류: HWPX 파일 내부를 읽지 못했습니다.\n");
+            content.append("원인: ").append(e.getMessage()).append("\n");
+        }
+
+        Files.writeString(outputPath, content.toString());
+    }
+
+    private static void appendHwpxZipEntries(Path inputPath, StringBuilder content) throws IOException {
+        try (InputStream fileInputStream = Files.newInputStream(inputPath);
+             ZipInputStream zipInputStream = new ZipInputStream(fileInputStream)) {
+
+            ZipEntry entry;
+            boolean hasEntry = false;
+
+            while ((entry = zipInputStream.getNextEntry()) != null) {
+                hasEntry = true;
+                content.append("- ").append(entry.getName()).append("\n");
+                zipInputStream.closeEntry();
+            }
+
+            if (!hasEntry) {
+                content.append("오류: ZIP 내부 파일을 찾지 못했습니다.\n");
+            }
+        }
     }
 
     private static void printUsage() {
