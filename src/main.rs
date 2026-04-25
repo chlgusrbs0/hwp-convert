@@ -35,6 +35,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     println!("hwp-convert");
     println!("입력 경로: {}", args.input_path.display());
     println!("출력 형식: {}", args.format);
+    if let Some(output_dir) = &args.output_dir {
+        println!("출력 디렉토리: {}", output_dir.display());
+    }
 
     if report.converted_files().len() == 1 && report.failed_files().is_empty() {
         let exported_file = &report.converted_files()[0];
