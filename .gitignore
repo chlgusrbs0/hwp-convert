@@ -28,3 +28,7 @@ replay_pid*
 
 # IntelliJ build output
 out/
+
+# Local test files
+sample.hwpx
+sample.txt

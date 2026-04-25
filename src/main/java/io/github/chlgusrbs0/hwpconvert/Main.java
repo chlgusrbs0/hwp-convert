@@ -1,5 +1,6 @@
 package io.github.chlgusrbs0.hwpconvert;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -39,10 +40,45 @@ public class Main {
             return;
         }
 
+        Path outputPath = createOutputPath(inputPath, format);
+
+        try {
+            writeTxtOutput(inputPath, outputPath, format);
+        } catch (IOException e) {
+            System.out.println("오류: 출력 파일을 생성하지 못했습니다.");
+            System.out.println("상세 정보: " + e.getMessage());
+            return;
+        }
+
         System.out.println("hwp-convert 실행");
         System.out.println("입력 파일: " + inputPath);
         System.out.println("출력 형식: " + format);
-        System.out.println("변환 준비 완료");
+        System.out.println("출력 파일: " + outputPath);
+        System.out.println("변환 완료");
+    }
+
+    private static Path createOutputPath(Path inputPath, String format) {
+        String fileName = inputPath.getFileName().toString();
+        int dotIndex = fileName.lastIndexOf('.');
+
+        String baseName;
+        if (dotIndex == -1) {
+            baseName = fileName;
+        } else {
+            baseName = fileName.substring(0, dotIndex);
+        }
+
+        return inputPath.resolveSibling(baseName + "." + format);
+    }
+
+    private static void writeTxtOutput(Path inputPath, Path outputPath, String format) throws IOException {
+        String content = """
+                hwp-convert 변환 결과
+                입력 파일: %s
+                출력 형식: %s
+                """.formatted(inputPath.getFileName(), format);
+
+        Files.writeString(outputPath, content);
     }
 
     private static void printUsage() {
