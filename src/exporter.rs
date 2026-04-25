@@ -26,6 +26,10 @@ pub fn export(args: &CliArgs) -> Result<PathBuf, Box<dyn Error>> {
             let paragraphs = hwpx::read_paragraphs(&args.input_path)?;
             write_json_output(&args.input_path, &output_path, &paragraphs)?;
         }
+        OutputFormat::Html => {
+            let paragraphs = hwpx::read_paragraphs(&args.input_path)?;
+            write_html_output(&args.input_path, &output_path, &paragraphs)?;
+        }
     }
 
     Ok(output_path)
@@ -107,6 +111,15 @@ fn write_json_output(
     fs::write(output_path, content)
 }
 
+fn write_html_output(
+    input_path: &Path,
+    output_path: &Path,
+    paragraphs: &[String],
+) -> Result<(), io::Error> {
+    let html = render_html_document(input_path, paragraphs);
+    fs::write(output_path, html)
+}
+
 fn render_svg_document(input_path: &Path, paragraphs: &[String]) -> String {
     let lines = collect_render_lines(paragraphs);
     let padding_x = 40_u32;
@@ -168,6 +181,81 @@ fn render_svg_document(input_path: &Path, paragraphs: &[String]) -> String {
     )
 }
 
+fn render_html_document(input_path: &Path, paragraphs: &[String]) -> String {
+    let file_name = input_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("document");
+    let title = escape_html(&format!("{file_name} text export"));
+
+    let mut paragraph_nodes = String::new();
+    if paragraphs.is_empty() {
+        paragraph_nodes.push_str("    <p></p>\n");
+    } else {
+        for paragraph in paragraphs {
+            let content = if paragraph.is_empty() {
+                String::new()
+            } else {
+                escape_html(paragraph).replace('\n', "<br />")
+            };
+            paragraph_nodes.push_str(&format!("    <p>{content}</p>\n"));
+        }
+    }
+
+    format!(
+        "<!DOCTYPE html>\n\
+<html lang=\"ko\">\n\
+  <head>\n\
+    <meta charset=\"UTF-8\" />\n\
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n\
+    <title>{title}</title>\n\
+    <style>\n\
+      :root {{\n\
+        color-scheme: light;\n\
+      }}\n\
+      body {{\n\
+        margin: 0;\n\
+        background: #f8fafc;\n\
+        color: #111827;\n\
+        font-family: \"Noto Sans KR\", \"Malgun Gothic\", \"Apple SD Gothic Neo\", sans-serif;\n\
+      }}\n\
+      main {{\n\
+        max-width: 920px;\n\
+        margin: 0 auto;\n\
+        padding: 48px 32px 64px;\n\
+      }}\n\
+      h1 {{\n\
+        margin: 0 0 24px;\n\
+        font-size: 28px;\n\
+      }}\n\
+      article {{\n\
+        background: #ffffff;\n\
+        border: 1px solid #e5e7eb;\n\
+        border-radius: 16px;\n\
+        padding: 32px;\n\
+        box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);\n\
+      }}\n\
+      p {{\n\
+        margin: 0 0 1em;\n\
+        line-height: 1.8;\n\
+        white-space: normal;\n\
+      }}\n\
+      p:last-child {{\n\
+        margin-bottom: 0;\n\
+      }}\n\
+    </style>\n\
+  </head>\n\
+  <body>\n\
+    <main>\n\
+      <h1>{title}</h1>\n\
+      <article>\n\
+{paragraph_nodes}      </article>\n\
+    </main>\n\
+  </body>\n\
+</html>\n"
+    )
+}
+
 fn collect_render_lines(paragraphs: &[String]) -> Vec<RenderLine> {
     if paragraphs.is_empty() {
         return vec![RenderLine {
@@ -219,6 +307,10 @@ fn escape_xml(value: &str) -> String {
     }
 
     escaped
+}
+
+fn escape_html(value: &str) -> String {
+    escape_xml(value)
 }
 
 #[cfg(test)]
@@ -280,5 +372,18 @@ mod tests {
         assert!(content.contains("\"paragraphs\": ["));
         assert!(content.contains("first paragraph"));
         assert!(content.contains("second paragraph"));
+    }
+
+    #[test]
+    fn renders_html_with_escaped_paragraphs() {
+        let html = render_html_document(
+            Path::new("sample.hwpx"),
+            &[String::from("& < > \" '"), String::from("second line")],
+        );
+
+        assert!(html.contains("<!DOCTYPE html>"));
+        assert!(html.contains("<title>sample.hwpx text export</title>"));
+        assert!(html.contains("<p>&amp; &lt; &gt; &quot; &apos;</p>"));
+        assert!(html.contains("<p>second line</p>"));
     }
 }
