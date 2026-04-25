@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cli::{CliArgs, OutputFormat};
 use crate::hwpx;
@@ -94,6 +95,10 @@ pub fn write_manifest(
         recursive: args.recursive,
         continue_on_error: args.continue_on_error,
         skip_existing: args.skip_existing,
+        resume_manifest: args
+            .resume_manifest_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
         output_dir: args
             .output_dir
             .as_ref()
@@ -124,6 +129,7 @@ pub fn write_manifest(
 
 pub fn export(args: &CliArgs) -> Result<ExportReport, Box<dyn Error>> {
     validate_input_path(&args.input_path, args.recursive)?;
+    let resume_outputs = load_resume_outputs(args.resume_manifest_path.as_deref())?;
 
     if args.input_path.is_dir() {
         export_directory_recursively(
@@ -132,19 +138,24 @@ pub fn export(args: &CliArgs) -> Result<ExportReport, Box<dyn Error>> {
             args.continue_on_error,
             args.output_dir.as_deref(),
             args.skip_existing,
+            &resume_outputs,
         )
     } else {
-        export_single_input(args)
+        export_single_input(args, &resume_outputs)
     }
 }
 
-fn export_single_input(args: &CliArgs) -> Result<ExportReport, Box<dyn Error>> {
+fn export_single_input(
+    args: &CliArgs,
+    resume_outputs: &HashMap<String, Option<PathBuf>>,
+) -> Result<ExportReport, Box<dyn Error>> {
     match export_file(
         &args.input_path,
         &args.input_path,
         args.format,
         args.output_dir.as_deref(),
         args.skip_existing,
+        resume_outputs,
     ) {
         Ok(ExportOutcome::Converted(exported_file)) => Ok(ExportReport {
             converted_files: vec![exported_file],
@@ -174,6 +185,7 @@ fn export_directory_recursively(
     continue_on_error: bool,
     output_dir: Option<&Path>,
     skip_existing: bool,
+    resume_outputs: &HashMap<String, Option<PathBuf>>,
 ) -> Result<ExportReport, Box<dyn Error>> {
     let mut input_files = Vec::new();
     collect_supported_input_files(input_dir, &mut input_files)?;
@@ -194,7 +206,14 @@ fn export_directory_recursively(
     let mut failed_files = Vec::new();
 
     for input_path in input_files {
-        match export_file(&input_path, input_dir, format, output_dir, skip_existing) {
+        match export_file(
+            &input_path,
+            input_dir,
+            format,
+            output_dir,
+            skip_existing,
+            resume_outputs,
+        ) {
             Ok(ExportOutcome::Converted(exported_file)) => converted_files.push(exported_file),
             Ok(ExportOutcome::Skipped(skipped_file)) => skipped_files.push(skipped_file),
             Err(error) if continue_on_error => failed_files.push(FailedFile {
@@ -218,10 +237,21 @@ fn export_file(
     format: OutputFormat,
     output_dir: Option<&Path>,
     skip_existing: bool,
+    resume_outputs: &HashMap<String, Option<PathBuf>>,
 ) -> Result<ExportOutcome, Box<dyn Error>> {
     validate_supported_file(input_path)?;
 
     let output_path = create_output_path(input_path, input_root, output_dir, format)?;
+    let resume_key = create_resume_key(input_path);
+    if let Some(previous_output_path) = resume_outputs.get(&resume_key) {
+        return Ok(ExportOutcome::Skipped(SkippedFile {
+            input_path: input_path.to_path_buf(),
+            output_path: previous_output_path
+                .clone()
+                .unwrap_or_else(|| output_path.clone()),
+        }));
+    }
+
     if skip_existing && output_path.exists() {
         return Ok(ExportOutcome::Skipped(SkippedFile {
             input_path: input_path.to_path_buf(),
@@ -611,6 +641,8 @@ struct ManifestExport {
     continue_on_error: bool,
     skip_existing: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    resume_manifest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     output_dir: Option<String>,
     converted_count: usize,
     skipped_count: usize,
@@ -626,6 +658,53 @@ struct ManifestFileEntry {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ResumeManifest {
+    files: Vec<ResumeManifestFileEntry>,
+}
+
+#[derive(Deserialize)]
+struct ResumeManifestFileEntry {
+    input_path: String,
+    output_path: Option<String>,
+    status: String,
+}
+
+fn create_resume_key(path: &Path) -> String {
+    fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+fn load_resume_outputs(
+    resume_manifest_path: Option<&Path>,
+) -> Result<HashMap<String, Option<PathBuf>>, Box<dyn Error>> {
+    let Some(resume_manifest_path) = resume_manifest_path else {
+        return Ok(HashMap::new());
+    };
+
+    let content = fs::read_to_string(resume_manifest_path)?;
+    let manifest: ResumeManifest = serde_json::from_str(&content).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to parse resume manifest: {error}"),
+        )
+    })?;
+
+    let mut completed_outputs = HashMap::new();
+    for file in manifest.files {
+        if file.status == "success" || file.status == "skipped" {
+            completed_outputs.insert(
+                create_resume_key(Path::new(&file.input_path)),
+                file.output_path.map(PathBuf::from),
+            );
+        }
+    }
+
+    Ok(completed_outputs)
 }
 
 fn escape_xml(value: &str) -> String {
@@ -736,6 +815,7 @@ mod tests {
             format: OutputFormat::Txt,
             recursive: true,
             manifest_path: None,
+            resume_manifest_path: None,
             continue_on_error: false,
             output_dir: None,
             skip_existing: false,
@@ -770,6 +850,7 @@ mod tests {
             format: OutputFormat::Txt,
             recursive: false,
             manifest_path: None,
+            resume_manifest_path: None,
             continue_on_error: false,
             output_dir: Some(output_dir.clone()),
             skip_existing: true,
@@ -809,6 +890,7 @@ mod tests {
             format: OutputFormat::Txt,
             recursive: true,
             manifest_path: None,
+            resume_manifest_path: None,
             continue_on_error: false,
             output_dir: Some(output_dir.clone()),
             skip_existing: true,
@@ -834,6 +916,127 @@ mod tests {
     }
 
     #[test]
+    fn resumes_directory_export_from_previous_manifest() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("resume-recursive");
+        fs::create_dir_all(&root)?;
+        write_preview_hwpx(&root.join("alpha.hwpx"), "first line")?;
+        write_preview_hwpx(&root.join("beta.hwpx"), "second line")?;
+
+        let previous_manifest_path = root.join("previous-manifest.json");
+        let previous_alpha_output = root.join("alpha.txt");
+        let previous_manifest = serde_json::json!({
+            "files": [
+                {
+                    "input_path": root.join("alpha.hwpx").display().to_string(),
+                    "output_path": previous_alpha_output.display().to_string(),
+                    "status": "success"
+                },
+                {
+                    "input_path": root.join("beta.hwpx").display().to_string(),
+                    "output_path": null,
+                    "status": "failed"
+                }
+            ]
+        });
+        fs::write(
+            &previous_manifest_path,
+            serde_json::to_string_pretty(&previous_manifest)?,
+        )?;
+
+        let args = CliArgs {
+            input_path: root.clone(),
+            format: OutputFormat::Txt,
+            recursive: true,
+            manifest_path: None,
+            resume_manifest_path: Some(previous_manifest_path),
+            continue_on_error: false,
+            output_dir: None,
+            skip_existing: false,
+        };
+
+        let report = export(&args)?;
+
+        assert_eq!(report.converted_files().len(), 1);
+        assert_eq!(report.skipped_files().len(), 1);
+        assert_eq!(report.failed_files().len(), 0);
+        assert_eq!(
+            report.converted_files()[0].input_path,
+            root.join("beta.hwpx")
+        );
+        assert_eq!(
+            report.skipped_files()[0],
+            SkippedFile {
+                input_path: root.join("alpha.hwpx"),
+                output_path: previous_alpha_output,
+            }
+        );
+        assert_eq!(fs::read_to_string(root.join("beta.txt"))?, "second line");
+        assert!(!root.join("alpha.txt").exists());
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn resumes_directory_export_with_relative_input_path() -> Result<(), Box<dyn Error>> {
+        let root = workspace_fixture_dir("resume-relative");
+        fs::create_dir_all(&root)?;
+        write_preview_hwpx(&root.join("alpha.hwpx"), "first line")?;
+        write_preview_hwpx(&root.join("beta.hwpx"), "second line")?;
+
+        let previous_manifest_path = root.join("previous-manifest.json");
+        let previous_manifest = serde_json::json!({
+            "files": [
+                {
+                    "input_path": fs::canonicalize(root.join("alpha.hwpx"))?.display().to_string(),
+                    "output_path": fs::canonicalize(&root)
+                        .unwrap_or_else(|_| root.clone())
+                        .join("alpha.txt")
+                        .display()
+                        .to_string(),
+                    "status": "success"
+                }
+            ]
+        });
+        fs::write(
+            &previous_manifest_path,
+            serde_json::to_string_pretty(&previous_manifest)?,
+        )?;
+
+        let args = CliArgs {
+            input_path: root.clone(),
+            format: OutputFormat::Txt,
+            recursive: true,
+            manifest_path: None,
+            resume_manifest_path: Some(previous_manifest_path),
+            continue_on_error: false,
+            output_dir: None,
+            skip_existing: false,
+        };
+
+        let report = export(&args)?;
+
+        assert_eq!(report.converted_files().len(), 1);
+        assert_eq!(report.skipped_files().len(), 1);
+        assert_eq!(report.failed_files().len(), 0);
+        assert_eq!(
+            report.skipped_files()[0].input_path,
+            root.join("alpha.hwpx")
+        );
+        assert_eq!(
+            report.converted_files()[0].input_path,
+            root.join("beta.hwpx")
+        );
+        assert_eq!(fs::read_to_string(root.join("beta.txt"))?, "second line");
+        assert!(!root.join("alpha.txt").exists());
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
     fn exports_single_file_to_output_dir() -> Result<(), Box<dyn Error>> {
         let root = temp_fixture_dir("single-output-dir");
         let output_dir = root.join("out");
@@ -845,6 +1048,7 @@ mod tests {
             format: OutputFormat::Txt,
             recursive: false,
             manifest_path: None,
+            resume_manifest_path: None,
             continue_on_error: false,
             output_dir: Some(output_dir.clone()),
             skip_existing: false,
@@ -882,6 +1086,7 @@ mod tests {
             format: OutputFormat::Txt,
             recursive: true,
             manifest_path: None,
+            resume_manifest_path: None,
             continue_on_error: false,
             output_dir: Some(output_dir.clone()),
             skip_existing: false,
@@ -920,6 +1125,7 @@ mod tests {
             format: OutputFormat::Txt,
             recursive: true,
             manifest_path: None,
+            resume_manifest_path: None,
             continue_on_error: true,
             output_dir: None,
             skip_existing: false,
@@ -954,6 +1160,7 @@ mod tests {
             format: OutputFormat::Txt,
             recursive: true,
             manifest_path: None,
+            resume_manifest_path: None,
             continue_on_error: false,
             output_dir: None,
             skip_existing: false,
@@ -1080,6 +1287,7 @@ mod tests {
             format: OutputFormat::Svg,
             recursive: true,
             manifest_path: Some(manifest_path.clone()),
+            resume_manifest_path: Some(PathBuf::from("previous-manifest.json")),
             continue_on_error: true,
             output_dir: Some(PathBuf::from("out")),
             skip_existing: true,
@@ -1125,6 +1333,18 @@ mod tests {
             .as_nanos();
 
         std::env::temp_dir().join(format!(
+            "hwp-convert-exporter-{label}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    fn workspace_fixture_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+
+        PathBuf::from("target").join(format!(
             "hwp-convert-exporter-{label}-{}-{nanos}",
             std::process::id()
         ))
