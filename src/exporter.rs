@@ -3,6 +3,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::cli::{CliArgs, OutputFormat};
 use crate::hwpx;
 
@@ -19,6 +21,10 @@ pub fn export(args: &CliArgs) -> Result<PathBuf, Box<dyn Error>> {
         OutputFormat::Svg => {
             let paragraphs = hwpx::read_paragraphs(&args.input_path)?;
             write_svg_output(&args.input_path, &output_path, &paragraphs)?;
+        }
+        OutputFormat::Json => {
+            let paragraphs = hwpx::read_paragraphs(&args.input_path)?;
+            write_json_output(&args.input_path, &output_path, &paragraphs)?;
         }
     }
 
@@ -62,8 +68,8 @@ fn create_output_path(input_path: &Path, format: OutputFormat) -> PathBuf {
     input_path.with_extension(format.extension())
 }
 
-fn write_txt_output(output_path: &Path, preview_text: &str) -> Result<(), io::Error> {
-    fs::write(output_path, preview_text)
+fn write_txt_output(output_path: &Path, document_text: &str) -> Result<(), io::Error> {
+    fs::write(output_path, document_text)
 }
 
 fn write_svg_output(
@@ -73,6 +79,32 @@ fn write_svg_output(
 ) -> Result<(), io::Error> {
     let svg = render_svg_document(input_path, paragraphs);
     fs::write(output_path, svg)
+}
+
+fn write_json_output(
+    input_path: &Path,
+    output_path: &Path,
+    paragraphs: &[String],
+) -> Result<(), io::Error> {
+    let file_name = input_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("document");
+    let json = JsonExport {
+        input_file: file_name,
+        paragraph_count: paragraphs.len(),
+        paragraphs,
+        text: paragraphs.join("\n"),
+    };
+
+    let content = serde_json::to_string_pretty(&json).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to serialize JSON output: {error}"),
+        )
+    })?;
+
+    fs::write(output_path, content)
 }
 
 fn render_svg_document(input_path: &Path, paragraphs: &[String]) -> String {
@@ -164,6 +196,14 @@ struct RenderLine {
     add_paragraph_gap: bool,
 }
 
+#[derive(Serialize)]
+struct JsonExport<'a> {
+    input_file: &'a str,
+    paragraph_count: usize,
+    paragraphs: &'a [String],
+    text: String,
+}
+
 fn escape_xml(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
 
@@ -213,5 +253,32 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].add_paragraph_gap);
         assert!(!lines[1].add_paragraph_gap);
+    }
+
+    #[test]
+    fn serializes_json_output_with_paragraphs() {
+        let path = Path::new("sample.hwpx");
+        let paragraphs = vec![
+            "first paragraph".to_string(),
+            "second paragraph".to_string(),
+        ];
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("document");
+        let json = JsonExport {
+            input_file: file_name,
+            paragraph_count: paragraphs.len(),
+            paragraphs: &paragraphs,
+            text: paragraphs.join("\n"),
+        };
+
+        let content = serde_json::to_string_pretty(&json).unwrap();
+
+        assert!(content.contains("\"input_file\": \"sample.hwpx\""));
+        assert!(content.contains("\"paragraph_count\": 2"));
+        assert!(content.contains("\"paragraphs\": ["));
+        assert!(content.contains("first paragraph"));
+        assert!(content.contains("second paragraph"));
     }
 }

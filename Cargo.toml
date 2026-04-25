@@ -5,4 +5,6 @@ edition = "2024"
 
 [dependencies]
 rhwp = { git = "https://github.com/edwardkim/rhwp", branch = "main" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
 zip = "8.5.1"

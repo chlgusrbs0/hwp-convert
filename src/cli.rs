@@ -7,6 +7,7 @@ use std::path::PathBuf;
 pub enum OutputFormat {
     Txt,
     Svg,
+    Json,
 }
 
 impl OutputFormat {
@@ -14,9 +15,10 @@ impl OutputFormat {
         match value {
             "txt" => Ok(Self::Txt),
             "svg" => Ok(Self::Svg),
+            "json" => Ok(Self::Json),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("지원하지 않는 출력 형식입니다: {value}. 지원 형식: txt, svg"),
+                format!("지원하지 않는 출력 형식입니다: {value}. 지원 형식: txt, svg, json"),
             )),
         }
     }
@@ -25,6 +27,7 @@ impl OutputFormat {
         match self {
             Self::Txt => "txt",
             Self::Svg => "svg",
+            Self::Json => "json",
         }
     }
 }
@@ -98,10 +101,12 @@ pub fn print_usage() {
     println!("지원 형식");
     println!("  txt");
     println!("  svg");
+    println!("  json");
     println!();
     println!("예시");
     println!("  hwp-convert sample.hwpx --to txt");
     println!("  hwp-convert sample.hwpx --to svg");
+    println!("  hwp-convert sample.hwpx --to json");
 }
 
 #[cfg(test)]
@@ -130,6 +135,19 @@ mod tests {
             Some(CliArgs {
                 input_path: PathBuf::from("sample.hwpx"),
                 format: OutputFormat::Svg,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_json_export_arguments() {
+        let args = parse_args(["hwp-convert", "sample.hwpx", "--to", "json"]).unwrap();
+
+        assert_eq!(
+            args,
+            Some(CliArgs {
+                input_path: PathBuf::from("sample.hwpx"),
+                format: OutputFormat::Json,
             })
         );
     }
