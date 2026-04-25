@@ -15,6 +15,12 @@ pub struct ExportedFile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedFile {
+    pub input_path: PathBuf,
+    pub output_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FailedFile {
     pub input_path: PathBuf,
     pub error_message: String,
@@ -23,6 +29,7 @@ pub struct FailedFile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportReport {
     converted_files: Vec<ExportedFile>,
+    skipped_files: Vec<SkippedFile>,
     failed_files: Vec<FailedFile>,
 }
 
@@ -31,9 +38,18 @@ impl ExportReport {
         &self.converted_files
     }
 
+    pub fn skipped_files(&self) -> &[SkippedFile] {
+        &self.skipped_files
+    }
+
     pub fn failed_files(&self) -> &[FailedFile] {
         &self.failed_files
     }
+}
+
+enum ExportOutcome {
+    Converted(ExportedFile),
+    Skipped(SkippedFile),
 }
 
 pub fn write_manifest(
@@ -41,13 +57,24 @@ pub fn write_manifest(
     args: &CliArgs,
     report: &ExportReport,
 ) -> Result<(), Box<dyn Error>> {
-    let mut files = Vec::with_capacity(report.converted_files.len() + report.failed_files.len());
+    let mut files = Vec::with_capacity(
+        report.converted_files.len() + report.skipped_files.len() + report.failed_files.len(),
+    );
 
     for file in &report.converted_files {
         files.push(ManifestFileEntry {
             input_path: file.input_path.display().to_string(),
             output_path: Some(file.output_path.display().to_string()),
             status: "success",
+            error: None,
+        });
+    }
+
+    for file in &report.skipped_files {
+        files.push(ManifestFileEntry {
+            input_path: file.input_path.display().to_string(),
+            output_path: Some(file.output_path.display().to_string()),
+            status: "skipped",
             error: None,
         });
     }
@@ -66,11 +93,13 @@ pub fn write_manifest(
         format: args.format.to_string(),
         recursive: args.recursive,
         continue_on_error: args.continue_on_error,
+        skip_existing: args.skip_existing,
         output_dir: args
             .output_dir
             .as_ref()
             .map(|path| path.display().to_string()),
         converted_count: report.converted_files.len(),
+        skipped_count: report.skipped_files.len(),
         failed_count: report.failed_files.len(),
         files,
     };
@@ -102,6 +131,7 @@ pub fn export(args: &CliArgs) -> Result<ExportReport, Box<dyn Error>> {
             args.format,
             args.continue_on_error,
             args.output_dir.as_deref(),
+            args.skip_existing,
         )
     } else {
         export_single_input(args)
@@ -114,13 +144,21 @@ fn export_single_input(args: &CliArgs) -> Result<ExportReport, Box<dyn Error>> {
         &args.input_path,
         args.format,
         args.output_dir.as_deref(),
+        args.skip_existing,
     ) {
-        Ok(exported_file) => Ok(ExportReport {
+        Ok(ExportOutcome::Converted(exported_file)) => Ok(ExportReport {
             converted_files: vec![exported_file],
+            skipped_files: Vec::new(),
+            failed_files: Vec::new(),
+        }),
+        Ok(ExportOutcome::Skipped(skipped_file)) => Ok(ExportReport {
+            converted_files: Vec::new(),
+            skipped_files: vec![skipped_file],
             failed_files: Vec::new(),
         }),
         Err(error) if args.continue_on_error => Ok(ExportReport {
             converted_files: Vec::new(),
+            skipped_files: Vec::new(),
             failed_files: vec![FailedFile {
                 input_path: args.input_path.clone(),
                 error_message: error.to_string(),
@@ -135,6 +173,7 @@ fn export_directory_recursively(
     format: OutputFormat,
     continue_on_error: bool,
     output_dir: Option<&Path>,
+    skip_existing: bool,
 ) -> Result<ExportReport, Box<dyn Error>> {
     let mut input_files = Vec::new();
     collect_supported_input_files(input_dir, &mut input_files)?;
@@ -151,11 +190,13 @@ fn export_directory_recursively(
     }
 
     let mut converted_files = Vec::with_capacity(input_files.len());
+    let mut skipped_files = Vec::new();
     let mut failed_files = Vec::new();
 
     for input_path in input_files {
-        match export_file(&input_path, input_dir, format, output_dir) {
-            Ok(exported_file) => converted_files.push(exported_file),
+        match export_file(&input_path, input_dir, format, output_dir, skip_existing) {
+            Ok(ExportOutcome::Converted(exported_file)) => converted_files.push(exported_file),
+            Ok(ExportOutcome::Skipped(skipped_file)) => skipped_files.push(skipped_file),
             Err(error) if continue_on_error => failed_files.push(FailedFile {
                 input_path,
                 error_message: error.to_string(),
@@ -166,6 +207,7 @@ fn export_directory_recursively(
 
     Ok(ExportReport {
         converted_files,
+        skipped_files,
         failed_files,
     })
 }
@@ -175,10 +217,17 @@ fn export_file(
     input_root: &Path,
     format: OutputFormat,
     output_dir: Option<&Path>,
-) -> Result<ExportedFile, Box<dyn Error>> {
+    skip_existing: bool,
+) -> Result<ExportOutcome, Box<dyn Error>> {
     validate_supported_file(input_path)?;
 
     let output_path = create_output_path(input_path, input_root, output_dir, format)?;
+    if skip_existing && output_path.exists() {
+        return Ok(ExportOutcome::Skipped(SkippedFile {
+            input_path: input_path.to_path_buf(),
+            output_path,
+        }));
+    }
 
     match format {
         OutputFormat::Txt => {
@@ -203,10 +252,10 @@ fn export_file(
         }
     }
 
-    Ok(ExportedFile {
+    Ok(ExportOutcome::Converted(ExportedFile {
         input_path: input_path.to_path_buf(),
         output_path,
-    })
+    }))
 }
 
 fn validate_input_path(input_path: &Path, recursive: bool) -> Result<(), io::Error> {
@@ -560,9 +609,11 @@ struct ManifestExport {
     format: String,
     recursive: bool,
     continue_on_error: bool,
+    skip_existing: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_dir: Option<String>,
     converted_count: usize,
+    skipped_count: usize,
     failed_count: usize,
     files: Vec<ManifestFileEntry>,
 }
@@ -687,15 +738,93 @@ mod tests {
             manifest_path: None,
             continue_on_error: false,
             output_dir: None,
+            skip_existing: false,
         };
 
         let report = export(&args)?;
 
         assert_eq!(report.converted_files().len(), 2);
+        assert_eq!(report.skipped_files().len(), 0);
         assert_eq!(report.failed_files().len(), 0);
         assert_eq!(fs::read_to_string(root.join("alpha.txt"))?, "first line");
         assert_eq!(
             fs::read_to_string(root.join("nested").join("beta.txt"))?,
+            "second line"
+        );
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn skips_single_file_when_output_exists() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("skip-single");
+        let output_dir = root.join("out");
+        fs::create_dir_all(&output_dir)?;
+        write_preview_hwpx(&root.join("alpha.hwpx"), "first line")?;
+        fs::write(output_dir.join("alpha.txt"), "existing")?;
+
+        let args = CliArgs {
+            input_path: root.join("alpha.hwpx"),
+            format: OutputFormat::Txt,
+            recursive: false,
+            manifest_path: None,
+            continue_on_error: false,
+            output_dir: Some(output_dir.clone()),
+            skip_existing: true,
+        };
+
+        let report = export(&args)?;
+
+        assert_eq!(report.converted_files().len(), 0);
+        assert_eq!(report.skipped_files().len(), 1);
+        assert_eq!(report.failed_files().len(), 0);
+        assert_eq!(
+            report.skipped_files()[0].output_path,
+            output_dir.join("alpha.txt")
+        );
+        assert_eq!(
+            fs::read_to_string(output_dir.join("alpha.txt"))?,
+            "existing"
+        );
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn skips_existing_outputs_in_directory_export() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("skip-recursive");
+        let output_dir = root.join("out");
+        fs::create_dir_all(root.join("nested"))?;
+        fs::create_dir_all(output_dir.join("nested"))?;
+        write_preview_hwpx(&root.join("alpha.hwpx"), "first line")?;
+        write_preview_hwpx(&root.join("nested").join("beta.hwpx"), "second line")?;
+        fs::write(output_dir.join("alpha.txt"), "existing alpha")?;
+
+        let args = CliArgs {
+            input_path: root.clone(),
+            format: OutputFormat::Txt,
+            recursive: true,
+            manifest_path: None,
+            continue_on_error: false,
+            output_dir: Some(output_dir.clone()),
+            skip_existing: true,
+        };
+
+        let report = export(&args)?;
+
+        assert_eq!(report.converted_files().len(), 1);
+        assert_eq!(report.skipped_files().len(), 1);
+        assert_eq!(report.failed_files().len(), 0);
+        assert_eq!(
+            fs::read_to_string(output_dir.join("alpha.txt"))?,
+            "existing alpha"
+        );
+        assert_eq!(
+            fs::read_to_string(output_dir.join("nested").join("beta.txt"))?,
             "second line"
         );
 
@@ -718,11 +847,13 @@ mod tests {
             manifest_path: None,
             continue_on_error: false,
             output_dir: Some(output_dir.clone()),
+            skip_existing: false,
         };
 
         let report = export(&args)?;
 
         assert_eq!(report.converted_files().len(), 1);
+        assert_eq!(report.skipped_files().len(), 0);
         assert_eq!(report.failed_files().len(), 0);
         assert_eq!(
             report.converted_files()[0].output_path,
@@ -753,11 +884,13 @@ mod tests {
             manifest_path: None,
             continue_on_error: false,
             output_dir: Some(output_dir.clone()),
+            skip_existing: false,
         };
 
         let report = export(&args)?;
 
         assert_eq!(report.converted_files().len(), 2);
+        assert_eq!(report.skipped_files().len(), 0);
         assert_eq!(
             fs::read_to_string(output_dir.join("alpha.txt"))?,
             "first line"
@@ -789,11 +922,13 @@ mod tests {
             manifest_path: None,
             continue_on_error: true,
             output_dir: None,
+            skip_existing: false,
         };
 
         let report = export(&args)?;
 
         assert_eq!(report.converted_files().len(), 1);
+        assert_eq!(report.skipped_files().len(), 0);
         assert_eq!(report.failed_files().len(), 1);
         assert_eq!(
             report.failed_files()[0].input_path,
@@ -821,6 +956,7 @@ mod tests {
             manifest_path: None,
             continue_on_error: false,
             output_dir: None,
+            skip_existing: false,
         };
 
         let error = export(&args).unwrap_err();
@@ -921,7 +1057,7 @@ mod tests {
     }
 
     #[test]
-    fn writes_manifest_with_success_and_failure_entries() -> Result<(), Box<dyn Error>> {
+    fn writes_manifest_with_success_skip_and_failure_entries() -> Result<(), Box<dyn Error>> {
         let root = temp_fixture_dir("manifest");
         fs::create_dir_all(&root)?;
         let manifest_path = root.join("manifest.json");
@@ -929,6 +1065,10 @@ mod tests {
             converted_files: vec![ExportedFile {
                 input_path: PathBuf::from("docs/alpha.hwpx"),
                 output_path: PathBuf::from("docs/alpha.svg"),
+            }],
+            skipped_files: vec![SkippedFile {
+                input_path: PathBuf::from("docs/existing.hwpx"),
+                output_path: PathBuf::from("out/existing.svg"),
             }],
             failed_files: vec![FailedFile {
                 input_path: PathBuf::from("docs/nested/beta.hwp"),
@@ -942,6 +1082,7 @@ mod tests {
             manifest_path: Some(manifest_path.clone()),
             continue_on_error: true,
             output_dir: Some(PathBuf::from("out")),
+            skip_existing: true,
         };
 
         write_manifest(&manifest_path, &args, &report)?;
@@ -951,10 +1092,13 @@ mod tests {
         assert!(content.contains("\"format\": \"svg\""));
         assert!(content.contains("\"recursive\": true"));
         assert!(content.contains("\"continue_on_error\": true"));
+        assert!(content.contains("\"skip_existing\": true"));
         assert!(content.contains("\"output_dir\": \"out\""));
         assert!(content.contains("\"converted_count\": 1"));
+        assert!(content.contains("\"skipped_count\": 1"));
         assert!(content.contains("\"failed_count\": 1"));
         assert!(content.contains("\"status\": \"success\""));
+        assert!(content.contains("\"status\": \"skipped\""));
         assert!(content.contains("\"status\": \"failed\""));
         assert!(content.contains("\"error\": \"parse failed\""));
 

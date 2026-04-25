@@ -54,6 +54,7 @@ pub struct CliArgs {
     pub manifest_path: Option<PathBuf>,
     pub continue_on_error: bool,
     pub output_dir: Option<PathBuf>,
+    pub skip_existing: bool,
 }
 
 pub fn parse_args<I, T>(args: I) -> Result<Option<CliArgs>, io::Error>
@@ -79,6 +80,7 @@ where
     let mut manifest_path = None;
     let mut continue_on_error = false;
     let mut output_dir = None;
+    let mut skip_existing = false;
 
     while let Some(arg) = args.next() {
         match arg.to_string_lossy().as_ref() {
@@ -153,10 +155,20 @@ where
 
                 output_dir = Some(PathBuf::from(value));
             }
+            "--skip-existing" => {
+                if skip_existing {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--skip-existing은 한 번만 사용할 수 있습니다.",
+                    ));
+                }
+
+                skip_existing = true;
+            }
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "알 수 없는 인자입니다. 예: hwp-convert sample.hwpx --to svg [--recursive] [--manifest manifest.json] [--continue-on-error] [--output-dir out]",
+                    "알 수 없는 인자입니다. 예: hwp-convert sample.hwpx --to svg [--recursive] [--manifest manifest.json] [--continue-on-error] [--output-dir out] [--skip-existing]",
                 ));
             }
         }
@@ -176,16 +188,17 @@ where
         manifest_path,
         continue_on_error,
         output_dir,
+        skip_existing,
     }))
 }
 
 pub fn print_usage() {
     println!("사용법");
     println!(
-        "  hwp-convert <입력 파일> --to <출력 형식> [--output-dir <out>] [--manifest <manifest.json>] [--continue-on-error]"
+        "  hwp-convert <입력 파일> --to <출력 형식> [--output-dir <out>] [--manifest <manifest.json>] [--continue-on-error] [--skip-existing]"
     );
     println!(
-        "  hwp-convert <입력 디렉토리> --to <출력 형식> --recursive [--output-dir <out>] [--manifest <manifest.json>] [--continue-on-error]"
+        "  hwp-convert <입력 디렉토리> --to <출력 형식> --recursive [--output-dir <out>] [--manifest <manifest.json>] [--continue-on-error] [--skip-existing]"
     );
     println!();
     println!("지원 형식");
@@ -197,10 +210,10 @@ pub fn print_usage() {
     println!();
     println!("예시");
     println!("  hwp-convert sample.hwpx --to txt");
-    println!("  hwp-convert sample.hwpx --to svg --output-dir out");
-    println!("  hwp-convert ./documents --to svg --recursive --output-dir out");
+    println!("  hwp-convert sample.hwpx --to svg --output-dir out --skip-existing");
+    println!("  hwp-convert ./documents --to svg --recursive --output-dir out --skip-existing");
     println!(
-        "  hwp-convert ./documents --to json --recursive --output-dir out --manifest manifest.json --continue-on-error"
+        "  hwp-convert ./documents --to json --recursive --output-dir out --manifest manifest.json --continue-on-error --skip-existing"
     );
 }
 
@@ -221,6 +234,7 @@ mod tests {
                 manifest_path: None,
                 continue_on_error: false,
                 output_dir: None,
+                skip_existing: false,
             })
         );
     }
@@ -238,6 +252,7 @@ mod tests {
                 manifest_path: None,
                 continue_on_error: false,
                 output_dir: None,
+                skip_existing: false,
             })
         );
     }
@@ -255,6 +270,7 @@ mod tests {
                 manifest_path: None,
                 continue_on_error: false,
                 output_dir: None,
+                skip_existing: false,
             })
         );
     }
@@ -272,6 +288,7 @@ mod tests {
                 manifest_path: None,
                 continue_on_error: false,
                 output_dir: None,
+                skip_existing: false,
             })
         );
     }
@@ -289,6 +306,7 @@ mod tests {
                 manifest_path: None,
                 continue_on_error: false,
                 output_dir: None,
+                skip_existing: false,
             })
         );
     }
@@ -306,6 +324,7 @@ mod tests {
                 manifest_path: None,
                 continue_on_error: false,
                 output_dir: None,
+                skip_existing: false,
             })
         );
     }
@@ -332,6 +351,7 @@ mod tests {
                 manifest_path: Some(PathBuf::from("manifest.json")),
                 continue_on_error: false,
                 output_dir: None,
+                skip_existing: false,
             })
         );
     }
@@ -357,6 +377,7 @@ mod tests {
                 manifest_path: None,
                 continue_on_error: true,
                 output_dir: None,
+                skip_existing: false,
             })
         );
     }
@@ -383,6 +404,33 @@ mod tests {
                 manifest_path: None,
                 continue_on_error: false,
                 output_dir: Some(PathBuf::from("out")),
+                skip_existing: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_skip_existing_arguments() {
+        let args = parse_args([
+            "hwp-convert",
+            "documents",
+            "--to",
+            "svg",
+            "--recursive",
+            "--skip-existing",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            args,
+            Some(CliArgs {
+                input_path: PathBuf::from("documents"),
+                format: OutputFormat::Svg,
+                recursive: true,
+                manifest_path: None,
+                continue_on_error: false,
+                output_dir: None,
+                skip_existing: true,
             })
         );
     }
