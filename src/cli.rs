@@ -9,6 +9,7 @@ pub enum OutputFormat {
     Svg,
     Json,
     Html,
+    Markdown,
 }
 
 impl OutputFormat {
@@ -18,9 +19,12 @@ impl OutputFormat {
             "svg" => Ok(Self::Svg),
             "json" => Ok(Self::Json),
             "html" => Ok(Self::Html),
+            "markdown" | "md" => Ok(Self::Markdown),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("지원하지 않는 출력 형식입니다: {value}. 지원 형식: txt, svg, json, html"),
+                format!(
+                    "지원하지 않는 출력 형식입니다: {value}. 지원 형식: txt, svg, json, html, markdown"
+                ),
             )),
         }
     }
@@ -31,6 +35,7 @@ impl OutputFormat {
             Self::Svg => "svg",
             Self::Json => "json",
             Self::Html => "html",
+            Self::Markdown => "md",
         }
     }
 }
@@ -106,12 +111,14 @@ pub fn print_usage() {
     println!("  svg");
     println!("  json");
     println!("  html");
+    println!("  markdown");
     println!();
     println!("예시");
     println!("  hwp-convert sample.hwpx --to txt");
     println!("  hwp-convert sample.hwpx --to svg");
     println!("  hwp-convert sample.hwpx --to json");
     println!("  hwp-convert sample.hwpx --to html");
+    println!("  hwp-convert sample.hwpx --to markdown");
 }
 
 #[cfg(test)]
@@ -166,6 +173,19 @@ mod tests {
             Some(CliArgs {
                 input_path: PathBuf::from("sample.hwpx"),
                 format: OutputFormat::Html,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_markdown_export_arguments() {
+        let args = parse_args(["hwp-convert", "sample.hwpx", "--to", "markdown"]).unwrap();
+
+        assert_eq!(
+            args,
+            Some(CliArgs {
+                input_path: PathBuf::from("sample.hwpx"),
+                format: OutputFormat::Markdown,
             })
         );
     }

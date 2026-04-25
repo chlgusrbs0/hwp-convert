@@ -30,6 +30,10 @@ pub fn export(args: &CliArgs) -> Result<PathBuf, Box<dyn Error>> {
             let paragraphs = hwpx::read_paragraphs(&args.input_path)?;
             write_html_output(&args.input_path, &output_path, &paragraphs)?;
         }
+        OutputFormat::Markdown => {
+            let paragraphs = hwpx::read_paragraphs(&args.input_path)?;
+            write_markdown_output(&output_path, &paragraphs)?;
+        }
     }
 
     Ok(output_path)
@@ -118,6 +122,11 @@ fn write_html_output(
 ) -> Result<(), io::Error> {
     let html = render_html_document(input_path, paragraphs);
     fs::write(output_path, html)
+}
+
+fn write_markdown_output(output_path: &Path, paragraphs: &[String]) -> Result<(), io::Error> {
+    let markdown = render_markdown_document(paragraphs);
+    fs::write(output_path, markdown)
 }
 
 fn render_svg_document(input_path: &Path, paragraphs: &[String]) -> String {
@@ -256,6 +265,20 @@ fn render_html_document(input_path: &Path, paragraphs: &[String]) -> String {
     )
 }
 
+fn render_markdown_document(paragraphs: &[String]) -> String {
+    paragraphs
+        .iter()
+        .map(|paragraph| {
+            paragraph
+                .split('\n')
+                .map(escape_markdown_line)
+                .collect::<Vec<_>>()
+                .join("  \n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 fn collect_render_lines(paragraphs: &[String]) -> Vec<RenderLine> {
     if paragraphs.is_empty() {
         return vec![RenderLine {
@@ -311,6 +334,36 @@ fn escape_xml(value: &str) -> String {
 
 fn escape_html(value: &str) -> String {
     escape_xml(value)
+}
+
+fn escape_markdown_line(line: &str) -> String {
+    let mut escaped = line.replace('\\', "\\\\");
+    let trimmed = escaped.trim_start();
+    if trimmed.is_empty() {
+        return escaped;
+    }
+
+    let needs_escape = matches!(
+        trimmed.chars().next(),
+        Some('#' | '>' | '-' | '+' | '*' | '|')
+    ) || starts_with_ordered_list_marker(trimmed);
+
+    if needs_escape {
+        let indent_len = escaped.len() - trimmed.len();
+        escaped.insert(indent_len, '\\');
+    }
+
+    escaped
+}
+
+fn starts_with_ordered_list_marker(line: &str) -> bool {
+    let digit_count = line.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    if digit_count == 0 {
+        return false;
+    }
+
+    matches!(line.chars().nth(digit_count), Some('.') | Some(')'))
+        && line.chars().nth(digit_count + 1) == Some(' ')
 }
 
 #[cfg(test)]
@@ -385,5 +438,18 @@ mod tests {
         assert!(html.contains("<title>sample.hwpx text export</title>"));
         assert!(html.contains("<p>&amp; &lt; &gt; &quot; &apos;</p>"));
         assert!(html.contains("<p>second line</p>"));
+    }
+
+    #[test]
+    fn renders_markdown_with_escaped_prefixes() {
+        let markdown = render_markdown_document(&[
+            String::from("# heading"),
+            String::from("1. ordered"),
+            String::from("line one\nline two"),
+        ]);
+
+        assert!(markdown.contains("\\# heading"));
+        assert!(markdown.contains("\\1. ordered"));
+        assert!(markdown.contains("line one  \nline two"));
     }
 }
