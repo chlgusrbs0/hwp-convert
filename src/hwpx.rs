@@ -1,6 +1,6 @@
 use std::error::Error;
-use std::fs::File;
-use std::io::{self, Read};
+use std::fs;
+use std::io::{self, Cursor, Read};
 use std::path::Path;
 
 use zip::ZipArchive;
@@ -8,28 +8,51 @@ use zip::ZipArchive;
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
 
 pub fn read_preview_text(input_path: &Path) -> Result<String, Box<dyn Error>> {
-    let file = File::open(input_path)?;
-    let mut archive = ZipArchive::new(file).map_err(|error| {
+    let bytes = fs::read(input_path)?;
+
+    match read_preview_text_with_rhwp(&bytes) {
+        Ok(Some(text)) => Ok(text),
+        Ok(None) | Err(_) => read_preview_text_from_archive(&bytes),
+    }
+}
+
+fn read_preview_text_with_rhwp(bytes: &[u8]) -> Result<Option<String>, Box<dyn Error>> {
+    let document = rhwp::parse_document(bytes).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("HWPX(zip) 파일을 열 수 없습니다: {error}"),
+            format!("failed to parse document with rhwp: {error}"),
+        )
+    })?;
+
+    Ok(document
+        .preview
+        .and_then(|preview| preview.text)
+        .map(|text| normalize_newlines(&text)))
+}
+
+fn read_preview_text_from_archive(bytes: &[u8]) -> Result<String, Box<dyn Error>> {
+    let cursor = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to open HWPX archive: {error}"),
         )
     })?;
 
     let mut preview_file = archive.by_name(PREVIEW_TEXT_PATH).map_err(|_| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            format!("{PREVIEW_TEXT_PATH} 항목을 찾을 수 없습니다."),
+            format!("missing {PREVIEW_TEXT_PATH} entry"),
         )
     })?;
 
-    let mut bytes = Vec::new();
-    preview_file.read_to_end(&mut bytes)?;
+    let mut preview_bytes = Vec::new();
+    preview_file.read_to_end(&mut preview_bytes)?;
 
-    let preview_text = String::from_utf8(bytes).map_err(|error| {
+    let preview_text = String::from_utf8(preview_bytes).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("미리보기 텍스트가 UTF-8이 아닙니다: {error}"),
+            format!("preview text is not valid UTF-8: {error}"),
         )
     })?;
 
@@ -43,7 +66,7 @@ fn normalize_newlines(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::fs::File;
     use std::io::Write;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -52,19 +75,19 @@ mod tests {
     use zip::write::SimpleFileOptions;
 
     #[test]
-    fn reads_preview_text_from_hwpx_archive() -> Result<(), Box<dyn Error>> {
+    fn falls_back_to_preview_archive_entry() -> Result<(), Box<dyn Error>> {
         let path = temp_fixture_path("preview-text");
         let file = File::create(&path)?;
         let mut writer = ZipWriter::new(file);
 
         writer.start_file(PREVIEW_TEXT_PATH, SimpleFileOptions::default())?;
-        writer.write_all("첫 줄\r\n둘째 줄".as_bytes())?;
+        writer.write_all(b"first line\r\nsecond line")?;
         writer.finish()?;
 
         let preview_text = read_preview_text(&path)?;
         fs::remove_file(&path)?;
 
-        assert_eq!(preview_text, "첫 줄\n둘째 줄");
+        assert_eq!(preview_text, "first line\nsecond line");
 
         Ok(())
     }
