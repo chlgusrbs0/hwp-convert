@@ -2,6 +2,7 @@ package io.github.chlgusrbs0.hwpconvert;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.zip.ZipEntry;
@@ -81,35 +82,35 @@ public class Main {
         content.append("입력 파일: ").append(inputPath.getFileName()).append("\n");
         content.append("출력 형식: ").append(format).append("\n\n");
 
-        content.append("HWPX 내부 파일 목록:\n");
+        String previewText = readPreviewText(inputPath);
 
-        try {
-            appendHwpxZipEntries(inputPath, content);
-        } catch (IOException e) {
-            content.append("오류: HWPX 파일 내부를 읽지 못했습니다.\n");
-            content.append("원인: ").append(e.getMessage()).append("\n");
+        if (previewText == null || previewText.isBlank()) {
+            content.append("오류: Preview/PrvText.txt 파일을 찾지 못했거나 내용이 비어 있습니다.\n");
+        } else {
+            content.append(previewText);
         }
 
         Files.writeString(outputPath, content.toString());
     }
 
-    private static void appendHwpxZipEntries(Path inputPath, StringBuilder content) throws IOException {
+    private static String readPreviewText(Path inputPath) throws IOException {
         try (InputStream fileInputStream = Files.newInputStream(inputPath);
              ZipInputStream zipInputStream = new ZipInputStream(fileInputStream)) {
 
             ZipEntry entry;
-            boolean hasEntry = false;
 
             while ((entry = zipInputStream.getNextEntry()) != null) {
-                hasEntry = true;
-                content.append("- ").append(entry.getName()).append("\n");
+                if (entry.getName().equals("Preview/PrvText.txt")) {
+                    byte[] bytes = zipInputStream.readAllBytes();
+                    zipInputStream.closeEntry();
+                    return new String(bytes, StandardCharsets.UTF_8);
+                }
+
                 zipInputStream.closeEntry();
             }
-
-            if (!hasEntry) {
-                content.append("오류: ZIP 내부 파일을 찾지 못했습니다.\n");
-            }
         }
+
+        return null;
     }
 
     private static void printUsage() {
