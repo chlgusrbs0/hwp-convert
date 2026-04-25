@@ -52,6 +52,7 @@ pub struct CliArgs {
     pub format: OutputFormat,
     pub recursive: bool,
     pub manifest_path: Option<PathBuf>,
+    pub continue_on_error: bool,
 }
 
 pub fn parse_args<I, T>(args: I) -> Result<Option<CliArgs>, io::Error>
@@ -75,6 +76,7 @@ where
     let mut format = None;
     let mut recursive = false;
     let mut manifest_path = None;
+    let mut continue_on_error = false;
 
     while let Some(arg) = args.next() {
         match arg.to_string_lossy().as_ref() {
@@ -122,10 +124,20 @@ where
 
                 manifest_path = Some(PathBuf::from(value));
             }
+            "--continue-on-error" => {
+                if continue_on_error {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--continue-on-error는 한 번만 사용할 수 있습니다.",
+                    ));
+                }
+
+                continue_on_error = true;
+            }
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "알 수 없는 인자입니다. 예: hwp-convert sample.hwpx --to svg [--recursive] [--manifest manifest.json]",
+                    "알 수 없는 인자입니다. 예: hwp-convert sample.hwpx --to svg [--recursive] [--manifest manifest.json] [--continue-on-error]",
                 ));
             }
         }
@@ -143,14 +155,17 @@ where
         format,
         recursive,
         manifest_path,
+        continue_on_error,
     }))
 }
 
 pub fn print_usage() {
     println!("사용법");
-    println!("  hwp-convert <입력 파일> --to <출력 형식> [--manifest <manifest.json>]");
     println!(
-        "  hwp-convert <입력 디렉토리> --to <출력 형식> --recursive [--manifest <manifest.json>]"
+        "  hwp-convert <입력 파일> --to <출력 형식> [--manifest <manifest.json>] [--continue-on-error]"
+    );
+    println!(
+        "  hwp-convert <입력 디렉토리> --to <출력 형식> --recursive [--manifest <manifest.json>] [--continue-on-error]"
     );
     println!();
     println!("지원 형식");
@@ -163,10 +178,10 @@ pub fn print_usage() {
     println!("예시");
     println!("  hwp-convert sample.hwpx --to txt");
     println!("  hwp-convert sample.hwpx --to svg --manifest manifest.json");
-    println!("  hwp-convert sample.hwpx --to json");
-    println!("  hwp-convert sample.hwpx --to html");
-    println!("  hwp-convert sample.hwpx --to markdown");
-    println!("  hwp-convert ./documents --to svg --recursive --manifest manifest.json");
+    println!("  hwp-convert ./documents --to svg --recursive --continue-on-error");
+    println!(
+        "  hwp-convert ./documents --to json --recursive --manifest manifest.json --continue-on-error"
+    );
 }
 
 #[cfg(test)]
@@ -184,6 +199,7 @@ mod tests {
                 format: OutputFormat::Txt,
                 recursive: false,
                 manifest_path: None,
+                continue_on_error: false,
             })
         );
     }
@@ -199,6 +215,7 @@ mod tests {
                 format: OutputFormat::Svg,
                 recursive: false,
                 manifest_path: None,
+                continue_on_error: false,
             })
         );
     }
@@ -214,6 +231,7 @@ mod tests {
                 format: OutputFormat::Json,
                 recursive: false,
                 manifest_path: None,
+                continue_on_error: false,
             })
         );
     }
@@ -229,6 +247,7 @@ mod tests {
                 format: OutputFormat::Html,
                 recursive: false,
                 manifest_path: None,
+                continue_on_error: false,
             })
         );
     }
@@ -244,6 +263,7 @@ mod tests {
                 format: OutputFormat::Markdown,
                 recursive: false,
                 manifest_path: None,
+                continue_on_error: false,
             })
         );
     }
@@ -259,6 +279,7 @@ mod tests {
                 format: OutputFormat::Svg,
                 recursive: true,
                 manifest_path: None,
+                continue_on_error: false,
             })
         );
     }
@@ -283,6 +304,31 @@ mod tests {
                 format: OutputFormat::Svg,
                 recursive: true,
                 manifest_path: Some(PathBuf::from("manifest.json")),
+                continue_on_error: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_continue_on_error_arguments() {
+        let args = parse_args([
+            "hwp-convert",
+            "documents",
+            "--to",
+            "svg",
+            "--recursive",
+            "--continue-on-error",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            args,
+            Some(CliArgs {
+                input_path: PathBuf::from("documents"),
+                format: OutputFormat::Svg,
+                recursive: true,
+                manifest_path: None,
+                continue_on_error: true,
             })
         );
     }

@@ -36,11 +36,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     println!("입력 경로: {}", args.input_path.display());
     println!("출력 형식: {}", args.format);
 
-    if report.converted_files().len() == 1 {
+    if report.converted_files().len() == 1 && report.failed_files().is_empty() {
         let exported_file = &report.converted_files()[0];
         println!("출력 파일: {}", exported_file.output_path.display());
     } else {
-        println!("변환 파일 수: {}", report.converted_files().len());
+        println!("변환 성공 수: {}", report.converted_files().len());
+        println!("변환 실패 수: {}", report.failed_files().len());
     }
 
     if let Some(manifest_path) = &args.manifest_path {

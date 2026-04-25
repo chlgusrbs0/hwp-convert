@@ -15,13 +15,24 @@ pub struct ExportedFile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedFile {
+    pub input_path: PathBuf,
+    pub error_message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportReport {
     converted_files: Vec<ExportedFile>,
+    failed_files: Vec<FailedFile>,
 }
 
 impl ExportReport {
     pub fn converted_files(&self) -> &[ExportedFile] {
         &self.converted_files
+    }
+
+    pub fn failed_files(&self) -> &[FailedFile] {
+        &self.failed_files
     }
 }
 
@@ -30,20 +41,34 @@ pub fn write_manifest(
     args: &CliArgs,
     report: &ExportReport,
 ) -> Result<(), Box<dyn Error>> {
+    let mut files = Vec::with_capacity(report.converted_files.len() + report.failed_files.len());
+
+    for file in &report.converted_files {
+        files.push(ManifestFileEntry {
+            input_path: file.input_path.display().to_string(),
+            output_path: Some(file.output_path.display().to_string()),
+            status: "success",
+            error: None,
+        });
+    }
+
+    for file in &report.failed_files {
+        files.push(ManifestFileEntry {
+            input_path: file.input_path.display().to_string(),
+            output_path: None,
+            status: "failed",
+            error: Some(file.error_message.clone()),
+        });
+    }
+
     let manifest = ManifestExport {
         input_path: args.input_path.display().to_string(),
         format: args.format.to_string(),
         recursive: args.recursive,
+        continue_on_error: args.continue_on_error,
         converted_count: report.converted_files.len(),
-        files: report
-            .converted_files
-            .iter()
-            .map(|file| ManifestFileEntry {
-                input_path: file.input_path.display().to_string(),
-                output_path: file.output_path.display().to_string(),
-                status: "success",
-            })
-            .collect(),
+        failed_count: report.failed_files.len(),
+        files,
     };
 
     let content = serde_json::to_string_pretty(&manifest).map_err(|error| {
@@ -62,18 +87,33 @@ pub fn export(args: &CliArgs) -> Result<ExportReport, Box<dyn Error>> {
     validate_input_path(&args.input_path, args.recursive)?;
 
     if args.input_path.is_dir() {
-        export_directory_recursively(&args.input_path, args.format)
+        export_directory_recursively(&args.input_path, args.format, args.continue_on_error)
     } else {
-        let exported_file = export_file(&args.input_path, args.format)?;
-        Ok(ExportReport {
+        export_single_input(args)
+    }
+}
+
+fn export_single_input(args: &CliArgs) -> Result<ExportReport, Box<dyn Error>> {
+    match export_file(&args.input_path, args.format) {
+        Ok(exported_file) => Ok(ExportReport {
             converted_files: vec![exported_file],
-        })
+            failed_files: Vec::new(),
+        }),
+        Err(error) if args.continue_on_error => Ok(ExportReport {
+            converted_files: Vec::new(),
+            failed_files: vec![FailedFile {
+                input_path: args.input_path.clone(),
+                error_message: error.to_string(),
+            }],
+        }),
+        Err(error) => Err(error),
     }
 }
 
 fn export_directory_recursively(
     input_dir: &Path,
     format: OutputFormat,
+    continue_on_error: bool,
 ) -> Result<ExportReport, Box<dyn Error>> {
     let mut input_files = Vec::new();
     collect_supported_input_files(input_dir, &mut input_files)?;
@@ -90,11 +130,23 @@ fn export_directory_recursively(
     }
 
     let mut converted_files = Vec::with_capacity(input_files.len());
+    let mut failed_files = Vec::new();
+
     for input_path in input_files {
-        converted_files.push(export_file(&input_path, format)?);
+        match export_file(&input_path, format) {
+            Ok(exported_file) => converted_files.push(exported_file),
+            Err(error) if continue_on_error => failed_files.push(FailedFile {
+                input_path,
+                error_message: error.to_string(),
+            }),
+            Err(error) => return Err(error),
+        }
     }
 
-    Ok(ExportReport { converted_files })
+    Ok(ExportReport {
+        converted_files,
+        failed_files,
+    })
 }
 
 fn export_file(input_path: &Path, format: OutputFormat) -> Result<ExportedFile, Box<dyn Error>> {
@@ -449,15 +501,20 @@ struct ManifestExport {
     input_path: String,
     format: String,
     recursive: bool,
+    continue_on_error: bool,
     converted_count: usize,
+    failed_count: usize,
     files: Vec<ManifestFileEntry>,
 }
 
 #[derive(Serialize)]
 struct ManifestFileEntry {
     input_path: String,
-    output_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_path: Option<String>,
     status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 fn escape_xml(value: &str) -> String {
@@ -568,16 +625,76 @@ mod tests {
             format: OutputFormat::Txt,
             recursive: true,
             manifest_path: None,
+            continue_on_error: false,
         };
 
         let report = export(&args)?;
 
         assert_eq!(report.converted_files().len(), 2);
+        assert_eq!(report.failed_files().len(), 0);
         assert_eq!(fs::read_to_string(root.join("alpha.txt"))?, "first line");
         assert_eq!(
             fs::read_to_string(root.join("nested").join("beta.txt"))?,
             "second line"
         );
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn continues_directory_export_after_failure() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("continue-on-error");
+        fs::create_dir_all(root.join("nested"))?;
+        write_preview_hwpx(&root.join("alpha.hwpx"), "first line")?;
+        fs::write(
+            root.join("nested").join("broken.hwpx"),
+            "not a valid hwpx file",
+        )?;
+
+        let args = CliArgs {
+            input_path: root.clone(),
+            format: OutputFormat::Txt,
+            recursive: true,
+            manifest_path: None,
+            continue_on_error: true,
+        };
+
+        let report = export(&args)?;
+
+        assert_eq!(report.converted_files().len(), 1);
+        assert_eq!(report.failed_files().len(), 1);
+        assert_eq!(
+            report.failed_files()[0].input_path,
+            root.join("nested").join("broken.hwpx")
+        );
+        assert!(report.failed_files()[0].error_message.contains("failed"));
+        assert_eq!(fs::read_to_string(root.join("alpha.txt"))?, "first line");
+        assert!(!root.join("nested").join("broken.txt").exists());
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn stops_directory_export_without_continue_on_error() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("stop-on-error");
+        fs::create_dir_all(&root)?;
+        fs::write(root.join("broken.hwpx"), "not a valid hwpx file")?;
+
+        let args = CliArgs {
+            input_path: root.clone(),
+            format: OutputFormat::Txt,
+            recursive: true,
+            manifest_path: None,
+            continue_on_error: false,
+        };
+
+        let error = export(&args).unwrap_err();
+
+        assert!(error.to_string().contains("failed"));
 
         fs::remove_dir_all(&root)?;
 
@@ -673,27 +790,26 @@ mod tests {
     }
 
     #[test]
-    fn writes_manifest_with_converted_files() -> Result<(), Box<dyn Error>> {
+    fn writes_manifest_with_success_and_failure_entries() -> Result<(), Box<dyn Error>> {
         let root = temp_fixture_dir("manifest");
         fs::create_dir_all(&root)?;
         let manifest_path = root.join("manifest.json");
         let report = ExportReport {
-            converted_files: vec![
-                ExportedFile {
-                    input_path: PathBuf::from("docs/alpha.hwpx"),
-                    output_path: PathBuf::from("docs/alpha.svg"),
-                },
-                ExportedFile {
-                    input_path: PathBuf::from("docs/nested/beta.hwp"),
-                    output_path: PathBuf::from("docs/nested/beta.svg"),
-                },
-            ],
+            converted_files: vec![ExportedFile {
+                input_path: PathBuf::from("docs/alpha.hwpx"),
+                output_path: PathBuf::from("docs/alpha.svg"),
+            }],
+            failed_files: vec![FailedFile {
+                input_path: PathBuf::from("docs/nested/beta.hwp"),
+                error_message: "parse failed".to_string(),
+            }],
         };
         let args = CliArgs {
             input_path: PathBuf::from("docs"),
             format: OutputFormat::Svg,
             recursive: true,
             manifest_path: Some(manifest_path.clone()),
+            continue_on_error: true,
         };
 
         write_manifest(&manifest_path, &args, &report)?;
@@ -702,10 +818,12 @@ mod tests {
         assert!(content.contains("\"input_path\": \"docs\""));
         assert!(content.contains("\"format\": \"svg\""));
         assert!(content.contains("\"recursive\": true"));
-        assert!(content.contains("\"converted_count\": 2"));
+        assert!(content.contains("\"continue_on_error\": true"));
+        assert!(content.contains("\"converted_count\": 1"));
+        assert!(content.contains("\"failed_count\": 1"));
         assert!(content.contains("\"status\": \"success\""));
-        assert!(content.contains("docs/alpha.hwpx"));
-        assert!(content.contains("docs/nested/beta.svg"));
+        assert!(content.contains("\"status\": \"failed\""));
+        assert!(content.contains("\"error\": \"parse failed\""));
 
         fs::remove_dir_all(&root)?;
 
