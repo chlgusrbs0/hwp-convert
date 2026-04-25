@@ -28,6 +28,10 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     let report = exporter::export(&args)?;
 
+    if let Some(manifest_path) = &args.manifest_path {
+        exporter::write_manifest(manifest_path, &args, &report)?;
+    }
+
     println!("hwp-convert");
     println!("입력 경로: {}", args.input_path.display());
     println!("출력 형식: {}", args.format);
@@ -37,6 +41,10 @@ fn run() -> Result<(), Box<dyn Error>> {
         println!("출력 파일: {}", exported_file.output_path.display());
     } else {
         println!("변환 파일 수: {}", report.converted_files().len());
+    }
+
+    if let Some(manifest_path) = &args.manifest_path {
+        println!("manifest 파일: {}", manifest_path.display());
     }
 
     println!("변환 완료");

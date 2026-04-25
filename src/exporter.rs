@@ -25,6 +25,39 @@ impl ExportReport {
     }
 }
 
+pub fn write_manifest(
+    manifest_path: &Path,
+    args: &CliArgs,
+    report: &ExportReport,
+) -> Result<(), Box<dyn Error>> {
+    let manifest = ManifestExport {
+        input_path: args.input_path.display().to_string(),
+        format: args.format.to_string(),
+        recursive: args.recursive,
+        converted_count: report.converted_files.len(),
+        files: report
+            .converted_files
+            .iter()
+            .map(|file| ManifestFileEntry {
+                input_path: file.input_path.display().to_string(),
+                output_path: file.output_path.display().to_string(),
+                status: "success",
+            })
+            .collect(),
+    };
+
+    let content = serde_json::to_string_pretty(&manifest).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to serialize manifest output: {error}"),
+        )
+    })?;
+
+    fs::write(manifest_path, content)?;
+
+    Ok(())
+}
+
 pub fn export(args: &CliArgs) -> Result<ExportReport, Box<dyn Error>> {
     validate_input_path(&args.input_path, args.recursive)?;
 
@@ -411,6 +444,22 @@ struct JsonExport<'a> {
     text: String,
 }
 
+#[derive(Serialize)]
+struct ManifestExport {
+    input_path: String,
+    format: String,
+    recursive: bool,
+    converted_count: usize,
+    files: Vec<ManifestFileEntry>,
+}
+
+#[derive(Serialize)]
+struct ManifestFileEntry {
+    input_path: String,
+    output_path: String,
+    status: &'static str,
+}
+
 fn escape_xml(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
 
@@ -518,6 +567,7 @@ mod tests {
             input_path: root.clone(),
             format: OutputFormat::Txt,
             recursive: true,
+            manifest_path: None,
         };
 
         let report = export(&args)?;
@@ -620,6 +670,46 @@ mod tests {
         assert!(markdown.contains("\\# heading"));
         assert!(markdown.contains("\\1. ordered"));
         assert!(markdown.contains("line one  \nline two"));
+    }
+
+    #[test]
+    fn writes_manifest_with_converted_files() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("manifest");
+        fs::create_dir_all(&root)?;
+        let manifest_path = root.join("manifest.json");
+        let report = ExportReport {
+            converted_files: vec![
+                ExportedFile {
+                    input_path: PathBuf::from("docs/alpha.hwpx"),
+                    output_path: PathBuf::from("docs/alpha.svg"),
+                },
+                ExportedFile {
+                    input_path: PathBuf::from("docs/nested/beta.hwp"),
+                    output_path: PathBuf::from("docs/nested/beta.svg"),
+                },
+            ],
+        };
+        let args = CliArgs {
+            input_path: PathBuf::from("docs"),
+            format: OutputFormat::Svg,
+            recursive: true,
+            manifest_path: Some(manifest_path.clone()),
+        };
+
+        write_manifest(&manifest_path, &args, &report)?;
+
+        let content = fs::read_to_string(&manifest_path)?;
+        assert!(content.contains("\"input_path\": \"docs\""));
+        assert!(content.contains("\"format\": \"svg\""));
+        assert!(content.contains("\"recursive\": true"));
+        assert!(content.contains("\"converted_count\": 2"));
+        assert!(content.contains("\"status\": \"success\""));
+        assert!(content.contains("docs/alpha.hwpx"));
+        assert!(content.contains("docs/nested/beta.svg"));
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
     }
 
     fn write_preview_hwpx(path: &Path, preview_text: &str) -> Result<(), Box<dyn Error>> {
