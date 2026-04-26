@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
-use crate::ir::Document;
+use crate::ir::{Block, Document, Inline, UnknownBlock};
 use crate::util::plain_text;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,7 +272,7 @@ fn export_file(
             write_svg_output(input_path, &output_path, &document)?;
         }
         OutputFormat::Json => {
-            write_json_output(input_path, &output_path, &document)?;
+            write_json_output(&output_path, &document)?;
         }
         OutputFormat::Html => {
             write_html_output(input_path, &output_path, &document)?;
@@ -408,24 +408,8 @@ fn write_svg_output(
     fs::write(output_path, svg)
 }
 
-fn write_json_output(
-    input_path: &Path,
-    output_path: &Path,
-    document: &Document,
-) -> Result<(), io::Error> {
-    let paragraphs = plain_text::collect_paragraph_texts(document);
-    let file_name = input_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("document");
-    let json = JsonExport {
-        input_file: file_name,
-        paragraph_count: paragraphs.len(),
-        paragraphs: &paragraphs,
-        text: paragraphs.join("\n"),
-    };
-
-    let content = serde_json::to_string_pretty(&json).map_err(|error| {
+fn write_json_output(output_path: &Path, document: &Document) -> Result<(), io::Error> {
+    let content = serde_json::to_string_pretty(document).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("failed to serialize JSON output: {error}"),
@@ -440,14 +424,12 @@ fn write_html_output(
     output_path: &Path,
     document: &Document,
 ) -> Result<(), io::Error> {
-    let paragraphs = plain_text::collect_paragraph_texts(document);
-    let html = render_html_document(input_path, &paragraphs);
+    let html = render_html_document(input_path, document);
     fs::write(output_path, html)
 }
 
 fn write_markdown_output(output_path: &Path, document: &Document) -> Result<(), io::Error> {
-    let paragraphs = plain_text::collect_paragraph_texts(document);
-    let markdown = render_markdown_document(&paragraphs);
+    let markdown = render_markdown_document(document);
     fs::write(output_path, markdown)
 }
 
@@ -512,26 +494,14 @@ fn render_svg_document(input_path: &Path, paragraphs: &[String]) -> String {
     )
 }
 
-fn render_html_document(input_path: &Path, paragraphs: &[String]) -> String {
+fn render_html_document(input_path: &Path, document: &Document) -> String {
     let file_name = input_path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("document");
     let title = escape_html(&format!("{file_name} text export"));
 
-    let mut paragraph_nodes = String::new();
-    if paragraphs.is_empty() {
-        paragraph_nodes.push_str("    <p></p>\n");
-    } else {
-        for paragraph in paragraphs {
-            let content = if paragraph.is_empty() {
-                String::new()
-            } else {
-                escape_html(paragraph).replace('\n', "<br />")
-            };
-            paragraph_nodes.push_str(&format!("    <p>{content}</p>\n"));
-        }
-    }
+    let paragraph_nodes = render_html_blocks(document);
 
     format!(
         "<!DOCTYPE html>\n\
@@ -587,18 +557,117 @@ fn render_html_document(input_path: &Path, paragraphs: &[String]) -> String {
     )
 }
 
-fn render_markdown_document(paragraphs: &[String]) -> String {
-    paragraphs
-        .iter()
-        .map(|paragraph| {
-            paragraph
-                .split('\n')
-                .map(escape_markdown_line)
-                .collect::<Vec<_>>()
-                .join("  \n")
-        })
+fn render_html_blocks(document: &Document) -> String {
+    let mut paragraph_nodes = String::new();
+
+    for section in &document.sections {
+        for block in &section.blocks {
+            paragraph_nodes.push_str(&render_html_block(block));
+        }
+    }
+
+    if paragraph_nodes.is_empty() {
+        paragraph_nodes.push_str("    <p></p>\n");
+    }
+
+    paragraph_nodes
+}
+
+fn render_html_block(block: &Block) -> String {
+    match block {
+        Block::Paragraph(paragraph) => {
+            let content = render_html_inlines(&paragraph.inlines);
+            format!("    <p>{content}</p>\n")
+        }
+        Block::Unknown(unknown) => {
+            let content = unknown
+                .fallback_text
+                .as_deref()
+                .map(render_html_fallback_text)
+                .unwrap_or_default();
+            format!("    <p>{content}</p>\n")
+        }
+    }
+}
+
+fn render_html_inlines(inlines: &[Inline]) -> String {
+    let mut content = String::new();
+
+    for inline in inlines {
+        match inline {
+            Inline::Text(run) => content.push_str(&escape_html(&run.text).replace('\n', "<br />")),
+            Inline::LineBreak => content.push_str("<br />"),
+            Inline::Tab => content.push('\t'),
+            Inline::Unknown(unknown) => {
+                if let Some(fallback) = &unknown.fallback_text {
+                    content.push_str(&render_html_fallback_text(fallback));
+                }
+            }
+        }
+    }
+
+    content
+}
+
+fn render_html_fallback_text(text: &str) -> String {
+    escape_html(text).replace('\n', "<br />")
+}
+
+fn render_markdown_document(document: &Document) -> String {
+    let mut blocks = Vec::new();
+
+    for section in &document.sections {
+        for block in &section.blocks {
+            blocks.push(render_markdown_block(block));
+        }
+    }
+
+    blocks.join("\n\n")
+}
+
+fn render_markdown_block(block: &Block) -> String {
+    match block {
+        Block::Paragraph(paragraph) => render_markdown_inlines(&paragraph.inlines),
+        Block::Unknown(unknown) => render_markdown_unknown_block(unknown),
+    }
+}
+
+fn render_markdown_unknown_block(unknown: &UnknownBlock) -> String {
+    unknown
+        .fallback_text
+        .as_deref()
+        .map(render_markdown_text)
+        .unwrap_or_default()
+}
+
+fn render_markdown_inlines(inlines: &[Inline]) -> String {
+    render_markdown_text(&collect_inline_plain_text(inlines))
+}
+
+fn render_markdown_text(text: &str) -> String {
+    text.split('\n')
+        .map(escape_markdown_line)
         .collect::<Vec<_>>()
-        .join("\n\n")
+        .join("  \n")
+}
+
+fn collect_inline_plain_text(inlines: &[Inline]) -> String {
+    let mut text = String::new();
+
+    for inline in inlines {
+        match inline {
+            Inline::Text(run) => text.push_str(&run.text),
+            Inline::LineBreak => text.push('\n'),
+            Inline::Tab => text.push('\t'),
+            Inline::Unknown(unknown) => {
+                if let Some(fallback) = &unknown.fallback_text {
+                    text.push_str(fallback);
+                }
+            }
+        }
+    }
+
+    text
 }
 
 fn collect_render_lines(paragraphs: &[String]) -> Vec<RenderLine> {
@@ -627,14 +696,6 @@ fn collect_render_lines(paragraphs: &[String]) -> Vec<RenderLine> {
 struct RenderLine {
     content: String,
     add_paragraph_gap: bool,
-}
-
-#[derive(Serialize)]
-struct JsonExport<'a> {
-    input_file: &'a str,
-    paragraph_count: usize,
-    paragraphs: &'a [String],
-    text: String,
 }
 
 #[derive(Serialize)]
@@ -765,6 +826,10 @@ fn starts_with_ordered_list_marker(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::{
+        ConversionWarning, IR_VERSION, Metadata, Paragraph, ParagraphRole, Section, TextRun,
+        TextStyle, UnknownInline,
+    };
     use std::fs::File;
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1225,56 +1290,83 @@ mod tests {
     }
 
     #[test]
-    fn serializes_json_output_with_paragraphs() {
-        let path = Path::new("sample.hwpx");
-        let paragraphs = vec![
+    fn serializes_json_output_as_document_ir() {
+        let document = Document::from_paragraphs(vec![
             "first paragraph".to_string(),
             "second paragraph".to_string(),
-        ];
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("document");
-        let json = JsonExport {
-            input_file: file_name,
-            paragraph_count: paragraphs.len(),
-            paragraphs: &paragraphs,
-            text: paragraphs.join("\n"),
-        };
+        ]);
 
-        let content = serde_json::to_string_pretty(&json).unwrap();
+        let content = serde_json::to_string_pretty(&document).unwrap();
 
-        assert!(content.contains("\"input_file\": \"sample.hwpx\""));
-        assert!(content.contains("\"paragraph_count\": 2"));
-        assert!(content.contains("\"paragraphs\": ["));
+        assert!(content.contains("\"ir_version\": 1"));
+        assert!(content.contains("\"sections\": ["));
+        assert!(content.contains("\"type\": \"paragraph\""));
+        assert!(content.contains("\"role\": \"body\""));
         assert!(content.contains("first paragraph"));
         assert!(content.contains("second paragraph"));
     }
 
     #[test]
-    fn renders_html_with_escaped_paragraphs() {
-        let html = render_html_document(
-            Path::new("sample.hwpx"),
-            &[String::from("& < > \" '"), String::from("second line")],
-        );
+    fn renders_html_from_document_ir_blocks_and_inlines() {
+        let document = document_with_blocks(vec![
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![
+                    Inline::Text(TextRun {
+                        text: "& < > \" '".to_string(),
+                        style: TextStyle::default(),
+                    }),
+                    Inline::LineBreak,
+                    Inline::Text(TextRun {
+                        text: "second line".to_string(),
+                        style: TextStyle::default(),
+                    }),
+                    Inline::Unknown(UnknownInline {
+                        kind: "opaque_inline".to_string(),
+                        fallback_text: Some(" + extra".to_string()),
+                    }),
+                ],
+            }),
+            Block::Unknown(UnknownBlock {
+                kind: "opaque_block".to_string(),
+                fallback_text: Some("fallback block".to_string()),
+            }),
+        ]);
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
 
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("<title>sample.hwpx text export</title>"));
-        assert!(html.contains("<p>&amp; &lt; &gt; &quot; &apos;</p>"));
-        assert!(html.contains("<p>second line</p>"));
+        assert!(html.contains("<p>&amp; &lt; &gt; &quot; &apos;<br />second line + extra</p>"));
+        assert!(html.contains("<p>fallback block</p>"));
     }
 
     #[test]
-    fn renders_markdown_with_escaped_prefixes() {
-        let markdown = render_markdown_document(&[
-            String::from("# heading"),
-            String::from("1. ordered"),
-            String::from("line one\nline two"),
+    fn renders_markdown_from_document_ir_blocks_and_inlines() {
+        let document = document_with_blocks(vec![
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![
+                    Inline::Text(TextRun {
+                        text: "# heading".to_string(),
+                        style: TextStyle::default(),
+                    }),
+                    Inline::LineBreak,
+                    Inline::Text(TextRun {
+                        text: "line one\nline two".to_string(),
+                        style: TextStyle::default(),
+                    }),
+                ],
+            }),
+            Block::Unknown(UnknownBlock {
+                kind: "opaque_block".to_string(),
+                fallback_text: Some("1. ordered".to_string()),
+            }),
         ]);
+        let markdown = render_markdown_document(&document);
 
         assert!(markdown.contains("\\# heading"));
-        assert!(markdown.contains("\\1. ordered"));
         assert!(markdown.contains("line one  \nline two"));
+        assert!(markdown.contains("\\1. ordered"));
     }
 
     #[test]
@@ -1338,6 +1430,15 @@ mod tests {
         writer.finish()?;
 
         Ok(())
+    }
+
+    fn document_with_blocks(blocks: Vec<Block>) -> Document {
+        Document {
+            ir_version: IR_VERSION,
+            metadata: Metadata::default(),
+            sections: vec![Section { blocks }],
+            warnings: Vec::<ConversionWarning>::new(),
+        }
     }
 
     fn temp_fixture_dir(label: &str) -> PathBuf {
