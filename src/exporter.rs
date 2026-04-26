@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
-use crate::ir::{Block, Document, Inline, UnknownBlock};
+use crate::ir::{Block, Document, Inline, Table, TableCell, TableRow, UnknownBlock};
 use crate::util::plain_text;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -403,7 +403,7 @@ fn write_svg_output(
     output_path: &Path,
     document: &Document,
 ) -> Result<(), io::Error> {
-    let paragraphs = plain_text::collect_paragraph_texts(document);
+    let paragraphs = plain_text::collect_block_texts(document);
     let svg = render_svg_document(input_path, &paragraphs);
     fs::write(output_path, svg)
 }
@@ -536,12 +536,31 @@ fn render_html_document(input_path: &Path, document: &Document) -> String {
         padding: 32px;\n\
         box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);\n\
       }}\n\
+      table {{\n\
+        width: 100%;\n\
+        border-collapse: collapse;\n\
+        margin: 0 0 1em;\n\
+      }}\n\
+      td {{\n\
+        border: 1px solid #e5e7eb;\n\
+        padding: 12px 14px;\n\
+        vertical-align: top;\n\
+      }}\n\
       p {{\n\
         margin: 0 0 1em;\n\
         line-height: 1.8;\n\
         white-space: normal;\n\
       }}\n\
       p:last-child {{\n\
+        margin-bottom: 0;\n\
+      }}\n\
+      td p {{\n\
+        margin-bottom: 0.75em;\n\
+      }}\n\
+      td p:last-child {{\n\
+        margin-bottom: 0;\n\
+      }}\n\
+      article > *:last-child {{\n\
         margin-bottom: 0;\n\
       }}\n\
     </style>\n\
@@ -575,19 +594,22 @@ fn render_html_blocks(document: &Document) -> String {
 
 fn render_html_block(block: &Block) -> String {
     match block {
-        Block::Paragraph(paragraph) => {
-            let content = render_html_inlines(&paragraph.inlines);
-            format!("    <p>{content}</p>\n")
-        }
+        Block::Paragraph(paragraph) => render_html_paragraph(&paragraph.inlines),
+        Block::Table(table) => render_html_table(table),
         Block::Unknown(unknown) => {
             let content = unknown
                 .fallback_text
                 .as_deref()
                 .map(render_html_fallback_text)
                 .unwrap_or_default();
-            format!("    <p>{content}</p>\n")
+            format!("<p>{content}</p>\n")
         }
     }
+}
+
+fn render_html_paragraph(inlines: &[Inline]) -> String {
+    let content = render_html_inlines(inlines);
+    format!("<p>{content}</p>\n")
 }
 
 fn render_html_inlines(inlines: &[Inline]) -> String {
@@ -613,6 +635,52 @@ fn render_html_fallback_text(text: &str) -> String {
     escape_html(text).replace('\n', "<br />")
 }
 
+fn render_html_table(table: &Table) -> String {
+    let mut html = String::from("<table>\n");
+
+    for row in &table.rows {
+        html.push_str(&render_html_table_row(row));
+    }
+
+    html.push_str("</table>\n");
+    html
+}
+
+fn render_html_table_row(row: &TableRow) -> String {
+    let mut html = String::from("<tr>\n");
+
+    for cell in &row.cells {
+        html.push_str(&render_html_table_cell(cell));
+    }
+
+    html.push_str("</tr>\n");
+    html
+}
+
+fn render_html_table_cell(cell: &TableCell) -> String {
+    let rowspan = if cell.row_span > 1 {
+        format!(" rowspan=\"{}\"", cell.row_span)
+    } else {
+        String::new()
+    };
+    let colspan = if cell.col_span > 1 {
+        format!(" colspan=\"{}\"", cell.col_span)
+    } else {
+        String::new()
+    };
+    let content = render_html_table_cell_blocks(&cell.blocks);
+
+    format!("<td{rowspan}{colspan}>{content}</td>\n")
+}
+
+fn render_html_table_cell_blocks(blocks: &[Block]) -> String {
+    blocks
+        .iter()
+        .map(render_html_block)
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 fn render_markdown_document(document: &Document) -> String {
     let mut blocks = Vec::new();
 
@@ -628,6 +696,7 @@ fn render_markdown_document(document: &Document) -> String {
 fn render_markdown_block(block: &Block) -> String {
     match block {
         Block::Paragraph(paragraph) => render_markdown_inlines(&paragraph.inlines),
+        Block::Table(table) => render_markdown_table(table),
         Block::Unknown(unknown) => render_markdown_unknown_block(unknown),
     }
 }
@@ -642,6 +711,70 @@ fn render_markdown_unknown_block(unknown: &UnknownBlock) -> String {
 
 fn render_markdown_inlines(inlines: &[Inline]) -> String {
     render_markdown_text(&collect_inline_plain_text(inlines))
+}
+
+fn render_markdown_table(table: &Table) -> String {
+    if !can_render_markdown_table(table) {
+        return render_markdown_text(&plain_text::table_to_plain_text(table));
+    }
+
+    let column_count = table.rows.first().map(|row| row.cells.len()).unwrap_or(0);
+    if column_count == 0 {
+        return render_markdown_text("[표]");
+    }
+
+    let mut lines = Vec::with_capacity(table.rows.len() + 1);
+    lines.push(render_markdown_table_row(&table.rows[0]));
+    lines.push(format!("| {} |", vec!["---"; column_count].join(" | ")));
+
+    for row in table.rows.iter().skip(1) {
+        lines.push(render_markdown_table_row(row));
+    }
+
+    lines.join("\n")
+}
+
+fn can_render_markdown_table(table: &Table) -> bool {
+    let Some(first_row) = table.rows.first() else {
+        return false;
+    };
+
+    let column_count = first_row.cells.len();
+    if column_count == 0 {
+        return false;
+    }
+
+    table.rows.iter().all(|row| {
+        row.cells.len() == column_count
+            && row.cells.iter().all(|cell| {
+                cell.row_span == 1
+                    && cell.col_span == 1
+                    && cell.blocks.iter().all(is_markdown_simple_block)
+            })
+    })
+}
+
+fn is_markdown_simple_block(block: &Block) -> bool {
+    matches!(block, Block::Paragraph(_) | Block::Unknown(_))
+}
+
+fn render_markdown_table_row(row: &TableRow) -> String {
+    format!(
+        "| {} |",
+        row.cells
+            .iter()
+            .map(render_markdown_table_cell)
+            .collect::<Vec<_>>()
+            .join(" | ")
+    )
+}
+
+fn render_markdown_table_cell(cell: &TableCell) -> String {
+    escape_markdown_table_cell(&plain_text::blocks_to_plain_text(&cell.blocks).replace('\n', " "))
+}
+
+fn escape_markdown_table_cell(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('|', "\\|")
 }
 
 fn render_markdown_text(text: &str) -> String {
@@ -827,8 +960,8 @@ fn starts_with_ordered_list_marker(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::ir::{
-        ConversionWarning, IR_VERSION, Metadata, Paragraph, ParagraphRole, Section, TextRun,
-        TextStyle, UnknownInline,
+        ConversionWarning, IR_VERSION, Metadata, Paragraph, ParagraphRole, Section, Table,
+        TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownInline,
     };
     use std::fs::File;
     use std::io::Write;
@@ -1298,7 +1431,7 @@ mod tests {
 
         let content = serde_json::to_string_pretty(&document).unwrap();
 
-        assert!(content.contains("\"ir_version\": 1"));
+        assert!(content.contains("\"ir_version\": 2"));
         assert!(content.contains("\"sections\": ["));
         assert!(content.contains("\"type\": \"paragraph\""));
         assert!(content.contains("\"role\": \"body\""));
@@ -1370,6 +1503,38 @@ mod tests {
     }
 
     #[test]
+    fn renders_html_table_from_document_ir() {
+        let document = document_with_blocks(vec![simple_table_block()]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("<table>"));
+        assert!(html.contains("<tr>"));
+        assert!(html.contains("<td><p>cell1</p>\n</td>"));
+        assert!(html.contains("<td><p>cell4</p>\n</td>"));
+    }
+
+    #[test]
+    fn renders_markdown_table_from_document_ir() {
+        let document = document_with_blocks(vec![simple_table_block()]);
+
+        let markdown = render_markdown_document(&document);
+
+        assert!(markdown.contains("| cell1 | cell2 |"));
+        assert!(markdown.contains("| --- | --- |"));
+        assert!(markdown.contains("| cell3 | cell4 |"));
+    }
+
+    #[test]
+    fn renders_plain_text_table_fallback_for_txt_exporter() {
+        let document = document_with_blocks(vec![simple_table_block()]);
+
+        let text = plain_text::to_plain_text(&document);
+
+        assert_eq!(text, "[표]\ncell1 | cell2\ncell3 | cell4");
+    }
+
+    #[test]
     fn writes_manifest_with_success_skip_and_failure_entries() -> Result<(), Box<dyn Error>> {
         let root = temp_fixture_dir("manifest");
         fs::create_dir_all(&root)?;
@@ -1438,6 +1603,35 @@ mod tests {
             metadata: Metadata::default(),
             sections: vec![Section { blocks }],
             warnings: Vec::<ConversionWarning>::new(),
+        }
+    }
+
+    fn simple_table_block() -> Block {
+        Block::Table(Table {
+            rows: vec![
+                TableRow {
+                    cells: vec![table_cell("cell1"), table_cell("cell2")],
+                },
+                TableRow {
+                    cells: vec![table_cell("cell3"), table_cell("cell4")],
+                },
+            ],
+            style: TableStyle::default(),
+        })
+    }
+
+    fn table_cell(text: &str) -> TableCell {
+        TableCell {
+            row_span: 1,
+            col_span: 1,
+            blocks: vec![Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Text(TextRun {
+                    text: text.to_string(),
+                    style: TextStyle::default(),
+                })],
+            })],
+            style: TableCellStyle::default(),
         }
     }
 

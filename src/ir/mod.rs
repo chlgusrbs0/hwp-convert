@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const IR_VERSION: u16 = 1;
+pub const IR_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -60,6 +60,7 @@ pub struct Section {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Block {
     Paragraph(Paragraph),
+    Table(Table),
     Unknown(UnknownBlock),
 }
 
@@ -105,6 +106,42 @@ pub struct TextStyle {
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Table {
+    pub rows: Vec<TableRow>,
+    pub style: TableStyle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct TableRow {
+    pub cells: Vec<TableCell>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TableCell {
+    pub row_span: u32,
+    pub col_span: u32,
+    pub blocks: Vec<Block>,
+    pub style: TableCellStyle,
+}
+
+impl Default for TableCell {
+    fn default() -> Self {
+        Self {
+            row_span: 1,
+            col_span: 1,
+            blocks: Vec::new(),
+            style: TableCellStyle::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct TableStyle {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct TableCellStyle {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct UnknownBlock {
@@ -168,6 +205,32 @@ mod tests {
                         style: TextStyle::default(),
                     })
                 );
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn table_cell_can_hold_nested_blocks() {
+        let cell = TableCell {
+            blocks: vec![Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "cell paragraph".to_string(),
+                    style: TextStyle::default(),
+                })],
+            })],
+            ..Default::default()
+        };
+
+        let table = Table {
+            rows: vec![TableRow { cells: vec![cell] }],
+            style: TableStyle::default(),
+        };
+
+        match &table.rows[0].cells[0].blocks[0] {
+            Block::Paragraph(paragraph) => {
+                assert_eq!(paragraph.inlines.len(), 1);
             }
             other => panic!("expected paragraph block, got {other:?}"),
         }
