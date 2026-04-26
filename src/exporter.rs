@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
-use crate::hwpx;
+use crate::ir::Document;
+use crate::util::plain_text;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportedFile {
@@ -259,26 +261,24 @@ fn export_file(
         }));
     }
 
+    let document = bridge::rhwp::read_document(input_path)?;
+
     match format {
         OutputFormat::Txt => {
-            let document_text = hwpx::read_preview_text(input_path)?;
+            let document_text = plain_text::to_plain_text(&document);
             write_txt_output(&output_path, &document_text)?;
         }
         OutputFormat::Svg => {
-            let paragraphs = hwpx::read_paragraphs(input_path)?;
-            write_svg_output(input_path, &output_path, &paragraphs)?;
+            write_svg_output(input_path, &output_path, &document)?;
         }
         OutputFormat::Json => {
-            let paragraphs = hwpx::read_paragraphs(input_path)?;
-            write_json_output(input_path, &output_path, &paragraphs)?;
+            write_json_output(input_path, &output_path, &document)?;
         }
         OutputFormat::Html => {
-            let paragraphs = hwpx::read_paragraphs(input_path)?;
-            write_html_output(input_path, &output_path, &paragraphs)?;
+            write_html_output(input_path, &output_path, &document)?;
         }
         OutputFormat::Markdown => {
-            let paragraphs = hwpx::read_paragraphs(input_path)?;
-            write_markdown_output(&output_path, &paragraphs)?;
+            write_markdown_output(&output_path, &document)?;
         }
     }
 
@@ -401,17 +401,19 @@ fn write_txt_output(output_path: &Path, document_text: &str) -> Result<(), io::E
 fn write_svg_output(
     input_path: &Path,
     output_path: &Path,
-    paragraphs: &[String],
+    document: &Document,
 ) -> Result<(), io::Error> {
-    let svg = render_svg_document(input_path, paragraphs);
+    let paragraphs = plain_text::collect_paragraph_texts(document);
+    let svg = render_svg_document(input_path, &paragraphs);
     fs::write(output_path, svg)
 }
 
 fn write_json_output(
     input_path: &Path,
     output_path: &Path,
-    paragraphs: &[String],
+    document: &Document,
 ) -> Result<(), io::Error> {
+    let paragraphs = plain_text::collect_paragraph_texts(document);
     let file_name = input_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -419,7 +421,7 @@ fn write_json_output(
     let json = JsonExport {
         input_file: file_name,
         paragraph_count: paragraphs.len(),
-        paragraphs,
+        paragraphs: &paragraphs,
         text: paragraphs.join("\n"),
     };
 
@@ -436,14 +438,16 @@ fn write_json_output(
 fn write_html_output(
     input_path: &Path,
     output_path: &Path,
-    paragraphs: &[String],
+    document: &Document,
 ) -> Result<(), io::Error> {
-    let html = render_html_document(input_path, paragraphs);
+    let paragraphs = plain_text::collect_paragraph_texts(document);
+    let html = render_html_document(input_path, &paragraphs);
     fs::write(output_path, html)
 }
 
-fn write_markdown_output(output_path: &Path, paragraphs: &[String]) -> Result<(), io::Error> {
-    let markdown = render_markdown_document(paragraphs);
+fn write_markdown_output(output_path: &Path, document: &Document) -> Result<(), io::Error> {
+    let paragraphs = plain_text::collect_paragraph_texts(document);
+    let markdown = render_markdown_document(&paragraphs);
     fs::write(output_path, markdown)
 }
 

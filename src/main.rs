@@ -1,6 +1,9 @@
+mod bridge;
 mod cli;
 mod exporter;
 mod hwpx;
+mod ir;
+mod util;
 
 use std::error::Error;
 

@@ -13,6 +13,7 @@ enum InputKind {
     Hwpx,
 }
 
+#[allow(dead_code)]
 pub fn read_preview_text(input_path: &Path) -> Result<String, Box<dyn Error>> {
     let paragraphs = read_paragraphs(input_path)?;
     Ok(paragraphs.join("\n"))
