@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
 use crate::ir::{
-    Alignment, Block, Color, Document, Image, Inline, Paragraph, ParagraphStyle, Resource,
-    ResourceId, ResourceStore, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun,
+    Alignment, Block, Color, Document, HeaderFooter, HeaderFooterPlacement, Image, Inline, Link,
+    ListInfo, ListKind, Note, NoteId, NoteKind, Paragraph, ParagraphStyle, Resource, ResourceId,
+    ResourceStore, Section, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun,
     TextStyle, UnknownBlock,
 };
 use crate::util::plain_text;
@@ -505,7 +506,8 @@ fn render_html_document(input_path: &Path, document: &Document) -> String {
         .unwrap_or("document");
     let title = escape_html(&format!("{file_name} text export"));
 
-    let paragraph_nodes = render_html_blocks(document);
+    let document_nodes = render_html_sections(document);
+    let note_nodes = render_html_notes(document);
 
     format!(
         "<!DOCTYPE html>\n\
@@ -576,6 +578,28 @@ fn render_html_document(input_path: &Path, document: &Document) -> String {
       td p:last-child {{\n\
         margin-bottom: 0;\n\
       }}\n\
+      header, footer {{\n\
+        margin: 0 0 1em;\n\
+        padding: 12px 14px;\n\
+        border: 1px dashed #cbd5e1;\n\
+        border-radius: 12px;\n\
+        background: #f8fafc;\n\
+      }}\n\
+      .notes {{\n\
+        margin-top: 2rem;\n\
+        padding-top: 1.5rem;\n\
+        border-top: 1px solid #e5e7eb;\n\
+      }}\n\
+      .notes ol {{\n\
+        margin: 0;\n\
+        padding-left: 1.5rem;\n\
+      }}\n\
+      .notes li {{\n\
+        margin-bottom: 1rem;\n\
+      }}\n\
+      .note-ref {{\n\
+        font-size: 0.875em;\n\
+      }}\n\
       article > *:last-child {{\n\
         margin-bottom: 0;\n\
       }}\n\
@@ -585,27 +609,86 @@ fn render_html_document(input_path: &Path, document: &Document) -> String {
     <main>\n\
       <h1>{title}</h1>\n\
       <article>\n\
-{paragraph_nodes}      </article>\n\
+{document_nodes}{note_nodes}      </article>\n\
     </main>\n\
   </body>\n\
 </html>\n"
     )
 }
 
-fn render_html_blocks(document: &Document) -> String {
-    let mut paragraph_nodes = String::new();
+fn render_html_sections(document: &Document) -> String {
+    let mut document_nodes = String::new();
 
     for section in &document.sections {
-        for block in &section.blocks {
-            paragraph_nodes.push_str(&render_html_block(block, &document.resources));
-        }
+        document_nodes.push_str(&render_html_section(section, &document.resources));
     }
 
-    if paragraph_nodes.is_empty() {
-        paragraph_nodes.push_str("    <p></p>\n");
+    if document_nodes.is_empty() {
+        document_nodes.push_str("    <p></p>\n");
     }
 
-    paragraph_nodes
+    document_nodes
+}
+
+fn render_html_section(section: &Section, resources: &ResourceStore) -> String {
+    let mut nodes = String::new();
+
+    for header in &section.headers {
+        nodes.push_str(&render_html_header_footer("header", header, resources));
+    }
+    for block in &section.blocks {
+        nodes.push_str(&render_html_block(block, resources));
+    }
+    for footer in &section.footers {
+        nodes.push_str(&render_html_header_footer("footer", footer, resources));
+    }
+
+    nodes
+}
+
+fn render_html_header_footer(
+    tag_name: &str,
+    header_footer: &HeaderFooter,
+    resources: &ResourceStore,
+) -> String {
+    let content = header_footer
+        .blocks
+        .iter()
+        .map(|block| render_html_block(block, resources))
+        .collect::<Vec<_>>()
+        .join("");
+    let placement = escape_html(header_footer_placement_name(&header_footer.placement));
+
+    format!("<{tag_name} data-placement=\"{placement}\">{content}</{tag_name}>\n")
+}
+
+fn render_html_notes(document: &Document) -> String {
+    if document.notes.notes.is_empty() {
+        return String::new();
+    }
+
+    let note_items = document
+        .notes
+        .notes
+        .iter()
+        .map(|note| render_html_note(note, &document.resources))
+        .collect::<Vec<_>>()
+        .join("");
+
+    format!("<section class=\"notes\">\n<h2>주석</h2>\n<ol>\n{note_items}</ol>\n</section>\n")
+}
+
+fn render_html_note(note: &Note, resources: &ResourceStore) -> String {
+    let id = escape_html(&note_html_anchor_id(&note.id));
+    let kind = escape_html(note_kind_name(&note.kind));
+    let content = note
+        .blocks
+        .iter()
+        .map(|block| render_html_block(block, resources))
+        .collect::<Vec<_>>()
+        .join("");
+
+    format!("<li id=\"{id}\" data-kind=\"{kind}\">{content}</li>\n")
 }
 
 fn render_html_block(block: &Block, resources: &ResourceStore) -> String {
@@ -625,7 +708,11 @@ fn render_html_block(block: &Block, resources: &ResourceStore) -> String {
 }
 
 fn render_html_paragraph(paragraph: &Paragraph) -> String {
-    let content = render_html_inlines(&paragraph.inlines);
+    let mut content = String::new();
+    if let Some(list) = &paragraph.list {
+        content.push_str(&render_html_fallback_text(&list_prefix(list)));
+    }
+    content.push_str(&render_html_inlines(&paragraph.inlines));
     let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
 
     format!("<p{style}>{content}</p>\n")
@@ -639,6 +726,13 @@ fn render_html_inlines(inlines: &[Inline]) -> String {
             Inline::Text(run) => content.push_str(&render_html_text_run(run)),
             Inline::LineBreak => content.push_str("<br />"),
             Inline::Tab => content.push('\t'),
+            Inline::Link(link) => content.push_str(&render_html_link(link)),
+            Inline::FootnoteRef { note_id } => {
+                content.push_str(&render_html_note_ref(note_id, NoteKind::Footnote));
+            }
+            Inline::EndnoteRef { note_id } => {
+                content.push_str(&render_html_note_ref(note_id, NoteKind::Endnote));
+            }
             Inline::Unknown(unknown) => {
                 if let Some(fallback) = &unknown.fallback_text {
                     content.push_str(&render_html_fallback_text(fallback));
@@ -663,6 +757,30 @@ fn render_html_text_run(run: &TextRun) -> String {
     } else {
         format!("<span{style}>{content}</span>")
     }
+}
+
+fn render_html_link(link: &Link) -> String {
+    let href = escape_html(&link.url);
+    let title = link
+        .title
+        .as_deref()
+        .map(escape_html)
+        .map(|title| format!(" title=\"{title}\""))
+        .unwrap_or_default();
+    let content = render_html_inlines(&link.inlines);
+
+    format!("<a href=\"{href}\"{title}>{content}</a>")
+}
+
+fn render_html_note_ref(note_id: &NoteId, kind: NoteKind) -> String {
+    let note_anchor = escape_html(&note_html_anchor_id(note_id));
+    let label = match kind {
+        NoteKind::Footnote => "각주",
+        NoteKind::Endnote => "미주",
+    };
+    let text = escape_html(note_id.as_str());
+
+    format!("<sup class=\"note-ref\"><a href=\"#{note_anchor}\">[{label}: {text}]</a></sup>")
 }
 
 fn render_html_text_style(style: &TextStyle) -> String {
@@ -755,6 +873,57 @@ fn render_html_style_attr(style: &str) -> String {
         String::new()
     } else {
         format!(" style=\"{}\"", escape_html(style))
+    }
+}
+
+fn list_prefix(list: &ListInfo) -> String {
+    let indent = "  ".repeat(list.level as usize);
+    let marker = match list.kind {
+        ListKind::Ordered => format!("{}. ", list.number.unwrap_or(1)),
+        ListKind::Unordered | ListKind::Unknown => {
+            format!("{} ", list.marker.as_deref().unwrap_or("-"))
+        }
+    };
+
+    format!("{indent}{marker}")
+}
+
+fn note_html_anchor_id(note_id: &NoteId) -> String {
+    format!("note-{}", sanitize_html_anchor(note_id.as_str()))
+}
+
+fn sanitize_html_anchor(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+
+    if sanitized.is_empty() {
+        "note".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn note_kind_name(kind: &NoteKind) -> &'static str {
+    match kind {
+        NoteKind::Footnote => "footnote",
+        NoteKind::Endnote => "endnote",
+    }
+}
+
+fn header_footer_placement_name(placement: &HeaderFooterPlacement) -> &'static str {
+    match placement {
+        HeaderFooterPlacement::Default => "default",
+        HeaderFooterPlacement::FirstPage => "first_page",
+        HeaderFooterPlacement::OddPage => "odd_page",
+        HeaderFooterPlacement::EvenPage => "even_page",
     }
 }
 
@@ -878,8 +1047,28 @@ fn render_markdown_document(document: &Document) -> String {
     let mut blocks = Vec::new();
 
     for section in &document.sections {
+        for header in &section.headers {
+            blocks.push(render_markdown_header_footer(
+                "머리말",
+                header,
+                &document.resources,
+            ));
+        }
         for block in &section.blocks {
             blocks.push(render_markdown_block(block, &document.resources));
+        }
+        for footer in &section.footers {
+            blocks.push(render_markdown_header_footer(
+                "꼬리말",
+                footer,
+                &document.resources,
+            ));
+        }
+    }
+
+    if !document.notes.notes.is_empty() {
+        for note in &document.notes.notes {
+            blocks.push(render_markdown_note(note, &document.resources));
         }
     }
 
@@ -888,7 +1077,7 @@ fn render_markdown_document(document: &Document) -> String {
 
 fn render_markdown_block(block: &Block, resources: &ResourceStore) -> String {
     match block {
-        Block::Paragraph(paragraph) => render_markdown_inlines(&paragraph.inlines),
+        Block::Paragraph(paragraph) => render_markdown_paragraph(paragraph),
         Block::Table(table) => render_markdown_table(table),
         Block::Image(image) => render_markdown_image(image, resources),
         Block::Unknown(unknown) => render_markdown_unknown_block(unknown),
@@ -903,6 +1092,16 @@ fn render_markdown_unknown_block(unknown: &UnknownBlock) -> String {
         .unwrap_or_default()
 }
 
+fn render_markdown_paragraph(paragraph: &Paragraph) -> String {
+    let content = render_markdown_inlines(&paragraph.inlines);
+
+    if let Some(list) = &paragraph.list {
+        return format!("{}{}", list_prefix(list), content);
+    }
+
+    content
+}
+
 fn render_markdown_inlines(inlines: &[Inline]) -> String {
     let mut content = String::new();
 
@@ -911,6 +1110,9 @@ fn render_markdown_inlines(inlines: &[Inline]) -> String {
             Inline::Text(run) => content.push_str(&render_markdown_text_run(run)),
             Inline::LineBreak => content.push_str("  \n"),
             Inline::Tab => content.push('\t'),
+            Inline::Link(link) => content.push_str(&render_markdown_link(link)),
+            Inline::FootnoteRef { note_id } => content.push_str(&render_markdown_note_ref(note_id)),
+            Inline::EndnoteRef { note_id } => content.push_str(&render_markdown_note_ref(note_id)),
             Inline::Unknown(unknown) => {
                 if let Some(fallback) = &unknown.fallback_text {
                     content.push_str(&render_markdown_text(fallback));
@@ -989,6 +1191,75 @@ fn render_markdown_image(image: &Image, resources: &ResourceStore) -> String {
     format!("![{alt}]({path})")
 }
 
+fn render_markdown_link(link: &Link) -> String {
+    let label = render_markdown_link_label(&link.inlines);
+    let url = escape_markdown_link_destination(&link.url);
+
+    format!("[{label}]({url})")
+}
+
+fn render_markdown_link_label(inlines: &[Inline]) -> String {
+    inlines
+        .iter()
+        .map(markdown_link_label_inline)
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn markdown_link_label_inline(inline: &Inline) -> String {
+    match inline {
+        Inline::Text(run) => escape_markdown_image_alt(&run.text),
+        Inline::LineBreak => " ".to_string(),
+        Inline::Tab => "\t".to_string(),
+        Inline::Link(link) => render_markdown_link_label(&link.inlines),
+        Inline::FootnoteRef { note_id } => format!("[^{}]", note_id.as_str()),
+        Inline::EndnoteRef { note_id } => format!("[^{}]", note_id.as_str()),
+        Inline::Unknown(unknown) => unknown
+            .fallback_text
+            .as_deref()
+            .map(escape_markdown_image_alt)
+            .unwrap_or_default(),
+    }
+}
+
+fn render_markdown_note_ref(note_id: &NoteId) -> String {
+    format!("[^{}]", escape_markdown_note_id(note_id.as_str()))
+}
+
+fn render_markdown_note(note: &Note, resources: &ResourceStore) -> String {
+    let note_id = escape_markdown_note_id(note.id.as_str());
+    let content = note
+        .blocks
+        .iter()
+        .map(|block| render_markdown_block(block, resources))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    format!("[^{note_id}]: {}", content.trim())
+}
+
+fn render_markdown_header_footer(
+    label: &str,
+    header_footer: &HeaderFooter,
+    resources: &ResourceStore,
+) -> String {
+    let content = header_footer
+        .blocks
+        .iter()
+        .map(|block| render_markdown_block(block, resources))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    if content.is_empty() {
+        render_markdown_text(&format!("[{label}]"))
+    } else {
+        format!(
+            "{}\n\n{content}",
+            render_markdown_text(&format!("[{label}]"))
+        )
+    }
+}
+
 fn render_markdown_text_run(run: &TextRun) -> String {
     let text = render_markdown_text(&run.text);
 
@@ -1008,6 +1279,24 @@ fn escape_markdown_image_alt(text: &str) -> String {
     text.replace('\\', "\\\\")
         .replace('[', "\\[")
         .replace(']', "\\]")
+}
+
+fn escape_markdown_link_destination(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace(')', "\\)")
+        .replace('(', "\\(")
+}
+
+fn escape_markdown_note_id(text: &str) -> String {
+    text.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 fn render_markdown_text(text: &str) -> String {
@@ -1200,10 +1489,11 @@ fn starts_with_ordered_list_marker(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::ir::{
-        Alignment, Color, ConversionWarning, IR_VERSION, Image, ImageResource, Indent, LengthPt,
-        Metadata, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore,
-        Section, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
-        TextRun, TextStyle, UnknownInline,
+        Alignment, Color, ConversionWarning, HeaderFooter, HeaderFooterPlacement, IR_VERSION,
+        Image, ImageResource, Indent, LengthPt, Link, ListInfo, ListKind, Metadata, Note, NoteId,
+        NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId,
+        ResourceStore, Section, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow,
+        TableStyle, TextRun, TextStyle, UnknownInline,
     };
     use std::fs::File;
     use std::io::Write;
@@ -1673,10 +1963,11 @@ mod tests {
 
         let content = serde_json::to_string_pretty(&document).unwrap();
 
-        assert!(content.contains("\"ir_version\": 4"));
+        assert!(content.contains("\"ir_version\": 5"));
         assert!(content.contains("\"sections\": ["));
         assert!(content.contains("\"resources\": {"));
         assert!(content.contains("\"styles\": {"));
+        assert!(content.contains("\"notes\": {"));
         assert!(content.contains("\"type\": \"paragraph\""));
         assert!(content.contains("\"role\": \"body\""));
         assert!(content.contains("first paragraph"));
@@ -1707,6 +1998,7 @@ mod tests {
                 ],
                 style: ParagraphStyle::default(),
                 style_ref: None,
+                list: None,
             }),
             Block::Unknown(UnknownBlock {
                 kind: "opaque_block".to_string(),
@@ -1741,6 +2033,7 @@ mod tests {
                 ],
                 style: ParagraphStyle::default(),
                 style_ref: None,
+                list: None,
             }),
             Block::Unknown(UnknownBlock {
                 kind: "opaque_block".to_string(),
@@ -1821,6 +2114,7 @@ mod tests {
             })],
             style: ParagraphStyle::default(),
             style_ref: None,
+            list: None,
         })]);
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
@@ -1857,6 +2151,7 @@ mod tests {
             })],
             style: ParagraphStyle::default(),
             style_ref: None,
+            list: None,
         })]);
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
@@ -1890,6 +2185,7 @@ mod tests {
                 },
             },
             style_ref: None,
+            list: None,
         })]);
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
@@ -1945,6 +2241,7 @@ mod tests {
             ],
             style: ParagraphStyle::default(),
             style_ref: None,
+            list: None,
         })]);
 
         let markdown = render_markdown_document(&document);
@@ -1952,6 +2249,225 @@ mod tests {
         assert!(markdown.contains("**bold**"));
         assert!(markdown.contains("*italic*"));
         assert!(markdown.contains("***both***"));
+    }
+
+    #[test]
+    fn renders_html_link_inline_from_document_ir() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![Inline::Link(Link {
+                url: "https://example.com?q=1&lang=ko".to_string(),
+                title: Some("Example".to_string()),
+                inlines: vec![Inline::Text(TextRun {
+                    text: "Open".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+            })],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: None,
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains(
+            "<a href=\"https://example.com?q=1&amp;lang=ko\" title=\"Example\">Open</a>"
+        ));
+    }
+
+    #[test]
+    fn renders_markdown_link_inline_from_document_ir() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![Inline::Link(Link {
+                url: "https://example.com/docs".to_string(),
+                title: None,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "Docs".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+            })],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: None,
+        })]);
+
+        let markdown = render_markdown_document(&document);
+
+        assert!(markdown.contains("[Docs](https://example.com/docs)"));
+    }
+
+    #[test]
+    fn renders_note_refs_in_html_and_markdown() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![
+                Inline::Text(TextRun {
+                    text: "body".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                }),
+                Inline::FootnoteRef {
+                    note_id: NoteId("fn-1".to_string()),
+                },
+                Inline::EndnoteRef {
+                    note_id: NoteId("en-1".to_string()),
+                },
+            ],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: None,
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+        let markdown = render_markdown_document(&document);
+
+        assert!(html.contains("href=\"#note-fn-1\">[각주: fn-1]</a>"));
+        assert!(html.contains("href=\"#note-en-1\">[미주: en-1]</a>"));
+        assert!(markdown.contains("[^fn-1]"));
+        assert!(markdown.contains("[^en-1]"));
+    }
+
+    #[test]
+    fn renders_notes_at_end_in_html_and_markdown() {
+        let document = document_with_notes(
+            vec![Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "body".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: None,
+            })],
+            vec![Note {
+                id: NoteId("fn-1".to_string()),
+                kind: NoteKind::Footnote,
+                blocks: vec![Block::Paragraph(Paragraph {
+                    role: ParagraphRole::Body,
+                    inlines: vec![Inline::Text(TextRun {
+                        text: "note body".to_string(),
+                        style: TextStyle::default(),
+                        style_ref: None,
+                    })],
+                    style: ParagraphStyle::default(),
+                    style_ref: None,
+                    list: None,
+                })],
+            }],
+        );
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+        let markdown = render_markdown_document(&document);
+
+        assert!(html.contains("<section class=\"notes\">"));
+        assert!(html.contains("<li id=\"note-fn-1\" data-kind=\"footnote\"><p>note body</p>"));
+        assert!(markdown.contains("[^fn-1]: note body"));
+    }
+
+    #[test]
+    fn renders_markdown_list_prefixes() {
+        let document = document_with_blocks(vec![
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "first".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: Some(ListInfo {
+                    kind: ListKind::Unordered,
+                    level: 0,
+                    marker: Some("-".to_string()),
+                    number: None,
+                }),
+            }),
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "second".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: Some(ListInfo {
+                    kind: ListKind::Ordered,
+                    level: 0,
+                    marker: None,
+                    number: Some(2),
+                }),
+            }),
+        ]);
+
+        let markdown = render_markdown_document(&document);
+
+        assert!(markdown.contains("- first"));
+        assert!(markdown.contains("2. second"));
+    }
+
+    #[test]
+    fn renders_headers_and_footers_in_html() {
+        let document = Document {
+            ir_version: IR_VERSION,
+            metadata: Metadata::default(),
+            sections: vec![Section {
+                headers: vec![HeaderFooter {
+                    placement: HeaderFooterPlacement::Default,
+                    blocks: vec![Block::Paragraph(Paragraph {
+                        role: ParagraphRole::Body,
+                        inlines: vec![Inline::Text(TextRun {
+                            text: "header".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        })],
+                        style: ParagraphStyle::default(),
+                        style_ref: None,
+                        list: None,
+                    })],
+                }],
+                blocks: vec![Block::Paragraph(Paragraph {
+                    role: ParagraphRole::Body,
+                    inlines: vec![Inline::Text(TextRun {
+                        text: "body".to_string(),
+                        style: TextStyle::default(),
+                        style_ref: None,
+                    })],
+                    style: ParagraphStyle::default(),
+                    style_ref: None,
+                    list: None,
+                })],
+                footers: vec![HeaderFooter {
+                    placement: HeaderFooterPlacement::EvenPage,
+                    blocks: vec![Block::Paragraph(Paragraph {
+                        role: ParagraphRole::Body,
+                        inlines: vec![Inline::Text(TextRun {
+                            text: "footer".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        })],
+                        style: ParagraphStyle::default(),
+                        style_ref: None,
+                        list: None,
+                    })],
+                }],
+            }],
+            resources: ResourceStore::default(),
+            styles: StyleSheet::default(),
+            notes: NoteStore::default(),
+            warnings: Vec::new(),
+        };
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("<header data-placement=\"default\"><p>header</p>"));
+        assert!(html.contains("<footer data-placement=\"even_page\"><p>footer</p>"));
     }
 
     #[test]
@@ -2021,10 +2537,21 @@ mod tests {
         Document {
             ir_version: IR_VERSION,
             metadata: Metadata::default(),
-            sections: vec![Section { blocks }],
+            sections: vec![Section {
+                blocks,
+                ..Default::default()
+            }],
             resources: ResourceStore::default(),
             styles: StyleSheet::default(),
+            notes: NoteStore::default(),
             warnings: Vec::<ConversionWarning>::new(),
+        }
+    }
+
+    fn document_with_notes(blocks: Vec<Block>, notes: Vec<Note>) -> Document {
+        Document {
+            notes: NoteStore { notes },
+            ..document_with_blocks(blocks)
         }
     }
 
@@ -2044,6 +2571,7 @@ mod tests {
                     width: None,
                     height: None,
                 })],
+                ..Default::default()
             }],
             resources: ResourceStore {
                 entries: vec![Resource::Image(ImageResource {
@@ -2054,6 +2582,7 @@ mod tests {
                 })],
             },
             styles: StyleSheet::default(),
+            notes: NoteStore::default(),
             warnings: Vec::<ConversionWarning>::new(),
         }
     }
@@ -2085,6 +2614,7 @@ mod tests {
                 })],
                 style: ParagraphStyle::default(),
                 style_ref: None,
+                list: None,
             })],
             style: TableCellStyle::default(),
         }

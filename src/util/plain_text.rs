@@ -1,6 +1,13 @@
-use crate::ir::{Block, Document, Image, Inline, Table, TableCell};
+use crate::ir::{
+    Block, Document, HeaderFooter, Image, Inline, ListInfo, ListKind, Note, NoteKind, Paragraph,
+    Table, TableCell,
+};
 
 const TABLE_FALLBACK_LABEL: &str = "[\u{D45C}]";
+const HEADER_FALLBACK_LABEL: &str = "[\u{BA38}\u{B9AC}\u{B9D0}]";
+const FOOTER_FALLBACK_LABEL: &str = "[\u{AF2C}\u{B9AC}\u{B9D0}]";
+const FOOTNOTE_REF_LABEL: &str = "[\u{AC01}\u{C8FC}";
+const ENDNOTE_REF_LABEL: &str = "[\u{BBF8}\u{C8FC}";
 
 #[allow(dead_code)]
 pub fn collect_paragraph_texts(document: &Document) -> Vec<String> {
@@ -9,7 +16,7 @@ pub fn collect_paragraph_texts(document: &Document) -> Vec<String> {
     for section in &document.sections {
         for block in &section.blocks {
             if let Block::Paragraph(paragraph) = block {
-                paragraphs.push(inline_text_to_plain_text(&paragraph.inlines));
+                paragraphs.push(paragraph_to_plain_text(paragraph));
             }
         }
     }
@@ -21,9 +28,27 @@ pub fn collect_block_texts(document: &Document) -> Vec<String> {
     let mut blocks = Vec::new();
 
     for section in &document.sections {
+        blocks.extend(
+            section
+                .headers
+                .iter()
+                .map(|header| header_footer_to_plain_text(HEADER_FALLBACK_LABEL, header)),
+        );
+
         for block in &section.blocks {
             blocks.push(block_to_plain_text(block));
         }
+
+        blocks.extend(
+            section
+                .footers
+                .iter()
+                .map(|footer| header_footer_to_plain_text(FOOTER_FALLBACK_LABEL, footer)),
+        );
+    }
+
+    for note in &document.notes.notes {
+        blocks.push(note_to_plain_text(note));
     }
 
     blocks
@@ -35,7 +60,7 @@ pub fn to_plain_text(document: &Document) -> String {
 
 pub(crate) fn block_to_plain_text(block: &Block) -> String {
     match block {
-        Block::Paragraph(paragraph) => inline_text_to_plain_text(&paragraph.inlines),
+        Block::Paragraph(paragraph) => paragraph_to_plain_text(paragraph),
         Block::Table(table) => table_to_plain_text(table),
         Block::Image(image) => image_to_plain_text(image),
         Block::Unknown(unknown) => unknown.fallback_text.clone().unwrap_or_default(),
@@ -78,8 +103,55 @@ pub(crate) fn image_to_plain_text(image: &Image) -> String {
     format!("[\u{C774}\u{BBF8}\u{C9C0}: {label}]")
 }
 
+pub(crate) fn header_footer_to_plain_text(label: &str, header_footer: &HeaderFooter) -> String {
+    let content = blocks_to_plain_text(&header_footer.blocks);
+
+    if content.is_empty() {
+        label.to_string()
+    } else {
+        format!("{label}\n{content}")
+    }
+}
+
+pub(crate) fn note_to_plain_text(note: &Note) -> String {
+    let label = match note.kind {
+        NoteKind::Footnote => FOOTNOTE_REF_LABEL,
+        NoteKind::Endnote => ENDNOTE_REF_LABEL,
+    };
+    let content = blocks_to_plain_text(&note.blocks);
+
+    if content.is_empty() {
+        format!("{label}: {}]", note.id.as_str())
+    } else {
+        format!("{label}: {}]\n{content}", note.id.as_str())
+    }
+}
+
 fn table_cell_to_plain_text(cell: &TableCell) -> String {
     blocks_to_plain_text(&cell.blocks)
+}
+
+fn paragraph_to_plain_text(paragraph: &Paragraph) -> String {
+    let mut text = inline_text_to_plain_text(&paragraph.inlines);
+
+    if let Some(list) = &paragraph.list {
+        text.insert_str(0, &list_prefix_to_plain_text(list));
+    }
+
+    text
+}
+
+fn list_prefix_to_plain_text(list: &ListInfo) -> String {
+    let indent = "  ".repeat(list.level as usize);
+
+    let marker = match list.kind {
+        ListKind::Ordered => format!("{}. ", list.number.unwrap_or(1)),
+        ListKind::Unordered | ListKind::Unknown => {
+            format!("{} ", list.marker.as_deref().unwrap_or("-"))
+        }
+    };
+
+    format!("{indent}{marker}")
 }
 
 fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
@@ -90,6 +162,20 @@ fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
             Inline::Text(run) => text.push_str(&run.text),
             Inline::LineBreak => text.push('\n'),
             Inline::Tab => text.push('\t'),
+            Inline::Link(link) => {
+                let link_text = inline_text_to_plain_text(&link.inlines);
+                if link_text.is_empty() {
+                    text.push_str(&link.url);
+                } else {
+                    text.push_str(&link_text);
+                }
+            }
+            Inline::FootnoteRef { note_id } => {
+                text.push_str(&format!("{FOOTNOTE_REF_LABEL}: {}]", note_id.as_str()));
+            }
+            Inline::EndnoteRef { note_id } => {
+                text.push_str(&format!("{ENDNOTE_REF_LABEL}: {}]", note_id.as_str()));
+            }
             Inline::Unknown(unknown) => {
                 if let Some(fallback) = &unknown.fallback_text {
                     text.push_str(fallback);
@@ -104,8 +190,9 @@ fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
 #[cfg(test)]
 mod tests {
     use crate::ir::{
-        Block, Document, Image, Paragraph, ParagraphRole, ParagraphStyle, ResourceId, Table,
-        TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
+        Block, Document, HeaderFooter, Image, Inline, ListInfo, ListKind, Note, NoteId, NoteKind,
+        Paragraph, ParagraphRole, ParagraphStyle, ResourceId, Table, TableCell, TableCellStyle,
+        TableRow, TableStyle, TextRun, TextStyle,
     };
 
     use super::to_plain_text;
@@ -132,6 +219,7 @@ mod tests {
                     ],
                     style: TableStyle::default(),
                 })],
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -153,11 +241,135 @@ mod tests {
                     width: None,
                     height: None,
                 })],
+                ..Default::default()
             }],
             ..Default::default()
         };
 
         assert_eq!(to_plain_text(&document), "[\u{C774}\u{BBF8}\u{C9C0}: logo]");
+    }
+
+    #[test]
+    fn renders_links_note_refs_and_lists_in_plain_text() {
+        let document = Document {
+            sections: vec![crate::ir::Section {
+                blocks: vec![Block::Paragraph(Paragraph {
+                    role: ParagraphRole::Body,
+                    inlines: vec![
+                        Inline::Link(crate::ir::Link {
+                            url: "https://example.com".to_string(),
+                            title: None,
+                            inlines: vec![Inline::Text(TextRun {
+                                text: "link".to_string(),
+                                style: TextStyle::default(),
+                                style_ref: None,
+                            })],
+                        }),
+                        Inline::Text(TextRun {
+                            text: " ".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        }),
+                        Inline::FootnoteRef {
+                            note_id: NoteId("fn-1".to_string()),
+                        },
+                        Inline::Text(TextRun {
+                            text: " ".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        }),
+                        Inline::EndnoteRef {
+                            note_id: NoteId("en-1".to_string()),
+                        },
+                    ],
+                    style: ParagraphStyle::default(),
+                    style_ref: None,
+                    list: Some(ListInfo {
+                        kind: ListKind::Ordered,
+                        level: 0,
+                        marker: None,
+                        number: Some(3),
+                    }),
+                })],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            to_plain_text(&document),
+            "3. link [\u{AC01}\u{C8FC}: fn-1] [\u{BBF8}\u{C8FC}: en-1]"
+        );
+    }
+
+    #[test]
+    fn renders_headers_footers_and_notes_in_plain_text() {
+        let document = Document {
+            sections: vec![crate::ir::Section {
+                headers: vec![HeaderFooter {
+                    placement: crate::ir::HeaderFooterPlacement::Default,
+                    blocks: vec![Block::Paragraph(Paragraph {
+                        role: ParagraphRole::Body,
+                        inlines: vec![Inline::Text(TextRun {
+                            text: "header".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        })],
+                        style: ParagraphStyle::default(),
+                        style_ref: None,
+                        list: None,
+                    })],
+                }],
+                blocks: vec![Block::Paragraph(Paragraph {
+                    role: ParagraphRole::Body,
+                    inlines: vec![Inline::Text(TextRun {
+                        text: "body".to_string(),
+                        style: TextStyle::default(),
+                        style_ref: None,
+                    })],
+                    style: ParagraphStyle::default(),
+                    style_ref: None,
+                    list: None,
+                })],
+                footers: vec![HeaderFooter {
+                    placement: crate::ir::HeaderFooterPlacement::Default,
+                    blocks: vec![Block::Paragraph(Paragraph {
+                        role: ParagraphRole::Body,
+                        inlines: vec![Inline::Text(TextRun {
+                            text: "footer".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        })],
+                        style: ParagraphStyle::default(),
+                        style_ref: None,
+                        list: None,
+                    })],
+                }],
+            }],
+            notes: crate::ir::NoteStore {
+                notes: vec![Note {
+                    id: NoteId("fn-1".to_string()),
+                    kind: NoteKind::Footnote,
+                    blocks: vec![Block::Paragraph(Paragraph {
+                        role: ParagraphRole::Body,
+                        inlines: vec![Inline::Text(TextRun {
+                            text: "note body".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        })],
+                        style: ParagraphStyle::default(),
+                        style_ref: None,
+                        list: None,
+                    })],
+                }],
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(
+            to_plain_text(&document),
+            "[\u{BA38}\u{B9AC}\u{B9D0}]\nheader\nbody\n[\u{AF2C}\u{B9AC}\u{B9D0}]\nfooter\n[\u{AC01}\u{C8FC}: fn-1]\nnote body"
+        );
     }
 
     fn table_cell(text: &str) -> TableCell {
@@ -173,6 +385,7 @@ mod tests {
                 })],
                 style: ParagraphStyle::default(),
                 style_ref: None,
+                list: None,
             })],
             style: TableCellStyle::default(),
         }

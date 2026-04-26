@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// This is independent from the internal roadmap milestones (`v0`-`v7`).
 /// Bump this when JSON compatibility changes, such as new enum variants,
 /// new required fields, or other output-shape changes.
-pub const IR_VERSION: u16 = 4;
+pub const IR_VERSION: u16 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -22,6 +22,8 @@ pub struct Document {
     #[serde(default)]
     pub styles: StyleSheet,
     #[serde(default)]
+    pub notes: NoteStore,
+    #[serde(default)]
     pub warnings: Vec<ConversionWarning>,
 }
 
@@ -33,6 +35,7 @@ impl Default for Document {
             sections: Vec::new(),
             resources: ResourceStore::default(),
             styles: StyleSheet::default(),
+            notes: NoteStore::default(),
             warnings: Vec::new(),
         }
     }
@@ -52,6 +55,7 @@ impl Document {
                     })],
                     style: ParagraphStyle::default(),
                     style_ref: None,
+                    list: None,
                 })
             })
             .collect();
@@ -59,9 +63,13 @@ impl Document {
         Self {
             ir_version: IR_VERSION,
             metadata: Metadata::default(),
-            sections: vec![Section { blocks }],
+            sections: vec![Section {
+                blocks,
+                ..Default::default()
+            }],
             resources: ResourceStore::default(),
             styles: StyleSheet::default(),
+            notes: NoteStore::default(),
             warnings: Vec::new(),
         }
     }
@@ -76,6 +84,10 @@ pub struct Metadata {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct Section {
     pub blocks: Vec<Block>,
+    #[serde(default)]
+    pub headers: Vec<HeaderFooter>,
+    #[serde(default)]
+    pub footers: Vec<HeaderFooter>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -95,6 +107,8 @@ pub struct Paragraph {
     pub style: ParagraphStyle,
     #[serde(default)]
     pub style_ref: Option<ParagraphStyleId>,
+    #[serde(default)]
+    pub list: Option<ListInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -116,6 +130,9 @@ pub enum Inline {
     Text(TextRun),
     LineBreak,
     Tab,
+    Link(Link),
+    FootnoteRef { note_id: NoteId },
+    EndnoteRef { note_id: NoteId },
     Unknown(UnknownInline),
 }
 
@@ -263,6 +280,105 @@ pub struct NamedTableCellStyle {
     pub id: TableCellStyleId,
     pub name: Option<String>,
     pub style: TableCellStyle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct NoteStore {
+    pub notes: Vec<Note>,
+}
+
+impl NoteStore {
+    pub fn get(&self, note_id: &NoteId) -> Option<&Note> {
+        self.notes.iter().find(|note| &note.id == note_id)
+    }
+
+    pub fn insert_unique(&mut self, note: Note) -> Result<(), DuplicateNoteIdError> {
+        let note_id = note.id.clone();
+        if self.get(&note_id).is_some() {
+            return Err(DuplicateNoteIdError { note_id });
+        }
+
+        self.notes.push(note);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(transparent)]
+pub struct NoteId(pub String);
+
+impl NoteId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateNoteIdError {
+    pub note_id: NoteId,
+}
+
+impl fmt::Display for DuplicateNoteIdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "duplicate note id: {}", self.note_id.as_str())
+    }
+}
+
+impl Error for DuplicateNoteIdError {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Note {
+    pub id: NoteId,
+    pub kind: NoteKind,
+    pub blocks: Vec<Block>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteKind {
+    Footnote,
+    Endnote,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct HeaderFooter {
+    pub placement: HeaderFooterPlacement,
+    pub blocks: Vec<Block>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HeaderFooterPlacement {
+    #[default]
+    Default,
+    FirstPage,
+    OddPage,
+    EvenPage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Link {
+    pub url: String,
+    pub title: Option<String>,
+    pub inlines: Vec<Inline>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ListInfo {
+    pub kind: ListKind,
+    pub level: u8,
+    pub marker: Option<String>,
+    pub number: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ListKind {
+    Ordered,
+    Unordered,
+    #[default]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -439,6 +555,7 @@ mod tests {
         assert!(document.resources.entries.is_empty());
         assert!(document.styles.text_styles.is_empty());
         assert!(document.styles.paragraph_styles.is_empty());
+        assert!(document.notes.notes.is_empty());
 
         match &document.sections[0].blocks[0] {
             Block::Paragraph(paragraph) => {
@@ -446,6 +563,7 @@ mod tests {
                 assert_eq!(paragraph.inlines.len(), 1);
                 assert_eq!(paragraph.style, ParagraphStyle::default());
                 assert_eq!(paragraph.style_ref, None);
+                assert_eq!(paragraph.list, None);
                 assert_eq!(
                     paragraph.inlines[0],
                     Inline::Text(TextRun {
@@ -491,6 +609,13 @@ mod tests {
     }
 
     #[test]
+    fn document_has_default_note_store() {
+        let document = Document::default();
+
+        assert!(document.notes.notes.is_empty());
+    }
+
+    #[test]
     fn table_cell_can_hold_nested_blocks() {
         let cell = TableCell {
             blocks: vec![Block::Paragraph(Paragraph {
@@ -502,6 +627,7 @@ mod tests {
                 })],
                 style: ParagraphStyle::default(),
                 style_ref: None,
+                list: None,
             })],
             ..Default::default()
         };
@@ -577,7 +703,7 @@ mod tests {
     #[test]
     fn deserializes_older_document_without_resources_and_warnings() {
         let json = r#"{
-            "ir_version": 4,
+            "ir_version": 5,
             "metadata": {},
             "sections": []
         }"#;
@@ -587,6 +713,7 @@ mod tests {
 
         assert!(document.resources.entries.is_empty());
         assert!(document.styles.text_styles.is_empty());
+        assert!(document.notes.notes.is_empty());
         assert!(document.warnings.is_empty());
     }
 
@@ -657,6 +784,7 @@ mod tests {
 
         assert_eq!(paragraph.style, ParagraphStyle::default());
         assert_eq!(paragraph.style_ref, None);
+        assert_eq!(paragraph.list, None);
     }
 
     #[test]
@@ -687,5 +815,43 @@ mod tests {
             serde_json::from_str("210.0").expect("millimeter value should deserialize");
 
         assert_eq!(millimeters, LengthMm(210.0));
+    }
+
+    #[test]
+    fn section_defaults_headers_and_footers_when_missing_from_json() {
+        let section: Section = serde_json::from_str(
+            r#"{
+                "blocks": []
+            }"#,
+        )
+        .expect("section without headers and footers should deserialize");
+
+        assert!(section.headers.is_empty());
+        assert!(section.footers.is_empty());
+    }
+
+    #[test]
+    fn rejects_duplicate_note_ids() {
+        let note_id = NoteId("note-1".to_string());
+        let mut store = NoteStore::default();
+
+        store
+            .insert_unique(Note {
+                id: note_id.clone(),
+                kind: NoteKind::Footnote,
+                blocks: vec![],
+            })
+            .expect("first note insert should succeed");
+
+        let error = store
+            .insert_unique(Note {
+                id: note_id.clone(),
+                kind: NoteKind::Endnote,
+                blocks: vec![],
+            })
+            .expect_err("duplicate note insert should fail");
+
+        assert_eq!(error.note_id, note_id);
+        assert_eq!(store.notes.len(), 1);
     }
 }
