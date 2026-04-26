@@ -1,24 +1,32 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::io;
 use std::path::Path;
 
-use rhwp::model::control::{Control, Equation as RhwpEquation};
+use rhwp::model::control::{
+    Control, Equation as RhwpEquation, FieldType as RhwpFieldType, Hyperlink as RhwpHyperlink,
+};
 use rhwp::model::document::{Document as RhwpDocument, Section as RhwpSection};
+use rhwp::model::header_footer::HeaderFooterApply as RhwpHeaderFooterApply;
 use rhwp::model::image::Picture;
-use rhwp::model::paragraph::{CharShapeRef, Paragraph as RhwpParagraph};
+use rhwp::model::paragraph::{
+    CharShapeRef, FieldRange, NumberingRestart as RhwpNumberingRestart, Paragraph as RhwpParagraph,
+};
 use rhwp::model::shape::ShapeObject;
 use rhwp::model::style::{
     Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, CharShape as RhwpCharShape,
-    FillType as RhwpFillType, ParaShape as RhwpParaShape, UnderlineType as RhwpUnderlineType,
+    FillType as RhwpFillType, HeadType as RhwpHeadType, Numbering as RhwpNumbering,
+    ParaShape as RhwpParaShape, UnderlineType as RhwpUnderlineType,
 };
 use rhwp::model::table::{Cell as RhwpCell, Table as RhwpTable};
 
 use crate::hwpx::{self, InputKind};
 use crate::ir::{
-    Block, Color, ConversionWarning, Document, Equation, EquationKind, Image, ImageResource,
-    Inline, LengthPt, LengthPx, NamedParagraphStyle, NamedTextStyle, Paragraph, ParagraphRole,
-    ParagraphStyle, ParagraphStyleId, Resource, ResourceId, ResourceStore, Section, Shape,
-    ShapeKind, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
+    Block, Color, ConversionWarning, Document, Equation, EquationKind, HeaderFooter,
+    HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt, LengthPx, Link, ListInfo,
+    ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore, Paragraph,
+    ParagraphRole, ParagraphStyle, ParagraphStyleId, Resource, ResourceId, ResourceStore, Section,
+    Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
     TextRun, TextStyle, TextStyleId, WarningCode,
 };
 
@@ -72,10 +80,10 @@ fn document_from_preview_paragraphs(paragraphs: Vec<String>) -> Document {
 }
 
 fn document_has_blocks(document: &Document) -> bool {
-    document
-        .sections
-        .iter()
-        .any(|section| !section.blocks.is_empty())
+    !document.notes.notes.is_empty()
+        || document.sections.iter().any(|section| {
+            !section.blocks.is_empty() || !section.headers.is_empty() || !section.footers.is_empty()
+        })
 }
 
 fn empty_document_error() -> io::Error {
@@ -88,6 +96,10 @@ fn empty_document_error() -> io::Error {
 struct BridgeContext<'a> {
     source: &'a RhwpDocument,
     resources: ResourceStore,
+    notes: NoteStore,
+    warnings: Vec<ConversionWarning>,
+    next_footnote_id: usize,
+    next_endnote_id: usize,
 }
 
 impl<'a> BridgeContext<'a> {
@@ -95,6 +107,10 @@ impl<'a> BridgeContext<'a> {
         Self {
             source,
             resources: ResourceStore::default(),
+            notes: NoteStore::default(),
+            warnings: Vec::new(),
+            next_footnote_id: 1,
+            next_endnote_id: 1,
         }
     }
 
@@ -113,26 +129,42 @@ impl<'a> BridgeContext<'a> {
             sections,
             resources: self.resources,
             styles,
-            notes: crate::ir::NoteStore::default(),
-            warnings: Vec::new(),
+            notes: self.notes,
+            warnings: self.warnings,
         }
     }
 
     fn map_section(&mut self, section: &RhwpSection) -> Section {
         let mut blocks = Vec::new();
+        let mut headers = Vec::new();
+        let mut footers = Vec::new();
+        let mut list_state = ListState::default();
 
         for paragraph in &section.paragraphs {
-            self.append_blocks_from_paragraph(&mut blocks, paragraph);
+            self.append_blocks_from_paragraph(
+                &mut blocks,
+                paragraph,
+                section.section_def.outline_numbering_id,
+                &mut list_state,
+            );
+            self.collect_section_header_footers(paragraph, &mut headers, &mut footers);
         }
 
         Section {
             blocks,
-            ..Default::default()
+            headers,
+            footers,
         }
     }
 
-    fn append_blocks_from_paragraph(&mut self, blocks: &mut Vec<Block>, paragraph: &RhwpParagraph) {
-        if let Some(mapped) = self.map_paragraph(paragraph) {
+    fn append_blocks_from_paragraph(
+        &mut self,
+        blocks: &mut Vec<Block>,
+        paragraph: &RhwpParagraph,
+        outline_numbering_id: u16,
+        list_state: &mut ListState,
+    ) {
+        if let Some(mapped) = self.map_paragraph(paragraph, outline_numbering_id, list_state) {
             blocks.push(Block::Paragraph(mapped));
         }
 
@@ -143,7 +175,12 @@ impl<'a> BridgeContext<'a> {
         }
     }
 
-    fn map_paragraph(&self, paragraph: &RhwpParagraph) -> Option<Paragraph> {
+    fn map_paragraph(
+        &mut self,
+        paragraph: &RhwpParagraph,
+        outline_numbering_id: u16,
+        list_state: &mut ListState,
+    ) -> Option<Paragraph> {
         let inlines = self.map_paragraph_inlines(paragraph);
         if inlines.is_empty() {
             return None;
@@ -154,32 +191,23 @@ impl<'a> BridgeContext<'a> {
             inlines,
             style: self.map_paragraph_style_by_id(paragraph.para_shape_id),
             style_ref: self.paragraph_style_ref(paragraph),
-            list: None,
+            list: self.map_list_info(paragraph, outline_numbering_id, list_state),
         })
     }
 
-    fn map_paragraph_inlines(&self, paragraph: &RhwpParagraph) -> Vec<Inline> {
-        if paragraph.text.is_empty() {
-            return Vec::new();
-        }
-
+    fn map_paragraph_inlines(&mut self, paragraph: &RhwpParagraph) -> Vec<Inline> {
         let chars: Vec<char> = paragraph.text.chars().collect();
         let segments = self.build_text_segments(paragraph, chars.len());
+        let mut consumed_controls = Vec::new();
         let mut inlines = Vec::new();
-
-        for segment in segments {
-            if segment.start >= segment.end || segment.end > chars.len() {
-                continue;
-            }
-
-            let text: String = chars[segment.start..segment.end].iter().collect();
-            push_text_fragment(
-                &mut inlines,
-                &text,
-                &segment.style,
-                segment.style_ref.as_ref(),
-            );
-        }
+        self.push_text_and_link_inlines(
+            paragraph,
+            &chars,
+            &segments,
+            &mut consumed_controls,
+            &mut inlines,
+        );
+        self.append_control_reference_inlines(paragraph, &consumed_controls, &mut inlines);
 
         inlines
     }
@@ -257,6 +285,329 @@ impl<'a> BridgeContext<'a> {
         segments
     }
 
+    fn collect_section_header_footers(
+        &mut self,
+        paragraph: &RhwpParagraph,
+        headers: &mut Vec<HeaderFooter>,
+        footers: &mut Vec<HeaderFooter>,
+    ) {
+        for control in &paragraph.controls {
+            match control {
+                Control::Header(header) => {
+                    headers.push(self.map_header_footer(header.apply_to, &header.paragraphs))
+                }
+                Control::Footer(footer) => {
+                    footers.push(self.map_header_footer(footer.apply_to, &footer.paragraphs))
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn map_header_footer(
+        &mut self,
+        apply_to: RhwpHeaderFooterApply,
+        paragraphs: &[RhwpParagraph],
+    ) -> HeaderFooter {
+        HeaderFooter {
+            placement: map_header_footer_placement(apply_to),
+            blocks: self.map_blocks_from_paragraphs(paragraphs, 0),
+        }
+    }
+
+    fn map_blocks_from_paragraphs(
+        &mut self,
+        paragraphs: &[RhwpParagraph],
+        outline_numbering_id: u16,
+    ) -> Vec<Block> {
+        let mut blocks = Vec::new();
+        let mut list_state = ListState::default();
+
+        for paragraph in paragraphs {
+            self.append_blocks_from_paragraph(
+                &mut blocks,
+                paragraph,
+                outline_numbering_id,
+                &mut list_state,
+            );
+        }
+
+        blocks
+    }
+
+    fn push_text_and_link_inlines(
+        &mut self,
+        paragraph: &RhwpParagraph,
+        chars: &[char],
+        segments: &[TextSegment],
+        consumed_controls: &mut Vec<usize>,
+        inlines: &mut Vec<Inline>,
+    ) {
+        if chars.is_empty() {
+            return;
+        }
+
+        let mut ranges = paragraph.field_ranges.clone();
+        ranges.sort_by_key(|range| (range.start_char_idx, range.end_char_idx));
+
+        let mut cursor = 0usize;
+
+        for range in ranges {
+            if range.start_char_idx >= range.end_char_idx
+                || range.end_char_idx > chars.len()
+                || range.start_char_idx < cursor
+            {
+                continue;
+            }
+
+            let Some(link) = self.map_link_from_field_range(paragraph, &range, chars, segments)
+            else {
+                continue;
+            };
+
+            self.push_text_range_as_inlines(inlines, chars, segments, cursor, range.start_char_idx);
+            consumed_controls.push(range.control_idx);
+            inlines.push(Inline::Link(link));
+            cursor = range.end_char_idx;
+        }
+
+        self.push_text_range_as_inlines(inlines, chars, segments, cursor, chars.len());
+    }
+
+    fn push_text_range_as_inlines(
+        &self,
+        inlines: &mut Vec<Inline>,
+        chars: &[char],
+        segments: &[TextSegment],
+        start: usize,
+        end: usize,
+    ) {
+        if start >= end || end > chars.len() {
+            return;
+        }
+
+        for segment in segments {
+            let segment_start = segment.start.max(start);
+            let segment_end = segment.end.min(end);
+            if segment_start >= segment_end {
+                continue;
+            }
+
+            let text: String = chars[segment_start..segment_end].iter().collect();
+            push_text_fragment(inlines, &text, &segment.style, segment.style_ref.as_ref());
+        }
+    }
+
+    fn map_link_from_field_range(
+        &self,
+        paragraph: &RhwpParagraph,
+        range: &FieldRange,
+        chars: &[char],
+        segments: &[TextSegment],
+    ) -> Option<Link> {
+        let control = paragraph.controls.get(range.control_idx)?;
+
+        let url = match control {
+            Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
+                non_empty_string(&field.command)
+            }
+            Control::Hyperlink(link) => non_empty_string(&link.url),
+            _ => None,
+        }?;
+
+        let mut link_inlines = Vec::new();
+        self.push_text_range_as_inlines(
+            &mut link_inlines,
+            chars,
+            segments,
+            range.start_char_idx,
+            range.end_char_idx,
+        );
+
+        if link_inlines.is_empty() {
+            let fallback_label = chars[range.start_char_idx..range.end_char_idx]
+                .iter()
+                .collect::<String>();
+            if !fallback_label.is_empty() {
+                link_inlines.push(Inline::Text(TextRun {
+                    text: fallback_label,
+                    style: TextStyle::default(),
+                    style_ref: None,
+                }));
+            }
+        }
+
+        Some(Link {
+            url,
+            title: None,
+            inlines: link_inlines,
+        })
+    }
+
+    fn append_control_reference_inlines(
+        &mut self,
+        paragraph: &RhwpParagraph,
+        consumed_controls: &[usize],
+        inlines: &mut Vec<Inline>,
+    ) {
+        let mut appended_note_ref = false;
+        let mut appended_link_ref = false;
+
+        for (index, control) in paragraph.controls.iter().enumerate() {
+            if consumed_controls.contains(&index) {
+                continue;
+            }
+
+            match control {
+                Control::Footnote(note) => {
+                    let note_id =
+                        self.store_note(NoteKind::Footnote, note.number, &note.paragraphs);
+                    inlines.push(Inline::FootnoteRef { note_id });
+                    appended_note_ref = true;
+                }
+                Control::Endnote(note) => {
+                    let note_id = self.store_note(NoteKind::Endnote, note.number, &note.paragraphs);
+                    inlines.push(Inline::EndnoteRef { note_id });
+                    appended_note_ref = true;
+                }
+                Control::Hyperlink(link) => {
+                    if let Some(mapped) = self.map_trailing_hyperlink(link) {
+                        inlines.push(Inline::Link(mapped));
+                        appended_link_ref = true;
+                    }
+                }
+                Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
+                    appended_link_ref = true;
+                }
+                _ => {}
+            }
+        }
+
+        if appended_note_ref {
+            self.add_warning_once(
+                "rhwp footnote/endnote controls do not expose exact inline positions, so note references were appended after paragraph text.",
+            );
+        }
+
+        if appended_link_ref {
+            self.add_warning_once(
+                "Some rhwp hyperlinks could not be placed at exact inline positions, so bridge fallback appended them after paragraph text when possible.",
+            );
+        }
+    }
+
+    fn map_trailing_hyperlink(&self, link: &RhwpHyperlink) -> Option<Link> {
+        let url = non_empty_string(&link.url)?;
+        let label = non_empty_string(&link.text).unwrap_or_else(|| url.clone());
+
+        Some(Link {
+            url,
+            title: None,
+            inlines: vec![Inline::Text(TextRun {
+                text: label,
+                style: TextStyle::default(),
+                style_ref: None,
+            })],
+        })
+    }
+
+    fn store_note(&mut self, kind: NoteKind, number: u16, paragraphs: &[RhwpParagraph]) -> NoteId {
+        let blocks = self.map_blocks_from_paragraphs(paragraphs, 0);
+
+        loop {
+            let note_id = self.next_note_id(kind.clone(), number);
+            let note = Note {
+                id: note_id.clone(),
+                kind: kind.clone(),
+                blocks: blocks.clone(),
+            };
+
+            if self.notes.insert_unique(note).is_ok() {
+                return note_id;
+            }
+        }
+    }
+
+    fn next_note_id(&mut self, kind: NoteKind, number: u16) -> NoteId {
+        let prefix = match kind {
+            NoteKind::Footnote => "footnote",
+            NoteKind::Endnote => "endnote",
+        };
+
+        if number > 0 {
+            let candidate = NoteId(format!("{prefix}-{number}"));
+            if self.notes.get(&candidate).is_none() {
+                return candidate;
+            }
+        }
+
+        let counter = match kind {
+            NoteKind::Footnote => &mut self.next_footnote_id,
+            NoteKind::Endnote => &mut self.next_endnote_id,
+        };
+        let note_id = NoteId(format!("{prefix}-{}", *counter));
+        *counter += 1;
+        note_id
+    }
+
+    fn add_warning_once(&mut self, message: &str) {
+        if self
+            .warnings
+            .iter()
+            .any(|warning| warning.message == message)
+        {
+            return;
+        }
+
+        self.warnings.push(ConversionWarning {
+            code: WarningCode::Unknown,
+            message: message.to_string(),
+        });
+    }
+
+    fn map_list_info(
+        &self,
+        paragraph: &RhwpParagraph,
+        outline_numbering_id: u16,
+        list_state: &mut ListState,
+    ) -> Option<ListInfo> {
+        let para_shape = self.lookup_para_shape(paragraph.para_shape_id)?;
+        let level = para_shape.para_level.min(6);
+
+        match para_shape.head_type {
+            RhwpHeadType::None => None,
+            RhwpHeadType::Bullet => Some(ListInfo {
+                kind: ListKind::Unordered,
+                level,
+                marker: bullet_marker(self.source, para_shape.numbering_id),
+                number: None,
+            }),
+            RhwpHeadType::Number | RhwpHeadType::Outline => {
+                let numbering_id = resolve_numbering_id(para_shape, outline_numbering_id);
+                let numbering = numbering_id
+                    .checked_sub(1)
+                    .and_then(|index| self.source.doc_info.numberings.get(index as usize));
+
+                Some(ListInfo {
+                    kind: ListKind::Ordered,
+                    level,
+                    marker: None,
+                    number: numbering_id
+                        .checked_sub(1)
+                        .map(|_| {
+                            list_state.advance(
+                                numbering_id,
+                                level,
+                                paragraph.numbering_restart,
+                                numbering,
+                            )
+                        })
+                        .flatten(),
+                })
+            }
+        }
+    }
+
     fn map_control_block(&mut self, control: &Control) -> Option<Block> {
         match control {
             Control::Table(table) => Some(Block::Table(self.map_table(table))),
@@ -301,11 +652,7 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn map_table_cell(&mut self, cell: &RhwpCell) -> TableCell {
-        let mut blocks = Vec::new();
-
-        for paragraph in &cell.paragraphs {
-            self.append_blocks_from_paragraph(&mut blocks, paragraph);
-        }
+        let blocks = self.map_blocks_from_paragraphs(&cell.paragraphs, 0);
 
         TableCell {
             row_span: cell.row_span as u32,
@@ -537,6 +884,54 @@ struct TextSegment {
     style_ref: Option<TextStyleId>,
 }
 
+#[derive(Default)]
+struct ListState {
+    counters: BTreeMap<u16, [u32; 7]>,
+}
+
+impl ListState {
+    fn advance(
+        &mut self,
+        numbering_id: u16,
+        level: u8,
+        restart: Option<RhwpNumberingRestart>,
+        numbering: Option<&RhwpNumbering>,
+    ) -> Option<u32> {
+        if numbering_id == 0 {
+            return None;
+        }
+
+        let level_index = (level as usize).min(6);
+        let counters = self.counters.entry(numbering_id).or_insert([0; 7]);
+        for counter in counters.iter_mut().skip(level_index + 1) {
+            *counter = 0;
+        }
+
+        let default_start = numbering
+            .map(|numbering| {
+                let level_start = numbering.level_start_numbers[level_index];
+                if level_start > 0 {
+                    level_start
+                } else if level_index == 0 && numbering.start_number > 0 {
+                    numbering.start_number as u32
+                } else {
+                    1
+                }
+            })
+            .unwrap_or(1);
+
+        counters[level_index] = match restart {
+            Some(RhwpNumberingRestart::NewStart(number)) => number.max(1),
+            Some(RhwpNumberingRestart::ContinuePrevious) | None if counters[level_index] > 0 => {
+                counters[level_index] + 1
+            }
+            Some(RhwpNumberingRestart::ContinuePrevious) | None => default_start,
+        };
+
+        Some(counters[level_index])
+    }
+}
+
 fn push_text_fragment(
     inlines: &mut Vec<Inline>,
     text: &str,
@@ -653,6 +1048,44 @@ fn map_alignment(alignment: RhwpAlignment) -> Option<crate::ir::Alignment> {
     })
 }
 
+fn map_header_footer_placement(apply_to: RhwpHeaderFooterApply) -> HeaderFooterPlacement {
+    match apply_to {
+        RhwpHeaderFooterApply::Both => HeaderFooterPlacement::Default,
+        RhwpHeaderFooterApply::Odd => HeaderFooterPlacement::OddPage,
+        RhwpHeaderFooterApply::Even => HeaderFooterPlacement::EvenPage,
+    }
+}
+
+fn resolve_numbering_id(para_shape: &RhwpParaShape, outline_numbering_id: u16) -> u16 {
+    if para_shape.numbering_id == 0 && para_shape.head_type == RhwpHeadType::Outline {
+        outline_numbering_id
+    } else {
+        para_shape.numbering_id
+    }
+}
+
+fn bullet_marker(source: &RhwpDocument, bullet_id: u16) -> Option<String> {
+    if bullet_id == 0 {
+        return None;
+    }
+
+    let bullet = source.doc_info.bullets.get((bullet_id - 1) as usize)?;
+    normalize_bullet_char(bullet.bullet_char).map(|ch| ch.to_string())
+}
+
+fn normalize_bullet_char(ch: char) -> Option<char> {
+    if ch == '\u{FFFF}' {
+        return None;
+    }
+
+    let code = ch as u32;
+    if (0xE000..=0xF8FF).contains(&code) {
+        return Some('•');
+    }
+
+    Some(ch)
+}
+
 fn media_type_for_extension(extension: &str) -> Option<&'static str> {
     match extension.to_ascii_lowercase().as_str() {
         "png" => Some("image/png"),
@@ -691,12 +1124,21 @@ mod tests {
     use super::*;
 
     use rhwp::model::bin_data::BinDataContent;
+    use rhwp::model::control::Field as RhwpField;
     use rhwp::model::document::{DocInfo, Document as RhwpDocument, Section as RhwpSection};
+    use rhwp::model::footnote::Footnote as RhwpFootnote;
+    use rhwp::model::header_footer::{
+        Footer as RhwpFooter, Header as RhwpHeader, HeaderFooterApply as RhwpHeaderFooterApply,
+    };
     use rhwp::model::image::{ImageAttr, Picture};
-    use rhwp::model::paragraph::{CharShapeRef, Paragraph as RhwpParagraph};
+    use rhwp::model::paragraph::{
+        CharShapeRef, FieldRange, NumberingRestart as RhwpNumberingRestart,
+        Paragraph as RhwpParagraph,
+    };
     use rhwp::model::style::{
-        Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, CharShape as RhwpCharShape, Fill,
-        FillType, Font, ParaShape as RhwpParaShape, SolidFill, Style as RhwpStyle,
+        Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, Bullet as RhwpBullet,
+        CharShape as RhwpCharShape, Fill, FillType, Font, HeadType as RhwpHeadType,
+        ParaShape as RhwpParaShape, SolidFill, Style as RhwpStyle,
         UnderlineType as RhwpUnderlineType,
     };
     use rhwp::model::table::{Cell as RhwpCell, Table as RhwpTable};
@@ -975,6 +1417,230 @@ mod tests {
                 );
             }
             other => panic!("expected table block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_hyperlink_field_ranges_into_link_inlines() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "Visit Example now".to_string(),
+                    field_ranges: vec![FieldRange {
+                        start_char_idx: 6,
+                        end_char_idx: 13,
+                        control_idx: 0,
+                    }],
+                    controls: vec![Control::Field(RhwpField {
+                        field_type: RhwpFieldType::Hyperlink,
+                        command: "https://example.com".to_string(),
+                        ..Default::default()
+                    })],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => {
+                assert_eq!(paragraph.inlines.len(), 3);
+                match &paragraph.inlines[1] {
+                    Inline::Link(link) => {
+                        assert_eq!(link.url, "https://example.com");
+                        assert_eq!(link.inlines.len(), 1);
+                        match &link.inlines[0] {
+                            Inline::Text(run) => assert_eq!(run.text, "Example"),
+                            other => panic!("expected text run in link, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected link inline, got {other:?}"),
+                }
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_footnotes_into_note_store_and_inline_refs() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "body".to_string(),
+                    controls: vec![Control::Footnote(Box::new(RhwpFootnote {
+                        number: 3,
+                        paragraphs: vec![RhwpParagraph {
+                            text: "note body".to_string(),
+                            ..Default::default()
+                        }],
+                    }))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert_eq!(bridged.notes.notes.len(), 1);
+        assert_eq!(bridged.notes.notes[0].id.as_str(), "footnote-3");
+        assert_eq!(bridged.notes.notes[0].kind, NoteKind::Footnote);
+        assert_eq!(bridged.warnings.len(), 1);
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => match paragraph.inlines.last() {
+                Some(Inline::FootnoteRef { note_id }) => {
+                    assert_eq!(note_id.as_str(), "footnote-3");
+                }
+                other => panic!("expected trailing footnote ref, got {other:?}"),
+            },
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_headers_and_footers_into_section_metadata() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![
+                        Control::Header(Box::new(RhwpHeader {
+                            apply_to: RhwpHeaderFooterApply::Both,
+                            paragraphs: vec![RhwpParagraph {
+                                text: "header".to_string(),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        })),
+                        Control::Footer(Box::new(RhwpFooter {
+                            apply_to: RhwpHeaderFooterApply::Even,
+                            paragraphs: vec![RhwpParagraph {
+                                text: "footer".to_string(),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        })),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert_eq!(bridged.sections[0].headers.len(), 1);
+        assert_eq!(bridged.sections[0].footers.len(), 1);
+        assert_eq!(
+            bridged.sections[0].headers[0].placement,
+            HeaderFooterPlacement::Default
+        );
+        assert_eq!(
+            bridged.sections[0].footers[0].placement,
+            HeaderFooterPlacement::EvenPage
+        );
+    }
+
+    #[test]
+    fn maps_bullet_list_info_from_para_shape() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                para_shapes: vec![RhwpParaShape {
+                    head_type: RhwpHeadType::Bullet,
+                    para_level: 1,
+                    numbering_id: 1,
+                    ..Default::default()
+                }],
+                bullets: vec![RhwpBullet {
+                    bullet_char: '•',
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "item".to_string(),
+                    para_shape_id: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => {
+                let list = paragraph.list.as_ref().expect("list info should exist");
+                assert_eq!(list.kind, ListKind::Unordered);
+                assert_eq!(list.level, 1);
+                assert_eq!(list.marker.as_deref(), Some("•"));
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_ordered_list_numbers_from_numbering_state() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                para_shapes: vec![RhwpParaShape {
+                    head_type: RhwpHeadType::Number,
+                    para_level: 0,
+                    numbering_id: 1,
+                    ..Default::default()
+                }],
+                numberings: vec![RhwpNumbering {
+                    level_start_numbers: [1, 1, 1, 1, 1, 1, 1],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![
+                    RhwpParagraph {
+                        text: "first".to_string(),
+                        para_shape_id: 0,
+                        ..Default::default()
+                    },
+                    RhwpParagraph {
+                        text: "second".to_string(),
+                        para_shape_id: 0,
+                        numbering_restart: Some(RhwpNumberingRestart::ContinuePrevious),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => {
+                assert_eq!(
+                    paragraph.list.as_ref().and_then(|list| list.number),
+                    Some(1)
+                );
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+
+        match &bridged.sections[0].blocks[1] {
+            Block::Paragraph(paragraph) => {
+                assert_eq!(
+                    paragraph.list.as_ref().and_then(|list| list.number),
+                    Some(2)
+                );
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
         }
     }
 

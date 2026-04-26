@@ -840,7 +840,7 @@ dependencies = [
 [[package]]
 name = "rhwp"
 version = "0.7.3"
-source = "git+https://github.com/edwardkim/rhwp?branch=main#bea635bd708274a51ae3f557a71b07683d7c2454"
+source = "git+https://github.com/edwardkim/rhwp?rev=bea635bd708274a51ae3f557a71b07683d7c2454#bea635bd708274a51ae3f557a71b07683d7c2454"
 dependencies = [
  "base64",
  "byteorder",
