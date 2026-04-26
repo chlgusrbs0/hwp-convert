@@ -370,6 +370,18 @@ SVG와 PDF에서 원본 문서와 가까운 출력을 제공하려면 단순 Sem
 
 Document IR 로드맵이 안정화된 이후에는 `v0~v7` 단계명을 배포 버전처럼 사용하지 않고, SemVer 기준으로 버전을 관리합니다.
 
+## Document IR JSON Policy
+
+- `IR_VERSION`은 `Document IR Roadmap v0~v7`과 별개의 serialized Document IR format version이다.
+- `IR_VERSION`은 enum variant 추가, 필수 필드 추가, JSON shape 변경처럼 호환성에 영향을 주는 변경에서 올린다.
+- 현재 JSON 출력은 외부 교환 포맷이라기보다 Document IR 디버깅과 구조 확인에 가깝다.
+- additive field는 구버전 JSON 역직렬화를 위해 가능하면 `#[serde(default)]`를 사용한다.
+- resource bytes와 asset bundle 정책은 추후 별도 정리 예정이다.
+- 단위 정책은 현재 다음 기준을 따른다.
+- 글꼴 크기: pt
+- page/paper 같은 physical size: mm
+- renderer/layout 좌표: px 또는 추후 Layout IR 전용 단위
+
 ## rhwp의 역할
 
 hwp-convert는 HWP/HWPX 파일을 해석하는 parser / renderer backend로 [rhwp](https://github.com/edwardkim/rhwp)를 활용합니다.

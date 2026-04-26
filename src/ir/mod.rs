@@ -1,5 +1,13 @@
+use std::error::Error;
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
+/// Serialized Document IR format version.
+///
+/// This is independent from the internal roadmap milestones (`v0`-`v7`).
+/// Bump this when JSON compatibility changes, such as new enum variants,
+/// new required fields, or other output-shape changes.
 pub const IR_VERSION: u16 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -7,7 +15,11 @@ pub struct Document {
     pub ir_version: u16,
     pub metadata: Metadata,
     pub sections: Vec<Section>,
+    /// Additive IR fields should use `#[serde(default)]` so older serialized
+    /// documents can still be deserialized after new optional structure is added.
+    #[serde(default)]
     pub resources: ResourceStore,
+    #[serde(default)]
     pub warnings: Vec<ConversionWarning>,
 }
 
@@ -108,11 +120,15 @@ pub struct TextStyle {
     pub italic: bool,
     pub underline: bool,
     pub font_family: Option<String>,
+    /// Typographic size in points (pt).
     pub font_size: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ResourceStore {
+    /// Preserve insertion order for serialized output; use `insert_unique` to
+    /// maintain the no-duplicate-`ResourceId` invariant.
+    #[serde(default)]
     pub entries: Vec<Resource>,
 }
 
@@ -121,6 +137,16 @@ impl ResourceStore {
         self.entries
             .iter()
             .find(|resource| resource.id() == resource_id)
+    }
+
+    pub fn insert_unique(&mut self, resource: Resource) -> Result<(), DuplicateResourceIdError> {
+        let resource_id = resource.id().clone();
+        if self.get(&resource_id).is_some() {
+            return Err(DuplicateResourceIdError { resource_id });
+        }
+
+        self.entries.push(resource);
+        Ok(())
     }
 }
 
@@ -150,6 +176,19 @@ impl ResourceId {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateResourceIdError {
+    pub resource_id: ResourceId,
+}
+
+impl fmt::Display for DuplicateResourceIdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "duplicate resource id: {}", self.resource_id.as_str())
+    }
+}
+
+impl Error for DuplicateResourceIdError {}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ImageResource {
     pub id: ResourceId,
@@ -171,7 +210,9 @@ pub struct Image {
     pub resource_id: ResourceId,
     pub alt: Option<String>,
     pub caption: Option<String>,
+    /// Display hint in px until Layout IR defines document-space units.
     pub width: Option<f32>,
+    /// Display hint in px until Layout IR defines document-space units.
     pub height: Option<f32>,
 }
 
@@ -338,5 +379,47 @@ mod tests {
             }
             other => panic!("expected image resource, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rejects_duplicate_resource_ids() {
+        let resource_id = ResourceId("image-1".to_string());
+        let mut store = ResourceStore::default();
+
+        store
+            .insert_unique(Resource::Image(ImageResource {
+                id: resource_id.clone(),
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: vec![1, 2, 3],
+            }))
+            .expect("first insert should succeed");
+
+        let error = store
+            .insert_unique(Resource::Binary(BinaryResource {
+                id: resource_id.clone(),
+                media_type: Some("application/octet-stream".to_string()),
+                extension: Some("bin".to_string()),
+                bytes: vec![4, 5, 6],
+            }))
+            .expect_err("duplicate insert should fail");
+
+        assert_eq!(error.resource_id, resource_id);
+        assert_eq!(store.entries.len(), 1);
+    }
+
+    #[test]
+    fn deserializes_older_document_without_resources_and_warnings() {
+        let json = r#"{
+            "ir_version": 3,
+            "metadata": {},
+            "sections": []
+        }"#;
+
+        let document: Document =
+            serde_json::from_str(json).expect("older JSON should still deserialize");
+
+        assert!(document.resources.entries.is_empty());
+        assert!(document.warnings.is_empty());
     }
 }
