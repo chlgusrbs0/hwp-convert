@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
 use crate::ir::{
-    Alignment, Block, Color, Document, HeaderFooter, HeaderFooterPlacement, Image, Inline, Link,
-    ListInfo, ListKind, Note, NoteId, NoteKind, Paragraph, ParagraphStyle, Resource, ResourceId,
-    ResourceStore, Section, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun,
-    TextStyle, UnknownBlock,
+    Alignment, Block, Chart, Color, Document, Equation, EquationKind, HeaderFooter,
+    HeaderFooterPlacement, Image, Inline, Link, ListInfo, ListKind, Note, NoteId, NoteKind,
+    Paragraph, ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, Table,
+    TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
 };
 use crate::util::plain_text;
 
@@ -600,6 +600,18 @@ fn render_html_document(input_path: &Path, document: &Document) -> String {
       .note-ref {{\n\
         font-size: 0.875em;\n\
       }}\n\
+      .equation {{\n\
+        font-family: \"Times New Roman\", serif;\n\
+      }}\n\
+      .shape-placeholder,\n\
+      .chart-placeholder {{\n\
+        display: inline-block;\n\
+        padding: 0.1em 0.45em;\n\
+        border: 1px solid #cbd5e1;\n\
+        border-radius: 999px;\n\
+        color: #475569;\n\
+        background: #f8fafc;\n\
+      }}\n\
       article > *:last-child {{\n\
         margin-bottom: 0;\n\
       }}\n\
@@ -696,6 +708,9 @@ fn render_html_block(block: &Block, resources: &ResourceStore) -> String {
         Block::Paragraph(paragraph) => render_html_paragraph(paragraph),
         Block::Table(table) => render_html_table(table, resources),
         Block::Image(image) => render_html_image(image, resources),
+        Block::Equation(equation) => render_html_equation(equation),
+        Block::Shape(shape) => render_html_shape(shape),
+        Block::Chart(chart) => render_html_chart(chart),
         Block::Unknown(unknown) => {
             let content = unknown
                 .fallback_text
@@ -781,6 +796,21 @@ fn render_html_note_ref(note_id: &NoteId, kind: NoteKind) -> String {
     let text = escape_html(note_id.as_str());
 
     format!("<sup class=\"note-ref\"><a href=\"#{note_anchor}\">[{label}: {text}]</a></sup>")
+}
+
+fn render_html_equation(equation: &Equation) -> String {
+    let content = render_html_fallback_text(&equation_display_text(equation));
+    format!("<p><span class=\"equation\">{content}</span></p>\n")
+}
+
+fn render_html_shape(shape: &Shape) -> String {
+    let content = render_html_fallback_text(&shape_display_text(shape));
+    format!("<p><span class=\"shape-placeholder\">{content}</span></p>\n")
+}
+
+fn render_html_chart(chart: &Chart) -> String {
+    let content = render_html_fallback_text(&chart_display_text(chart));
+    format!("<p><span class=\"chart-placeholder\">{content}</span></p>\n")
 }
 
 fn render_html_text_style(style: &TextStyle) -> String {
@@ -925,6 +955,39 @@ fn header_footer_placement_name(placement: &HeaderFooterPlacement) -> &'static s
         HeaderFooterPlacement::OddPage => "odd_page",
         HeaderFooterPlacement::EvenPage => "even_page",
     }
+}
+
+fn equation_display_text(equation: &Equation) -> String {
+    equation
+        .fallback_text
+        .clone()
+        .or_else(|| {
+            if matches!(
+                equation.kind,
+                EquationKind::PlainText | EquationKind::Latex | EquationKind::MathMl
+            ) {
+                equation.content.clone()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "[수식]".to_string())
+}
+
+fn shape_display_text(shape: &Shape) -> String {
+    shape
+        .fallback_text
+        .clone()
+        .or_else(|| shape.description.clone())
+        .unwrap_or_else(|| "[도형]".to_string())
+}
+
+fn chart_display_text(chart: &Chart) -> String {
+    chart
+        .fallback_text
+        .clone()
+        .or_else(|| chart.title.clone())
+        .unwrap_or_else(|| "[차트]".to_string())
 }
 
 fn alignment_to_css(alignment: &Alignment) -> &'static str {
@@ -1080,6 +1143,9 @@ fn render_markdown_block(block: &Block, resources: &ResourceStore) -> String {
         Block::Paragraph(paragraph) => render_markdown_paragraph(paragraph),
         Block::Table(table) => render_markdown_table(table),
         Block::Image(image) => render_markdown_image(image, resources),
+        Block::Equation(equation) => render_markdown_equation(equation),
+        Block::Shape(shape) => render_markdown_shape(shape),
+        Block::Chart(chart) => render_markdown_chart(chart),
         Block::Unknown(unknown) => render_markdown_unknown_block(unknown),
     }
 }
@@ -1189,6 +1255,24 @@ fn render_markdown_image(image: &Image, resources: &ResourceStore) -> String {
     let path = resource_public_path(resources, &image.resource_id);
 
     format!("![{alt}]({path})")
+}
+
+fn render_markdown_equation(equation: &Equation) -> String {
+    if equation.kind == EquationKind::Latex {
+        if let Some(content) = &equation.content {
+            return format!("$${content}$$");
+        }
+    }
+
+    render_markdown_text(&equation_display_text(equation))
+}
+
+fn render_markdown_shape(shape: &Shape) -> String {
+    render_markdown_text(&shape_display_text(shape))
+}
+
+fn render_markdown_chart(chart: &Chart) -> String {
+    render_markdown_text(&chart_display_text(chart))
 }
 
 fn render_markdown_link(link: &Link) -> String {
@@ -1489,11 +1573,12 @@ fn starts_with_ordered_list_marker(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::ir::{
-        Alignment, Color, ConversionWarning, HeaderFooter, HeaderFooterPlacement, IR_VERSION,
-        Image, ImageResource, Indent, LengthPt, Link, ListInfo, ListKind, Metadata, Note, NoteId,
-        NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId,
-        ResourceStore, Section, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow,
-        TableStyle, TextRun, TextStyle, UnknownInline,
+        Alignment, Chart, Color, ConversionWarning, Equation, EquationKind, HeaderFooter,
+        HeaderFooterPlacement, IR_VERSION, Image, ImageResource, Indent, LengthPt, Link, ListInfo,
+        ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
+        ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing,
+        StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
+        UnknownInline,
     };
     use std::fs::File;
     use std::io::Write;
@@ -1963,7 +2048,7 @@ mod tests {
 
         let content = serde_json::to_string_pretty(&document).unwrap();
 
-        assert!(content.contains("\"ir_version\": 5"));
+        assert!(content.contains("\"ir_version\": 6"));
         assert!(content.contains("\"sections\": ["));
         assert!(content.contains("\"resources\": {"));
         assert!(content.contains("\"styles\": {"));
@@ -1994,6 +2079,8 @@ mod tests {
                     Inline::Unknown(UnknownInline {
                         kind: "opaque_inline".to_string(),
                         fallback_text: Some(" + extra".to_string()),
+                        message: None,
+                        source: None,
                     }),
                 ],
                 style: ParagraphStyle::default(),
@@ -2003,6 +2090,8 @@ mod tests {
             Block::Unknown(UnknownBlock {
                 kind: "opaque_block".to_string(),
                 fallback_text: Some("fallback block".to_string()),
+                message: None,
+                source: None,
             }),
         ]);
         let html = render_html_document(Path::new("sample.hwpx"), &document);
@@ -2038,6 +2127,8 @@ mod tests {
             Block::Unknown(UnknownBlock {
                 kind: "opaque_block".to_string(),
                 fallback_text: Some("1. ordered".to_string()),
+                message: None,
+                source: None,
             }),
         ]);
         let markdown = render_markdown_document(&document);
@@ -2468,6 +2559,48 @@ mod tests {
 
         assert!(html.contains("<header data-placement=\"default\"><p>header</p>"));
         assert!(html.contains("<footer data-placement=\"even_page\"><p>footer</p>"));
+    }
+
+    #[test]
+    fn renders_markdown_latex_equation_from_document_ir() {
+        let document = document_with_blocks(vec![Block::Equation(Equation {
+            kind: EquationKind::Latex,
+            content: Some(r"\frac{a}{b}".to_string()),
+            fallback_text: None,
+            resource_id: None,
+        })]);
+
+        let markdown = render_markdown_document(&document);
+
+        assert!(markdown.contains("$$\\frac{a}{b}$$"));
+    }
+
+    #[test]
+    fn renders_html_equation_shape_and_chart_placeholders() {
+        let document = document_with_blocks(vec![
+            Block::Equation(Equation {
+                kind: EquationKind::PlainText,
+                content: Some("x + y".to_string()),
+                fallback_text: None,
+                resource_id: None,
+            }),
+            Block::Shape(Shape {
+                kind: ShapeKind::Rectangle,
+                fallback_text: None,
+                description: Some("callout box".to_string()),
+            }),
+            Block::Chart(Chart {
+                title: Some("Sales".to_string()),
+                fallback_text: None,
+                resource_id: None,
+            }),
+        ]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("<span class=\"equation\">x + y</span>"));
+        assert!(html.contains("<span class=\"shape-placeholder\">callout box</span>"));
+        assert!(html.contains("<span class=\"chart-placeholder\">Sales</span>"));
     }
 
     #[test]

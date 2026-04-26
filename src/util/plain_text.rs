@@ -1,6 +1,6 @@
 use crate::ir::{
-    Block, Document, HeaderFooter, Image, Inline, ListInfo, ListKind, Note, NoteKind, Paragraph,
-    Table, TableCell,
+    Block, Chart, Document, Equation, EquationKind, HeaderFooter, Image, Inline, ListInfo,
+    ListKind, Note, NoteKind, Paragraph, Shape, Table, TableCell,
 };
 
 const TABLE_FALLBACK_LABEL: &str = "[\u{D45C}]";
@@ -8,6 +8,9 @@ const HEADER_FALLBACK_LABEL: &str = "[\u{BA38}\u{B9AC}\u{B9D0}]";
 const FOOTER_FALLBACK_LABEL: &str = "[\u{AF2C}\u{B9AC}\u{B9D0}]";
 const FOOTNOTE_REF_LABEL: &str = "[\u{AC01}\u{C8FC}";
 const ENDNOTE_REF_LABEL: &str = "[\u{BBF8}\u{C8FC}";
+const EQUATION_FALLBACK_LABEL: &str = "[\u{C218}\u{C2DD}]";
+const SHAPE_FALLBACK_LABEL: &str = "[\u{B3C4}\u{D615}]";
+const CHART_FALLBACK_LABEL: &str = "[\u{CC28}\u{D2B8}]";
 
 #[allow(dead_code)]
 pub fn collect_paragraph_texts(document: &Document) -> Vec<String> {
@@ -63,6 +66,9 @@ pub(crate) fn block_to_plain_text(block: &Block) -> String {
         Block::Paragraph(paragraph) => paragraph_to_plain_text(paragraph),
         Block::Table(table) => table_to_plain_text(table),
         Block::Image(image) => image_to_plain_text(image),
+        Block::Equation(equation) => equation_to_plain_text(equation),
+        Block::Shape(shape) => shape_to_plain_text(shape),
+        Block::Chart(chart) => chart_to_plain_text(chart),
         Block::Unknown(unknown) => unknown.fallback_text.clone().unwrap_or_default(),
     }
 }
@@ -101,6 +107,39 @@ pub(crate) fn image_to_plain_text(image: &Image) -> String {
         .unwrap_or_else(|| image.resource_id.as_str());
 
     format!("[\u{C774}\u{BBF8}\u{C9C0}: {label}]")
+}
+
+pub(crate) fn equation_to_plain_text(equation: &Equation) -> String {
+    equation
+        .fallback_text
+        .clone()
+        .or_else(|| {
+            if matches!(
+                equation.kind,
+                EquationKind::PlainText | EquationKind::Latex | EquationKind::MathMl
+            ) {
+                equation.content.clone()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| EQUATION_FALLBACK_LABEL.to_string())
+}
+
+pub(crate) fn shape_to_plain_text(shape: &Shape) -> String {
+    shape
+        .fallback_text
+        .clone()
+        .or_else(|| shape.description.clone())
+        .unwrap_or_else(|| SHAPE_FALLBACK_LABEL.to_string())
+}
+
+pub(crate) fn chart_to_plain_text(chart: &Chart) -> String {
+    chart
+        .fallback_text
+        .clone()
+        .or_else(|| chart.title.clone())
+        .unwrap_or_else(|| CHART_FALLBACK_LABEL.to_string())
 }
 
 pub(crate) fn header_footer_to_plain_text(label: &str, header_footer: &HeaderFooter) -> String {
@@ -190,9 +229,10 @@ fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
 #[cfg(test)]
 mod tests {
     use crate::ir::{
-        Block, Document, HeaderFooter, Image, Inline, ListInfo, ListKind, Note, NoteId, NoteKind,
-        Paragraph, ParagraphRole, ParagraphStyle, ResourceId, Table, TableCell, TableCellStyle,
-        TableRow, TableStyle, TextRun, TextStyle,
+        Block, Chart, Document, Equation, EquationKind, HeaderFooter, Image, Inline, ListInfo,
+        ListKind, Note, NoteId, NoteKind, Paragraph, ParagraphRole, ParagraphStyle, ResourceId,
+        Shape, ShapeKind, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun,
+        TextStyle,
     };
 
     use super::to_plain_text;
@@ -370,6 +410,36 @@ mod tests {
             to_plain_text(&document),
             "[\u{BA38}\u{B9AC}\u{B9D0}]\nheader\nbody\n[\u{AF2C}\u{B9AC}\u{B9D0}]\nfooter\n[\u{AC01}\u{C8FC}: fn-1]\nnote body"
         );
+    }
+
+    #[test]
+    fn renders_equation_shape_and_chart_fallbacks_in_plain_text() {
+        let document = Document {
+            sections: vec![crate::ir::Section {
+                blocks: vec![
+                    Block::Equation(Equation {
+                        kind: EquationKind::Unknown,
+                        content: None,
+                        fallback_text: Some("x + y".to_string()),
+                        resource_id: None,
+                    }),
+                    Block::Shape(Shape {
+                        kind: ShapeKind::Rectangle,
+                        fallback_text: None,
+                        description: Some("callout box".to_string()),
+                    }),
+                    Block::Chart(Chart {
+                        title: Some("Sales".to_string()),
+                        fallback_text: None,
+                        resource_id: None,
+                    }),
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(to_plain_text(&document), "x + y\ncallout box\nSales");
     }
 
     fn table_cell(text: &str) -> TableCell {

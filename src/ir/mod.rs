@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// This is independent from the internal roadmap milestones (`v0`-`v7`).
 /// Bump this when JSON compatibility changes, such as new enum variants,
 /// new required fields, or other output-shape changes.
-pub const IR_VERSION: u16 = 5;
+pub const IR_VERSION: u16 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -96,6 +96,9 @@ pub enum Block {
     Paragraph(Paragraph),
     Table(Table),
     Image(Image),
+    Equation(Equation),
+    Shape(Shape),
+    Chart(Chart),
     Unknown(UnknownBlock),
 }
 
@@ -474,6 +477,50 @@ pub struct Image {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Equation {
+    pub kind: EquationKind,
+    pub content: Option<String>,
+    pub fallback_text: Option<String>,
+    pub resource_id: Option<ResourceId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EquationKind {
+    PlainText,
+    Latex,
+    MathMl,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Shape {
+    pub kind: ShapeKind,
+    pub fallback_text: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShapeKind {
+    Line,
+    Rectangle,
+    Ellipse,
+    Polygon,
+    TextBox,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Chart {
+    pub title: Option<String>,
+    pub fallback_text: Option<String>,
+    pub resource_id: Option<ResourceId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct Table {
     pub rows: Vec<TableRow>,
     pub style: TableStyle,
@@ -516,15 +563,21 @@ pub struct TableCellStyle {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default)]
 pub struct UnknownBlock {
     pub kind: String,
     pub fallback_text: Option<String>,
+    pub message: Option<String>,
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default)]
 pub struct UnknownInline {
     pub kind: String,
     pub fallback_text: Option<String>,
+    pub message: Option<String>,
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -539,6 +592,9 @@ pub enum WarningCode {
     #[default]
     Unknown,
     UsedHwpxPreviewFallback,
+    UnsupportedEquation,
+    UnsupportedShape,
+    UnsupportedChart,
 }
 
 #[cfg(test)]
@@ -671,6 +727,49 @@ mod tests {
             }
             other => panic!("expected image resource, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn equation_serializes_and_deserializes() {
+        let equation = Equation {
+            kind: EquationKind::Latex,
+            content: Some("E = mc^2".to_string()),
+            fallback_text: Some("E = mc^2".to_string()),
+            resource_id: Some(ResourceId("equation-1".to_string())),
+        };
+
+        let json = serde_json::to_string(&equation).expect("equation should serialize");
+        let restored: Equation = serde_json::from_str(&json).expect("equation should deserialize");
+
+        assert_eq!(restored, equation);
+    }
+
+    #[test]
+    fn shape_serializes_and_deserializes() {
+        let shape = Shape {
+            kind: ShapeKind::Rectangle,
+            fallback_text: Some("boxed note".to_string()),
+            description: Some("callout".to_string()),
+        };
+
+        let json = serde_json::to_string(&shape).expect("shape should serialize");
+        let restored: Shape = serde_json::from_str(&json).expect("shape should deserialize");
+
+        assert_eq!(restored, shape);
+    }
+
+    #[test]
+    fn chart_serializes_and_deserializes() {
+        let chart = Chart {
+            title: Some("Quarterly Sales".to_string()),
+            fallback_text: Some("sales chart".to_string()),
+            resource_id: Some(ResourceId("chart-1".to_string())),
+        };
+
+        let json = serde_json::to_string(&chart).expect("chart should serialize");
+        let restored: Chart = serde_json::from_str(&json).expect("chart should deserialize");
+
+        assert_eq!(restored, chart);
     }
 
     #[test]
@@ -853,5 +952,37 @@ mod tests {
 
         assert_eq!(error.note_id, note_id);
         assert_eq!(store.notes.len(), 1);
+    }
+
+    #[test]
+    fn unknown_block_defaults_new_fields_when_missing() {
+        let unknown: UnknownBlock = serde_json::from_str(
+            r#"{
+                "kind": "opaque_block",
+                "fallback_text": "fallback"
+            }"#,
+        )
+        .expect("older unknown block JSON should deserialize");
+
+        assert_eq!(unknown.kind, "opaque_block");
+        assert_eq!(unknown.fallback_text.as_deref(), Some("fallback"));
+        assert_eq!(unknown.message, None);
+        assert_eq!(unknown.source, None);
+    }
+
+    #[test]
+    fn unknown_inline_defaults_new_fields_when_missing() {
+        let unknown: UnknownInline = serde_json::from_str(
+            r#"{
+                "kind": "opaque_inline",
+                "fallback_text": "fallback"
+            }"#,
+        )
+        .expect("older unknown inline JSON should deserialize");
+
+        assert_eq!(unknown.kind, "opaque_inline");
+        assert_eq!(unknown.fallback_text.as_deref(), Some("fallback"));
+        assert_eq!(unknown.message, None);
+        assert_eq!(unknown.source, None);
     }
 }
