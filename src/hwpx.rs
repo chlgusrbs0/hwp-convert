@@ -8,7 +8,7 @@ use zip::ZipArchive;
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InputKind {
+pub(crate) enum InputKind {
     Hwp,
     Hwpx,
 }
@@ -19,14 +19,23 @@ pub fn read_preview_text(input_path: &Path) -> Result<String, Box<dyn Error>> {
     Ok(paragraphs.join("\n"))
 }
 
+/// Legacy paragraph-only extraction path.
+///
+/// This flattens the parsed document into plain paragraph strings, so table,
+/// image, and style structure is intentionally discarded here.
 pub fn read_paragraphs(input_path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
-    let input_kind = detect_input_kind(input_path)?;
-    let bytes = fs::read(input_path)?;
+    let (input_kind, bytes) = read_input_bytes(input_path)?;
 
     resolve_paragraphs(input_kind, &bytes, read_paragraphs_with_rhwp(&bytes)).map_err(Into::into)
 }
 
-fn detect_input_kind(input_path: &Path) -> io::Result<InputKind> {
+pub(crate) fn read_input_bytes(input_path: &Path) -> io::Result<(InputKind, Vec<u8>)> {
+    let input_kind = detect_input_kind(input_path)?;
+    let bytes = fs::read(input_path)?;
+    Ok((input_kind, bytes))
+}
+
+pub(crate) fn detect_input_kind(input_path: &Path) -> io::Result<InputKind> {
     let Some(extension) = input_path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -70,7 +79,7 @@ fn resolve_paragraphs(
     }
 }
 
-fn combine_hwpx_errors(rhwp_error: &io::Error, fallback_error: &io::Error) -> io::Error {
+pub(crate) fn combine_hwpx_errors(rhwp_error: &io::Error, fallback_error: &io::Error) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         format!("{rhwp_error}; HWPX preview fallback 실패: {fallback_error}"),
@@ -115,7 +124,11 @@ fn extract_body_paragraphs(document: &rhwp::model::document::Document) -> Vec<St
     paragraphs
 }
 
-fn read_preview_text_from_archive(bytes: &[u8]) -> io::Result<Vec<String>> {
+/// HWPX preview fallback is text-only.
+///
+/// `Preview/PrvText.txt` can recover plain text, but it cannot reconstruct
+/// table, image, or style structure.
+pub(crate) fn read_preview_text_from_archive(bytes: &[u8]) -> io::Result<Vec<String>> {
     let cursor = Cursor::new(bytes);
     let mut archive = ZipArchive::new(cursor).map_err(|error| {
         io::Error::new(
