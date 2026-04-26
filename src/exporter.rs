@@ -1140,7 +1140,16 @@ mod tests {
             report.failed_files()[0].input_path,
             root.join("nested").join("broken.hwpx")
         );
-        assert!(report.failed_files()[0].error_message.contains("failed"));
+        assert!(
+            report.failed_files()[0]
+                .error_message
+                .contains("rhwp 파싱 실패:")
+        );
+        assert!(
+            report.failed_files()[0]
+                .error_message
+                .contains("HWPX preview fallback 실패:")
+        );
         assert_eq!(fs::read_to_string(root.join("alpha.txt"))?, "first line");
         assert!(!root.join("nested").join("broken.txt").exists());
 
@@ -1168,7 +1177,8 @@ mod tests {
 
         let error = export(&args).unwrap_err();
 
-        assert!(error.to_string().contains("failed"));
+        assert!(error.to_string().contains("rhwp 파싱 실패:"));
+        assert!(error.to_string().contains("HWPX preview fallback 실패:"));
 
         fs::remove_dir_all(&root)?;
 
