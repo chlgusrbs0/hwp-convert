@@ -104,8 +104,8 @@ fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
 #[cfg(test)]
 mod tests {
     use crate::ir::{
-        Block, Document, Image, Paragraph, ParagraphRole, ResourceId, Table, TableCell,
-        TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
+        Block, Document, Image, Paragraph, ParagraphRole, ParagraphStyle, ResourceId, Table,
+        TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
     };
 
     use super::to_plain_text;
@@ -169,7 +169,10 @@ mod tests {
                 inlines: vec![crate::ir::Inline::Text(TextRun {
                     text: text.to_string(),
                     style: TextStyle::default(),
+                    style_ref: None,
                 })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
             })],
             style: TableCellStyle::default(),
         }

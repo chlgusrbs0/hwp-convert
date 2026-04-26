@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
 use crate::ir::{
-    Block, Document, Image, Inline, Resource, ResourceId, ResourceStore, Table, TableCell,
-    TableRow, UnknownBlock,
+    Alignment, Block, Color, Document, Image, Inline, Paragraph, ParagraphStyle, Resource,
+    ResourceId, ResourceStore, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun,
+    TextStyle, UnknownBlock,
 };
 use crate::util::plain_text;
 
@@ -609,7 +610,7 @@ fn render_html_blocks(document: &Document) -> String {
 
 fn render_html_block(block: &Block, resources: &ResourceStore) -> String {
     match block {
-        Block::Paragraph(paragraph) => render_html_paragraph(&paragraph.inlines),
+        Block::Paragraph(paragraph) => render_html_paragraph(paragraph),
         Block::Table(table) => render_html_table(table, resources),
         Block::Image(image) => render_html_image(image, resources),
         Block::Unknown(unknown) => {
@@ -623,9 +624,11 @@ fn render_html_block(block: &Block, resources: &ResourceStore) -> String {
     }
 }
 
-fn render_html_paragraph(inlines: &[Inline]) -> String {
-    let content = render_html_inlines(inlines);
-    format!("<p>{content}</p>\n")
+fn render_html_paragraph(paragraph: &Paragraph) -> String {
+    let content = render_html_inlines(&paragraph.inlines);
+    let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
+
+    format!("<p{style}>{content}</p>\n")
 }
 
 fn render_html_inlines(inlines: &[Inline]) -> String {
@@ -633,7 +636,7 @@ fn render_html_inlines(inlines: &[Inline]) -> String {
 
     for inline in inlines {
         match inline {
-            Inline::Text(run) => content.push_str(&escape_html(&run.text).replace('\n', "<br />")),
+            Inline::Text(run) => content.push_str(&render_html_text_run(run)),
             Inline::LineBreak => content.push_str("<br />"),
             Inline::Tab => content.push('\t'),
             Inline::Unknown(unknown) => {
@@ -651,16 +654,163 @@ fn render_html_fallback_text(text: &str) -> String {
     escape_html(text).replace('\n', "<br />")
 }
 
+fn render_html_text_run(run: &TextRun) -> String {
+    let content = render_html_fallback_text(&run.text);
+    let style = render_html_style_attr(&render_html_text_style(&run.style));
+
+    if style.is_empty() {
+        content
+    } else {
+        format!("<span{style}>{content}</span>")
+    }
+}
+
+fn render_html_text_style(style: &TextStyle) -> String {
+    let mut declarations = Vec::new();
+
+    if style.bold {
+        declarations.push("font-weight: bold".to_string());
+    }
+    if style.italic {
+        declarations.push("font-style: italic".to_string());
+    }
+
+    let mut decorations = Vec::new();
+    if style.underline {
+        decorations.push("underline");
+    }
+    if style.strike {
+        decorations.push("line-through");
+    }
+    if !decorations.is_empty() {
+        declarations.push(format!("text-decoration: {}", decorations.join(" ")));
+    }
+
+    if let Some(font_family) = style
+        .font_family
+        .as_deref()
+        .and_then(sanitize_css_font_family)
+    {
+        declarations.push(format!("font-family: {font_family}"));
+    }
+    if let Some(font_size_pt) = style.font_size_pt {
+        declarations.push(format!("font-size: {}pt", font_size_pt.0));
+    }
+    if let Some(color) = style.color {
+        declarations.push(format!("color: {}", render_css_color(color)));
+    }
+    if let Some(background_color) = style.background_color {
+        declarations.push(format!(
+            "background-color: {}",
+            render_css_color(background_color)
+        ));
+    }
+
+    declarations.join("; ")
+}
+
+fn render_html_paragraph_style(style: &ParagraphStyle) -> String {
+    let mut declarations = Vec::new();
+
+    if let Some(alignment) = &style.alignment {
+        declarations.push(format!("text-align: {}", alignment_to_css(alignment)));
+    }
+    if let Some(before_pt) = style.spacing.before_pt {
+        declarations.push(format!("margin-top: {}pt", before_pt.0));
+    }
+    if let Some(after_pt) = style.spacing.after_pt {
+        declarations.push(format!("margin-bottom: {}pt", after_pt.0));
+    }
+    if let Some(first_line_pt) = style.indent.first_line_pt {
+        declarations.push(format!("text-indent: {}pt", first_line_pt.0));
+    }
+    if let Some(left_pt) = style.indent.left_pt {
+        declarations.push(format!("margin-left: {}pt", left_pt.0));
+    }
+    if let Some(right_pt) = style.indent.right_pt {
+        declarations.push(format!("margin-right: {}pt", right_pt.0));
+    }
+
+    declarations.join("; ")
+}
+
+fn render_html_table_style(style: &TableStyle) -> String {
+    style
+        .background_color
+        .map(render_css_color)
+        .map(|color| format!("background-color: {color}"))
+        .unwrap_or_default()
+}
+
+fn render_html_table_cell_style(style: &TableCellStyle) -> String {
+    style
+        .background_color
+        .map(render_css_color)
+        .map(|color| format!("background-color: {color}"))
+        .unwrap_or_default()
+}
+
+fn render_html_style_attr(style: &str) -> String {
+    if style.is_empty() {
+        String::new()
+    } else {
+        format!(" style=\"{}\"", escape_html(style))
+    }
+}
+
+fn alignment_to_css(alignment: &Alignment) -> &'static str {
+    match alignment {
+        Alignment::Left => "left",
+        Alignment::Center => "center",
+        Alignment::Right => "right",
+        Alignment::Justify => "justify",
+    }
+}
+
+fn render_css_color(color: Color) -> String {
+    if color.a == 255 {
+        return format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b);
+    }
+
+    format!(
+        "rgba({}, {}, {}, {})",
+        color.r,
+        color.g,
+        color.b,
+        color.a as f32 / 255.0
+    )
+}
+
+fn sanitize_css_font_family(font_family: &str) -> Option<String> {
+    let sanitized = font_family
+        .split(',')
+        .map(|family| {
+            family
+                .chars()
+                .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace() || matches!(ch, '-' | '_'))
+                .collect::<String>()
+        })
+        .map(|family| family.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|family| !family.is_empty())
+        .collect::<Vec<_>>();
+
+    if sanitized.is_empty() {
+        None
+    } else {
+        Some(sanitized.join(", "))
+    }
+}
+
 fn render_html_image(image: &Image, resources: &ResourceStore) -> String {
     let src = escape_html(&resource_public_path(resources, &image.resource_id));
     let alt = escape_html(image.alt.as_deref().unwrap_or(image.resource_id.as_str()));
     let width = image
         .width
-        .map(|width| format!(" width=\"{width}\""))
+        .map(|width| format!(" width=\"{}\"", width.0))
         .unwrap_or_default();
     let height = image
         .height
-        .map(|height| format!(" height=\"{height}\""))
+        .map(|height| format!(" height=\"{}\"", height.0))
         .unwrap_or_default();
     let tag = format!("<img src=\"{src}\" alt=\"{alt}\"{width}{height} />");
 
@@ -675,7 +825,10 @@ fn render_html_image(image: &Image, resources: &ResourceStore) -> String {
 }
 
 fn render_html_table(table: &Table, resources: &ResourceStore) -> String {
-    let mut html = String::from("<table>\n");
+    let mut html = format!(
+        "<table{}>\n",
+        render_html_style_attr(&render_html_table_style(&table.style))
+    );
 
     for row in &table.rows {
         html.push_str(&render_html_table_row(row, resources));
@@ -708,8 +861,9 @@ fn render_html_table_cell(cell: &TableCell, resources: &ResourceStore) -> String
         String::new()
     };
     let content = render_html_table_cell_blocks(&cell.blocks, resources);
+    let style = render_html_style_attr(&render_html_table_cell_style(&cell.style));
 
-    format!("<td{rowspan}{colspan}>{content}</td>\n")
+    format!("<td{rowspan}{colspan}{style}>{content}</td>\n")
 }
 
 fn render_html_table_cell_blocks(blocks: &[Block], resources: &ResourceStore) -> String {
@@ -750,7 +904,22 @@ fn render_markdown_unknown_block(unknown: &UnknownBlock) -> String {
 }
 
 fn render_markdown_inlines(inlines: &[Inline]) -> String {
-    render_markdown_text(&collect_inline_plain_text(inlines))
+    let mut content = String::new();
+
+    for inline in inlines {
+        match inline {
+            Inline::Text(run) => content.push_str(&render_markdown_text_run(run)),
+            Inline::LineBreak => content.push_str("  \n"),
+            Inline::Tab => content.push('\t'),
+            Inline::Unknown(unknown) => {
+                if let Some(fallback) = &unknown.fallback_text {
+                    content.push_str(&render_markdown_text(fallback));
+                }
+            }
+        }
+    }
+
+    content
 }
 
 fn render_markdown_table(table: &Table) -> String {
@@ -820,6 +989,17 @@ fn render_markdown_image(image: &Image, resources: &ResourceStore) -> String {
     format!("![{alt}]({path})")
 }
 
+fn render_markdown_text_run(run: &TextRun) -> String {
+    let text = render_markdown_text(&run.text);
+
+    match (run.style.bold, run.style.italic) {
+        (true, true) => format!("***{text}***"),
+        (true, false) => format!("**{text}**"),
+        (false, true) => format!("*{text}*"),
+        (false, false) => text,
+    }
+}
+
 fn escape_markdown_table_cell(text: &str) -> String {
     text.replace('\\', "\\\\").replace('|', "\\|")
 }
@@ -835,25 +1015,6 @@ fn render_markdown_text(text: &str) -> String {
         .map(escape_markdown_line)
         .collect::<Vec<_>>()
         .join("  \n")
-}
-
-fn collect_inline_plain_text(inlines: &[Inline]) -> String {
-    let mut text = String::new();
-
-    for inline in inlines {
-        match inline {
-            Inline::Text(run) => text.push_str(&run.text),
-            Inline::LineBreak => text.push('\n'),
-            Inline::Tab => text.push('\t'),
-            Inline::Unknown(unknown) => {
-                if let Some(fallback) = &unknown.fallback_text {
-                    text.push_str(fallback);
-                }
-            }
-        }
-    }
-
-    text
 }
 
 fn resource_public_path(resources: &ResourceStore, resource_id: &ResourceId) -> String {
@@ -1039,9 +1200,10 @@ fn starts_with_ordered_list_marker(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::ir::{
-        ConversionWarning, IR_VERSION, Image, ImageResource, Metadata, Paragraph, ParagraphRole,
-        Resource, ResourceId, ResourceStore, Section, Table, TableCell, TableCellStyle, TableRow,
-        TableStyle, TextRun, TextStyle, UnknownInline,
+        Alignment, Color, ConversionWarning, IR_VERSION, Image, ImageResource, Indent, LengthPt,
+        Metadata, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore,
+        Section, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
+        TextRun, TextStyle, UnknownInline,
     };
     use std::fs::File;
     use std::io::Write;
@@ -1511,9 +1673,10 @@ mod tests {
 
         let content = serde_json::to_string_pretty(&document).unwrap();
 
-        assert!(content.contains("\"ir_version\": 3"));
+        assert!(content.contains("\"ir_version\": 4"));
         assert!(content.contains("\"sections\": ["));
         assert!(content.contains("\"resources\": {"));
+        assert!(content.contains("\"styles\": {"));
         assert!(content.contains("\"type\": \"paragraph\""));
         assert!(content.contains("\"role\": \"body\""));
         assert!(content.contains("first paragraph"));
@@ -1529,17 +1692,21 @@ mod tests {
                     Inline::Text(TextRun {
                         text: "& < > \" '".to_string(),
                         style: TextStyle::default(),
+                        style_ref: None,
                     }),
                     Inline::LineBreak,
                     Inline::Text(TextRun {
                         text: "second line".to_string(),
                         style: TextStyle::default(),
+                        style_ref: None,
                     }),
                     Inline::Unknown(UnknownInline {
                         kind: "opaque_inline".to_string(),
                         fallback_text: Some(" + extra".to_string()),
                     }),
                 ],
+                style: ParagraphStyle::default(),
+                style_ref: None,
             }),
             Block::Unknown(UnknownBlock {
                 kind: "opaque_block".to_string(),
@@ -1563,13 +1730,17 @@ mod tests {
                     Inline::Text(TextRun {
                         text: "# heading".to_string(),
                         style: TextStyle::default(),
+                        style_ref: None,
                     }),
                     Inline::LineBreak,
                     Inline::Text(TextRun {
                         text: "line one\nline two".to_string(),
                         style: TextStyle::default(),
+                        style_ref: None,
                     }),
                 ],
+                style: ParagraphStyle::default(),
+                style_ref: None,
             }),
             Block::Unknown(UnknownBlock {
                 kind: "opaque_block".to_string(),
@@ -1631,6 +1802,156 @@ mod tests {
         let text = plain_text::to_plain_text(&document);
 
         assert_eq!(text, "[표]\ncell1 | cell2\ncell3 | cell4");
+    }
+
+    #[test]
+    fn renders_html_text_style_decorations() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![Inline::Text(TextRun {
+                text: "styled".to_string(),
+                style: TextStyle {
+                    bold: true,
+                    italic: true,
+                    underline: true,
+                    strike: true,
+                    ..Default::default()
+                },
+                style_ref: None,
+            })],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("font-weight: bold"));
+        assert!(html.contains("font-style: italic"));
+        assert!(html.contains("text-decoration: underline line-through"));
+    }
+
+    #[test]
+    fn renders_html_text_style_visual_properties() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![Inline::Text(TextRun {
+                text: "styled".to_string(),
+                style: TextStyle {
+                    font_family: Some("Noto Sans KR, Malgun Gothic; color:red".to_string()),
+                    font_size_pt: Some(LengthPt(12.5)),
+                    color: Some(Color {
+                        r: 17,
+                        g: 34,
+                        b: 51,
+                        a: 255,
+                    }),
+                    background_color: Some(Color {
+                        r: 68,
+                        g: 85,
+                        b: 102,
+                        a: 255,
+                    }),
+                    ..Default::default()
+                },
+                style_ref: None,
+            })],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("font-family: Noto Sans KR, Malgun Gothic colorred"));
+        assert!(html.contains("font-size: 12.5pt"));
+        assert!(html.contains("color: #112233"));
+        assert!(html.contains("background-color: #445566"));
+    }
+
+    #[test]
+    fn renders_html_paragraph_alignment_and_spacing() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![Inline::Text(TextRun {
+                text: "paragraph".to_string(),
+                style: TextStyle::default(),
+                style_ref: None,
+            })],
+            style: ParagraphStyle {
+                alignment: Some(Alignment::Center),
+                spacing: Spacing {
+                    before_pt: Some(LengthPt(6.0)),
+                    after_pt: Some(LengthPt(8.0)),
+                    line_pt: Some(LengthPt(14.0)),
+                },
+                indent: Indent {
+                    left_pt: Some(LengthPt(10.0)),
+                    right_pt: Some(LengthPt(12.0)),
+                    first_line_pt: Some(LengthPt(18.0)),
+                },
+            },
+            style_ref: None,
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("text-align: center"));
+        assert!(html.contains("margin-top: 6pt"));
+        assert!(html.contains("margin-bottom: 8pt"));
+        assert!(html.contains("text-indent: 18pt"));
+        assert!(html.contains("margin-left: 10pt"));
+        assert!(html.contains("margin-right: 12pt"));
+    }
+
+    #[test]
+    fn renders_markdown_bold_and_italic_from_text_style() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![
+                Inline::Text(TextRun {
+                    text: "bold".to_string(),
+                    style: TextStyle {
+                        bold: true,
+                        ..Default::default()
+                    },
+                    style_ref: None,
+                }),
+                Inline::Text(TextRun {
+                    text: " ".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                }),
+                Inline::Text(TextRun {
+                    text: "italic".to_string(),
+                    style: TextStyle {
+                        italic: true,
+                        ..Default::default()
+                    },
+                    style_ref: None,
+                }),
+                Inline::Text(TextRun {
+                    text: " ".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                }),
+                Inline::Text(TextRun {
+                    text: "both".to_string(),
+                    style: TextStyle {
+                        bold: true,
+                        italic: true,
+                        ..Default::default()
+                    },
+                    style_ref: None,
+                }),
+            ],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+        })]);
+
+        let markdown = render_markdown_document(&document);
+
+        assert!(markdown.contains("**bold**"));
+        assert!(markdown.contains("*italic*"));
+        assert!(markdown.contains("***both***"));
     }
 
     #[test]
@@ -1702,6 +2023,7 @@ mod tests {
             metadata: Metadata::default(),
             sections: vec![Section { blocks }],
             resources: ResourceStore::default(),
+            styles: StyleSheet::default(),
             warnings: Vec::<ConversionWarning>::new(),
         }
     }
@@ -1731,6 +2053,7 @@ mod tests {
                     bytes: vec![137, 80, 78, 71],
                 })],
             },
+            styles: StyleSheet::default(),
             warnings: Vec::<ConversionWarning>::new(),
         }
     }
@@ -1758,7 +2081,10 @@ mod tests {
                 inlines: vec![Inline::Text(TextRun {
                     text: text.to_string(),
                     style: TextStyle::default(),
+                    style_ref: None,
                 })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
             })],
             style: TableCellStyle::default(),
         }
