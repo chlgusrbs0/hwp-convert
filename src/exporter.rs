@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
-use crate::ir::{Block, Document, Inline, Table, TableCell, TableRow, UnknownBlock};
+use crate::ir::{
+    Block, Document, Image, Inline, Resource, ResourceId, ResourceStore, Table, TableCell,
+    TableRow, UnknownBlock,
+};
 use crate::util::plain_text;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -536,6 +539,18 @@ fn render_html_document(input_path: &Path, document: &Document) -> String {
         padding: 32px;\n\
         box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);\n\
       }}\n\
+      figure {{\n\
+        margin: 0 0 1em;\n\
+      }}\n\
+      img {{\n\
+        display: block;\n\
+        max-width: 100%;\n\
+      }}\n\
+      figcaption {{\n\
+        margin-top: 0.5em;\n\
+        color: #4b5563;\n\
+        font-size: 14px;\n\
+      }}\n\
       table {{\n\
         width: 100%;\n\
         border-collapse: collapse;\n\
@@ -581,7 +596,7 @@ fn render_html_blocks(document: &Document) -> String {
 
     for section in &document.sections {
         for block in &section.blocks {
-            paragraph_nodes.push_str(&render_html_block(block));
+            paragraph_nodes.push_str(&render_html_block(block, &document.resources));
         }
     }
 
@@ -592,10 +607,11 @@ fn render_html_blocks(document: &Document) -> String {
     paragraph_nodes
 }
 
-fn render_html_block(block: &Block) -> String {
+fn render_html_block(block: &Block, resources: &ResourceStore) -> String {
     match block {
         Block::Paragraph(paragraph) => render_html_paragraph(&paragraph.inlines),
-        Block::Table(table) => render_html_table(table),
+        Block::Table(table) => render_html_table(table, resources),
+        Block::Image(image) => render_html_image(image, resources),
         Block::Unknown(unknown) => {
             let content = unknown
                 .fallback_text
@@ -635,29 +651,52 @@ fn render_html_fallback_text(text: &str) -> String {
     escape_html(text).replace('\n', "<br />")
 }
 
-fn render_html_table(table: &Table) -> String {
+fn render_html_image(image: &Image, resources: &ResourceStore) -> String {
+    let src = escape_html(&resource_public_path(resources, &image.resource_id));
+    let alt = escape_html(image.alt.as_deref().unwrap_or(image.resource_id.as_str()));
+    let width = image
+        .width
+        .map(|width| format!(" width=\"{width}\""))
+        .unwrap_or_default();
+    let height = image
+        .height
+        .map(|height| format!(" height=\"{height}\""))
+        .unwrap_or_default();
+    let tag = format!("<img src=\"{src}\" alt=\"{alt}\"{width}{height} />");
+
+    if let Some(caption) = &image.caption {
+        return format!(
+            "<figure>{tag}<figcaption>{}</figcaption></figure>\n",
+            escape_html(caption)
+        );
+    }
+
+    format!("{tag}\n")
+}
+
+fn render_html_table(table: &Table, resources: &ResourceStore) -> String {
     let mut html = String::from("<table>\n");
 
     for row in &table.rows {
-        html.push_str(&render_html_table_row(row));
+        html.push_str(&render_html_table_row(row, resources));
     }
 
     html.push_str("</table>\n");
     html
 }
 
-fn render_html_table_row(row: &TableRow) -> String {
+fn render_html_table_row(row: &TableRow, resources: &ResourceStore) -> String {
     let mut html = String::from("<tr>\n");
 
     for cell in &row.cells {
-        html.push_str(&render_html_table_cell(cell));
+        html.push_str(&render_html_table_cell(cell, resources));
     }
 
     html.push_str("</tr>\n");
     html
 }
 
-fn render_html_table_cell(cell: &TableCell) -> String {
+fn render_html_table_cell(cell: &TableCell, resources: &ResourceStore) -> String {
     let rowspan = if cell.row_span > 1 {
         format!(" rowspan=\"{}\"", cell.row_span)
     } else {
@@ -668,15 +707,15 @@ fn render_html_table_cell(cell: &TableCell) -> String {
     } else {
         String::new()
     };
-    let content = render_html_table_cell_blocks(&cell.blocks);
+    let content = render_html_table_cell_blocks(&cell.blocks, resources);
 
     format!("<td{rowspan}{colspan}>{content}</td>\n")
 }
 
-fn render_html_table_cell_blocks(blocks: &[Block]) -> String {
+fn render_html_table_cell_blocks(blocks: &[Block], resources: &ResourceStore) -> String {
     blocks
         .iter()
-        .map(render_html_block)
+        .map(|block| render_html_block(block, resources))
         .collect::<Vec<_>>()
         .join("")
 }
@@ -686,17 +725,18 @@ fn render_markdown_document(document: &Document) -> String {
 
     for section in &document.sections {
         for block in &section.blocks {
-            blocks.push(render_markdown_block(block));
+            blocks.push(render_markdown_block(block, &document.resources));
         }
     }
 
     blocks.join("\n\n")
 }
 
-fn render_markdown_block(block: &Block) -> String {
+fn render_markdown_block(block: &Block, resources: &ResourceStore) -> String {
     match block {
         Block::Paragraph(paragraph) => render_markdown_inlines(&paragraph.inlines),
         Block::Table(table) => render_markdown_table(table),
+        Block::Image(image) => render_markdown_image(image, resources),
         Block::Unknown(unknown) => render_markdown_unknown_block(unknown),
     }
 }
@@ -773,8 +813,21 @@ fn render_markdown_table_cell(cell: &TableCell) -> String {
     escape_markdown_table_cell(&plain_text::blocks_to_plain_text(&cell.blocks).replace('\n', " "))
 }
 
+fn render_markdown_image(image: &Image, resources: &ResourceStore) -> String {
+    let alt = escape_markdown_image_alt(image.alt.as_deref().unwrap_or(image.resource_id.as_str()));
+    let path = resource_public_path(resources, &image.resource_id);
+
+    format!("![{alt}]({path})")
+}
+
 fn escape_markdown_table_cell(text: &str) -> String {
     text.replace('\\', "\\\\").replace('|', "\\|")
+}
+
+fn escape_markdown_image_alt(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
 }
 
 fn render_markdown_text(text: &str) -> String {
@@ -801,6 +854,32 @@ fn collect_inline_plain_text(inlines: &[Inline]) -> String {
     }
 
     text
+}
+
+fn resource_public_path(resources: &ResourceStore, resource_id: &ResourceId) -> String {
+    let file_name = resource_file_name(resources, resource_id);
+    format!("images/{file_name}")
+}
+
+fn resource_file_name(resources: &ResourceStore, resource_id: &ResourceId) -> String {
+    let base = resource_id.as_str();
+    if base.contains('.') {
+        return base.to_string();
+    }
+
+    let extension = resource_extension(resources, resource_id).unwrap_or("png");
+    format!("{base}.{extension}")
+}
+
+fn resource_extension<'a>(
+    resources: &'a ResourceStore,
+    resource_id: &ResourceId,
+) -> Option<&'a str> {
+    match resources.get(resource_id) {
+        Some(Resource::Image(resource)) => resource.extension.as_deref(),
+        Some(Resource::Binary(resource)) => resource.extension.as_deref(),
+        None => None,
+    }
 }
 
 fn collect_render_lines(paragraphs: &[String]) -> Vec<RenderLine> {
@@ -960,8 +1039,9 @@ fn starts_with_ordered_list_marker(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::ir::{
-        ConversionWarning, IR_VERSION, Metadata, Paragraph, ParagraphRole, Section, Table,
-        TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownInline,
+        ConversionWarning, IR_VERSION, Image, ImageResource, Metadata, Paragraph, ParagraphRole,
+        Resource, ResourceId, ResourceStore, Section, Table, TableCell, TableCellStyle, TableRow,
+        TableStyle, TextRun, TextStyle, UnknownInline,
     };
     use std::fs::File;
     use std::io::Write;
@@ -1431,8 +1511,9 @@ mod tests {
 
         let content = serde_json::to_string_pretty(&document).unwrap();
 
-        assert!(content.contains("\"ir_version\": 2"));
+        assert!(content.contains("\"ir_version\": 3"));
         assert!(content.contains("\"sections\": ["));
+        assert!(content.contains("\"resources\": {"));
         assert!(content.contains("\"type\": \"paragraph\""));
         assert!(content.contains("\"role\": \"body\""));
         assert!(content.contains("first paragraph"));
@@ -1500,6 +1581,24 @@ mod tests {
         assert!(markdown.contains("\\# heading"));
         assert!(markdown.contains("line one  \nline two"));
         assert!(markdown.contains("\\1. ordered"));
+    }
+
+    #[test]
+    fn renders_markdown_image_from_document_ir() {
+        let document = document_with_image_block("image-1", Some("로고"), Some("png"));
+
+        let markdown = render_markdown_document(&document);
+
+        assert!(markdown.contains("![로고](images/image-1.png)"));
+    }
+
+    #[test]
+    fn renders_html_image_from_document_ir() {
+        let document = document_with_image_block("image-1", Some("로고"), Some("png"));
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("<img src=\"images/image-1.png\" alt=\"로고\""));
     }
 
     #[test]
@@ -1602,6 +1701,36 @@ mod tests {
             ir_version: IR_VERSION,
             metadata: Metadata::default(),
             sections: vec![Section { blocks }],
+            resources: ResourceStore::default(),
+            warnings: Vec::<ConversionWarning>::new(),
+        }
+    }
+
+    fn document_with_image_block(
+        resource_id: &str,
+        alt: Option<&str>,
+        extension: Option<&str>,
+    ) -> Document {
+        Document {
+            ir_version: IR_VERSION,
+            metadata: Metadata::default(),
+            sections: vec![Section {
+                blocks: vec![Block::Image(Image {
+                    resource_id: ResourceId(resource_id.to_string()),
+                    alt: alt.map(ToOwned::to_owned),
+                    caption: None,
+                    width: None,
+                    height: None,
+                })],
+            }],
+            resources: ResourceStore {
+                entries: vec![Resource::Image(ImageResource {
+                    id: ResourceId(resource_id.to_string()),
+                    media_type: Some("image/png".to_string()),
+                    extension: extension.map(ToOwned::to_owned),
+                    bytes: vec![137, 80, 78, 71],
+                })],
+            },
             warnings: Vec::<ConversionWarning>::new(),
         }
     }

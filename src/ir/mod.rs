@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-pub const IR_VERSION: u16 = 2;
+pub const IR_VERSION: u16 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
     pub ir_version: u16,
     pub metadata: Metadata,
     pub sections: Vec<Section>,
+    pub resources: ResourceStore,
     pub warnings: Vec<ConversionWarning>,
 }
 
@@ -16,6 +17,7 @@ impl Default for Document {
             ir_version: IR_VERSION,
             metadata: Metadata::default(),
             sections: Vec::new(),
+            resources: ResourceStore::default(),
             warnings: Vec::new(),
         }
     }
@@ -40,6 +42,7 @@ impl Document {
             ir_version: IR_VERSION,
             metadata: Metadata::default(),
             sections: vec![Section { blocks }],
+            resources: ResourceStore::default(),
             warnings: Vec::new(),
         }
     }
@@ -61,6 +64,7 @@ pub struct Section {
 pub enum Block {
     Paragraph(Paragraph),
     Table(Table),
+    Image(Image),
     Unknown(UnknownBlock),
 }
 
@@ -105,6 +109,70 @@ pub struct TextStyle {
     pub underline: bool,
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ResourceStore {
+    pub entries: Vec<Resource>,
+}
+
+impl ResourceStore {
+    pub fn get(&self, resource_id: &ResourceId) -> Option<&Resource> {
+        self.entries
+            .iter()
+            .find(|resource| resource.id() == resource_id)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Resource {
+    Image(ImageResource),
+    Binary(BinaryResource),
+}
+
+impl Resource {
+    pub fn id(&self) -> &ResourceId {
+        match self {
+            Resource::Image(resource) => &resource.id,
+            Resource::Binary(resource) => &resource.id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(transparent)]
+pub struct ResourceId(pub String);
+
+impl ResourceId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ImageResource {
+    pub id: ResourceId,
+    pub media_type: Option<String>,
+    pub extension: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct BinaryResource {
+    pub id: ResourceId,
+    pub media_type: Option<String>,
+    pub extension: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct Image {
+    pub resource_id: ResourceId,
+    pub alt: Option<String>,
+    pub caption: Option<String>,
+    pub width: Option<f32>,
+    pub height: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -180,6 +248,7 @@ mod tests {
         assert_eq!(document.ir_version, IR_VERSION);
         assert_eq!(document.sections.len(), 1);
         assert_eq!(document.sections[0].blocks.len(), 2);
+        assert!(document.resources.entries.is_empty());
 
         match &document.sections[0].blocks[0] {
             Block::Paragraph(paragraph) => {
@@ -211,6 +280,13 @@ mod tests {
     }
 
     #[test]
+    fn document_has_default_resource_store() {
+        let document = Document::default();
+
+        assert!(document.resources.entries.is_empty());
+    }
+
+    #[test]
     fn table_cell_can_hold_nested_blocks() {
         let cell = TableCell {
             blocks: vec![Block::Paragraph(Paragraph {
@@ -233,6 +309,34 @@ mod tests {
                 assert_eq!(paragraph.inlines.len(), 1);
             }
             other => panic!("expected paragraph block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn image_can_reference_image_resource_by_resource_id() {
+        let resource_id = ResourceId("image-1".to_string());
+        let image = Image {
+            resource_id: resource_id.clone(),
+            alt: Some("logo".to_string()),
+            caption: None,
+            width: Some(128.0),
+            height: Some(64.0),
+        };
+        let store = ResourceStore {
+            entries: vec![Resource::Image(ImageResource {
+                id: resource_id.clone(),
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: vec![137, 80, 78, 71],
+            })],
+        };
+
+        match store.get(&image.resource_id) {
+            Some(Resource::Image(resource)) => {
+                assert_eq!(resource.id, resource_id);
+                assert_eq!(resource.extension.as_deref(), Some("png"));
+            }
+            other => panic!("expected image resource, got {other:?}"),
         }
     }
 }

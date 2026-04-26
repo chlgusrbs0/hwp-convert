@@ -1,4 +1,6 @@
-use crate::ir::{Block, Document, Inline, Table, TableCell};
+use crate::ir::{Block, Document, Image, Inline, Table, TableCell};
+
+const TABLE_FALLBACK_LABEL: &str = "[\u{D45C}]";
 
 #[allow(dead_code)]
 pub fn collect_paragraph_texts(document: &Document) -> Vec<String> {
@@ -7,22 +9,7 @@ pub fn collect_paragraph_texts(document: &Document) -> Vec<String> {
     for section in &document.sections {
         for block in &section.blocks {
             if let Block::Paragraph(paragraph) = block {
-                let mut text = String::new();
-
-                for inline in &paragraph.inlines {
-                    match inline {
-                        Inline::Text(run) => text.push_str(&run.text),
-                        Inline::LineBreak => text.push('\n'),
-                        Inline::Tab => text.push('\t'),
-                        Inline::Unknown(unknown) => {
-                            if let Some(fallback) = &unknown.fallback_text {
-                                text.push_str(fallback);
-                            }
-                        }
-                    }
-                }
-
-                paragraphs.push(text);
+                paragraphs.push(inline_text_to_plain_text(&paragraph.inlines));
             }
         }
     }
@@ -50,6 +37,7 @@ pub(crate) fn block_to_plain_text(block: &Block) -> String {
     match block {
         Block::Paragraph(paragraph) => inline_text_to_plain_text(&paragraph.inlines),
         Block::Table(table) => table_to_plain_text(table),
+        Block::Image(image) => image_to_plain_text(image),
         Block::Unknown(unknown) => unknown.fallback_text.clone().unwrap_or_default(),
     }
 }
@@ -65,7 +53,7 @@ pub(crate) fn blocks_to_plain_text(blocks: &[Block]) -> String {
 }
 
 pub(crate) fn table_to_plain_text(table: &Table) -> String {
-    let mut lines = vec!["[표]".to_string()];
+    let mut lines = vec![TABLE_FALLBACK_LABEL.to_string()];
 
     for row in &table.rows {
         lines.push(
@@ -78,6 +66,16 @@ pub(crate) fn table_to_plain_text(table: &Table) -> String {
     }
 
     lines.join("\n")
+}
+
+pub(crate) fn image_to_plain_text(image: &Image) -> String {
+    let label = image
+        .alt
+        .as_deref()
+        .filter(|alt| !alt.is_empty())
+        .unwrap_or_else(|| image.resource_id.as_str());
+
+    format!("[\u{C774}\u{BBF8}\u{C9C0}: {label}]")
 }
 
 fn table_cell_to_plain_text(cell: &TableCell) -> String {
@@ -106,8 +104,8 @@ fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
 #[cfg(test)]
 mod tests {
     use crate::ir::{
-        Block, Document, Paragraph, ParagraphRole, Table, TableCell, TableCellStyle, TableRow,
-        TableStyle, TextRun, TextStyle,
+        Block, Document, Image, Paragraph, ParagraphRole, ResourceId, Table, TableCell,
+        TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
     };
 
     use super::to_plain_text;
@@ -126,60 +124,10 @@ mod tests {
                 blocks: vec![Block::Table(Table {
                     rows: vec![
                         TableRow {
-                            cells: vec![
-                                TableCell {
-                                    row_span: 1,
-                                    col_span: 1,
-                                    blocks: vec![Block::Paragraph(Paragraph {
-                                        role: ParagraphRole::Body,
-                                        inlines: vec![crate::ir::Inline::Text(TextRun {
-                                            text: "cell1".to_string(),
-                                            style: TextStyle::default(),
-                                        })],
-                                    })],
-                                    style: TableCellStyle::default(),
-                                },
-                                TableCell {
-                                    row_span: 1,
-                                    col_span: 1,
-                                    blocks: vec![Block::Paragraph(Paragraph {
-                                        role: ParagraphRole::Body,
-                                        inlines: vec![crate::ir::Inline::Text(TextRun {
-                                            text: "cell2".to_string(),
-                                            style: TextStyle::default(),
-                                        })],
-                                    })],
-                                    style: TableCellStyle::default(),
-                                },
-                            ],
+                            cells: vec![table_cell("cell1"), table_cell("cell2")],
                         },
                         TableRow {
-                            cells: vec![
-                                TableCell {
-                                    row_span: 1,
-                                    col_span: 1,
-                                    blocks: vec![Block::Paragraph(Paragraph {
-                                        role: ParagraphRole::Body,
-                                        inlines: vec![crate::ir::Inline::Text(TextRun {
-                                            text: "cell3".to_string(),
-                                            style: TextStyle::default(),
-                                        })],
-                                    })],
-                                    style: TableCellStyle::default(),
-                                },
-                                TableCell {
-                                    row_span: 1,
-                                    col_span: 1,
-                                    blocks: vec![Block::Paragraph(Paragraph {
-                                        role: ParagraphRole::Body,
-                                        inlines: vec![crate::ir::Inline::Text(TextRun {
-                                            text: "cell4".to_string(),
-                                            style: TextStyle::default(),
-                                        })],
-                                    })],
-                                    style: TableCellStyle::default(),
-                                },
-                            ],
+                            cells: vec![table_cell("cell3"), table_cell("cell4")],
                         },
                     ],
                     style: TableStyle::default(),
@@ -190,7 +138,40 @@ mod tests {
 
         assert_eq!(
             to_plain_text(&document),
-            "[표]\ncell1 | cell2\ncell3 | cell4"
+            "[\u{D45C}]\ncell1 | cell2\ncell3 | cell4"
         );
+    }
+
+    #[test]
+    fn renders_image_as_plain_text_fallback() {
+        let document = Document {
+            sections: vec![crate::ir::Section {
+                blocks: vec![Block::Image(Image {
+                    resource_id: ResourceId("image-1".to_string()),
+                    alt: Some("logo".to_string()),
+                    caption: None,
+                    width: None,
+                    height: None,
+                })],
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(to_plain_text(&document), "[\u{C774}\u{BBF8}\u{C9C0}: logo]");
+    }
+
+    fn table_cell(text: &str) -> TableCell {
+        TableCell {
+            row_span: 1,
+            col_span: 1,
+            blocks: vec![Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![crate::ir::Inline::Text(TextRun {
+                    text: text.to_string(),
+                    style: TextStyle::default(),
+                })],
+            })],
+            style: TableCellStyle::default(),
+        }
     }
 }
