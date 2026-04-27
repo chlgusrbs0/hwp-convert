@@ -24,6 +24,12 @@ pub fn read_render_snapshot(input_path: &Path) -> Result<RenderSnapshot, Box<dyn
     RenderSnapshot::from_core(input_path, &core)
 }
 
+pub fn read_render_snapshot_summary(
+    input_path: &Path,
+) -> Result<RenderSnapshotSummary, Box<dyn Error>> {
+    Ok(read_render_snapshot(input_path)?.summary())
+}
+
 pub fn render_page_svg(input_path: &Path, page_index: u32) -> Result<String, Box<dyn Error>> {
     let core = load_document_core(input_path)?;
     core.render_page_svg_native(page_index)
@@ -84,6 +90,31 @@ impl RenderSnapshot {
             pages,
         })
     }
+
+    pub fn summary(&self) -> RenderSnapshotSummary {
+        let pages: Vec<RenderPageSummary> = self.pages.iter().map(RenderPage::summary).collect();
+
+        RenderSnapshotSummary {
+            source_path: self.source_path.clone(),
+            page_count: pages.len(),
+            text_item_count: pages.iter().map(|page| page.text_item_count).sum(),
+            image_item_count: pages.iter().map(|page| page.image_item_count).sum(),
+            table_item_count: pages.iter().map(|page| page.table_item_count).sum(),
+            control_item_count: pages.iter().map(|page| page.control_item_count).sum(),
+            pages,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenderSnapshotSummary {
+    pub source_path: PathBuf,
+    pub page_count: usize,
+    pub text_item_count: usize,
+    pub image_item_count: usize,
+    pub table_item_count: usize,
+    pub control_item_count: usize,
+    pub pages: Vec<RenderPageSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -93,6 +124,42 @@ pub struct RenderPage {
     pub width: f64,
     pub height: f64,
     pub items: Vec<RenderItem>,
+}
+
+impl RenderPage {
+    pub fn summary(&self) -> RenderPageSummary {
+        let mut summary = RenderPageSummary {
+            page_index: self.page_index,
+            ..RenderPageSummary::default()
+        };
+
+        for item in &self.items {
+            match item {
+                RenderItem::Text(_) => summary.text_item_count += 1,
+                RenderItem::Image(_) => {
+                    summary.image_item_count += 1;
+                    summary.control_item_count += 1;
+                }
+                RenderItem::Box(render_box) => {
+                    summary.control_item_count += 1;
+                    if render_box.kind == RenderBoxKind::Table {
+                        summary.table_item_count += 1;
+                    }
+                }
+            }
+        }
+
+        summary
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenderPageSummary {
+    pub page_index: u32,
+    pub text_item_count: usize,
+    pub image_item_count: usize,
+    pub table_item_count: usize,
+    pub control_item_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -592,6 +659,41 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn summarizes_temp_sample_hwp_snapshot() -> Result<(), Box<dyn Error>> {
+        let temp_dir = unique_temp_dir();
+        fs::create_dir_all(&temp_dir)?;
+
+        let sample_path = temp_dir.join("sample.hwp");
+        fs::write(&sample_path, rhwp::serialize_document(&sample_document())?)?;
+
+        let summary = read_render_snapshot_summary(&sample_path)?;
+        assert_eq!(summary.page_count, summary.pages.len());
+        assert!(summary.page_count >= 1);
+        assert!(summary.text_item_count >= 1);
+        assert!(summary.image_item_count >= 1);
+        assert!(summary.table_item_count >= 1);
+        assert!(summary.control_item_count >= 2);
+
+        fs::remove_file(&sample_path)?;
+        fs::remove_dir_all(&temp_dir)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn summarizes_local_sample_documents_when_present() -> Result<(), Box<dyn Error>> {
+        let sample_paths = find_sample_documents(Path::new(env!("CARGO_MANIFEST_DIR")))?;
+
+        for sample_path in sample_paths {
+            let summary = read_render_snapshot_summary(&sample_path)?;
+            assert!(summary.page_count >= 1);
+            assert_eq!(summary.page_count, summary.pages.len());
+        }
+
+        Ok(())
+    }
+
     fn sample_document() -> Document {
         let mut text_paragraph = RhwpParagraph::new_empty();
         text_paragraph.insert_text_at(0, "sample render text");
@@ -683,6 +785,40 @@ mod tests {
             .expect("system clock should be after UNIX_EPOCH")
             .as_nanos();
         std::env::temp_dir().join(format!("hwp-convert-render-snapshot-{suffix}"))
+    }
+
+    fn find_sample_documents(root: &Path) -> io::Result<Vec<PathBuf>> {
+        let mut found = Vec::new();
+        collect_sample_documents(root, &mut found)?;
+        found.sort();
+        Ok(found)
+    }
+
+    fn collect_sample_documents(root: &Path, found: &mut Vec<PathBuf>) -> io::Result<()> {
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+
+            if file_type.is_dir() {
+                if entry.file_name() == "target" {
+                    continue;
+                }
+                collect_sample_documents(&path, found)?;
+                continue;
+            }
+
+            if file_type.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == "sample.hwp" || name == "sample.hwpx")
+            {
+                found.push(path);
+            }
+        }
+
+        Ok(())
     }
 
     fn tiny_png_bytes() -> Vec<u8> {
