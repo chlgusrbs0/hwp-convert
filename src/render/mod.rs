@@ -12,6 +12,7 @@
 
 use std::cmp::Ordering;
 use std::error::Error;
+use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -34,6 +35,96 @@ pub fn render_page_svg(input_path: &Path, page_index: u32) -> Result<String, Box
     let core = load_document_core(input_path)?;
     core.render_page_svg_native(page_index)
         .map_err(|error| render_error("render SVG page", error))
+}
+
+pub fn render_page_to_svg(page: &RenderPage) -> String {
+    // Experimental path: use rhwp renderer query coordinates as-is without
+    // normalizing units or redefining a layout coordinate standard.
+    let width = sanitized_size(page.width, 1.0);
+    let height = sanitized_size(page.height, 1.0);
+    let mut svg = String::new();
+
+    write!(
+        svg,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width_attr}" height="{height_attr}" viewBox="0 0 {view_width} {view_height}">"#,
+        width_attr = svg_number(width),
+        height_attr = svg_number(height),
+        view_width = svg_number(width),
+        view_height = svg_number(height),
+    )
+    .expect("writing SVG into a String should not fail");
+    svg.push_str(&render_page_svg_elements(page));
+    svg.push_str("</svg>\n");
+
+    svg
+}
+
+pub fn render_snapshot_to_svg(snapshot: &RenderSnapshot) -> String {
+    // Experimental path: use rhwp renderer query coordinates as-is without
+    // normalizing units or redefining a layout coordinate standard.
+    const PAGE_MARGIN: f64 = 16.0;
+    const PAGE_GAP: f64 = 24.0;
+
+    let content_width = snapshot
+        .pages
+        .iter()
+        .map(|page| sanitized_size(page.width, 1.0))
+        .fold(1.0, f64::max);
+    let total_height = if snapshot.pages.is_empty() {
+        1.0
+    } else {
+        snapshot
+            .pages
+            .iter()
+            .map(|page| sanitized_size(page.height, 1.0))
+            .sum::<f64>()
+            + PAGE_MARGIN * 2.0
+            + PAGE_GAP * (snapshot.pages.len().saturating_sub(1) as f64)
+    };
+    let total_width = content_width + PAGE_MARGIN * 2.0;
+
+    let mut svg = String::new();
+    write!(
+        svg,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width_attr}" height="{height_attr}" viewBox="0 0 {view_width} {view_height}">"#,
+        width_attr = svg_number(total_width),
+        height_attr = svg_number(total_height),
+        view_width = svg_number(total_width),
+        view_height = svg_number(total_height),
+    )
+    .expect("writing SVG into a String should not fail");
+    write!(
+        svg,
+        r##"<rect class="snapshot-background" x="0" y="0" width="{width}" height="{height}" fill="#f8fafc"/>"##,
+        width = svg_number(total_width),
+        height = svg_number(total_height),
+    )
+    .expect("writing SVG into a String should not fail");
+
+    let mut page_y = PAGE_MARGIN;
+    for page in &snapshot.pages {
+        let page_width = sanitized_size(page.width, 1.0);
+        let page_height = sanitized_size(page.height, 1.0);
+
+        write!(
+            svg,
+            r#"<svg class="snapshot-page" x="{x}" y="{y}" width="{width}" height="{height}" viewBox="0 0 {view_width} {view_height}">"#,
+            x = svg_number(PAGE_MARGIN),
+            y = svg_number(page_y),
+            width = svg_number(page_width),
+            height = svg_number(page_height),
+            view_width = svg_number(page_width),
+            view_height = svg_number(page_height),
+        )
+        .expect("writing SVG into a String should not fail");
+        svg.push_str(&render_page_svg_elements(page));
+        svg.push_str("</svg>");
+
+        page_y += page_height + PAGE_GAP;
+    }
+
+    svg.push_str("</svg>\n");
+    svg
 }
 
 fn load_document_core(input_path: &Path) -> Result<rhwp::DocumentCore, Box<dyn Error>> {
@@ -289,6 +380,155 @@ fn sort_render_items(left: &RenderItem, right: &RenderItem) -> Ordering {
         .total_cmp(&right_bounds.y)
         .then_with(|| left_bounds.x.total_cmp(&right_bounds.x))
         .then_with(|| left.kind_rank().cmp(&right.kind_rank()))
+}
+
+fn render_page_svg_elements(page: &RenderPage) -> String {
+    let mut svg = String::new();
+    let page_width = sanitized_size(page.width, 1.0);
+    let page_height = sanitized_size(page.height, 1.0);
+
+    write!(
+        svg,
+        r##"<rect class="page-boundary" x="0" y="0" width="{width}" height="{height}" fill="#ffffff" stroke="#94a3b8" stroke-width="1"/>"##,
+        width = svg_number(page_width),
+        height = svg_number(page_height),
+    )
+    .expect("writing SVG into a String should not fail");
+
+    for item in &page.items {
+        render_item_svg(&mut svg, item);
+    }
+
+    svg
+}
+
+fn render_item_svg(svg: &mut String, item: &RenderItem) {
+    match item {
+        RenderItem::Text(text) => render_text_svg(svg, text),
+        RenderItem::Image(image) => {
+            render_placeholder_svg(svg, &image.bounds, "[image]", "#0f766e")
+        }
+        RenderItem::Box(render_box) => render_box_svg(svg, render_box),
+    }
+}
+
+fn render_text_svg(svg: &mut String, text: &RenderText) {
+    let x = sanitized_coord(text.bounds.x, 0.0);
+    let y = sanitized_coord(text.bounds.y, 0.0);
+    let font_size = inferred_text_font_size(text);
+
+    write!(
+        svg,
+        r##"<text class="render-text" x="{x}" y="{y}" font-family="sans-serif" font-size="{font_size}" fill="#111827" dominant-baseline="hanging">{content}</text>"##,
+        x = svg_number(x),
+        y = svg_number(y),
+        font_size = svg_number(font_size),
+        content = escape_xml(&text.text),
+    )
+    .expect("writing SVG into a String should not fail");
+}
+
+fn render_box_svg(svg: &mut String, render_box: &RenderBox) {
+    match render_box.kind {
+        RenderBoxKind::Table => {
+            render_placeholder_svg(svg, &render_box.bounds, "[table]", "#9a3412");
+            for cell in &render_box.cells {
+                write!(
+                    svg,
+                    r##"<rect class="table-cell" x="{x}" y="{y}" width="{width}" height="{height}" fill="none" stroke="#fb923c" stroke-width="0.8" stroke-dasharray="2 2"/>"##,
+                    x = svg_number(sanitized_coord(cell.bounds.x, 0.0)),
+                    y = svg_number(sanitized_coord(cell.bounds.y, 0.0)),
+                    width = svg_number(sanitized_size(cell.bounds.width, 1.0)),
+                    height = svg_number(sanitized_size(cell.bounds.height, 1.0)),
+                )
+                .expect("writing SVG into a String should not fail");
+            }
+        }
+        RenderBoxKind::Equation => {
+            render_placeholder_svg(svg, &render_box.bounds, "[equation]", "#7c3aed");
+        }
+        RenderBoxKind::Group => {
+            render_placeholder_svg(svg, &render_box.bounds, "[group]", "#1d4ed8");
+        }
+        RenderBoxKind::Shape => {
+            render_placeholder_svg(svg, &render_box.bounds, "[shape]", "#b45309");
+        }
+        RenderBoxKind::Line => {
+            render_placeholder_svg(svg, &render_box.bounds, "[line]", "#475569");
+        }
+        RenderBoxKind::Other(ref kind) => {
+            let label = format!("[{}]", kind);
+            render_placeholder_svg(svg, &render_box.bounds, &label, "#334155");
+        }
+    }
+}
+
+fn render_placeholder_svg(svg: &mut String, bounds: &RenderBounds, label: &str, color: &str) {
+    let x = sanitized_coord(bounds.x, 0.0);
+    let y = sanitized_coord(bounds.y, 0.0);
+    let width = sanitized_size(bounds.width, 1.0);
+    let height = sanitized_size(bounds.height, 1.0);
+    let label_x = x + 4.0;
+    let label_y = y + 4.0;
+    let label_font_size = (height.min(18.0)).max(10.0);
+
+    write!(
+        svg,
+        r#"<rect class="control-placeholder" x="{x}" y="{y}" width="{width}" height="{height}" fill="none" stroke="{color}" stroke-width="1" stroke-dasharray="4 2"/>"#,
+        x = svg_number(x),
+        y = svg_number(y),
+        width = svg_number(width),
+        height = svg_number(height),
+        color = color,
+    )
+    .expect("writing SVG into a String should not fail");
+    write!(
+        svg,
+        r#"<text class="control-label" x="{x}" y="{y}" font-family="sans-serif" font-size="{font_size}" fill="{color}" dominant-baseline="hanging">{label}</text>"#,
+        x = svg_number(label_x),
+        y = svg_number(label_y),
+        font_size = svg_number(label_font_size),
+        color = color,
+        label = escape_xml(label),
+    )
+    .expect("writing SVG into a String should not fail");
+}
+
+fn inferred_text_font_size(text: &RenderText) -> f64 {
+    let height = text.bounds.height;
+    if height.is_finite() && height > 1.0 {
+        height.max(10.0)
+    } else {
+        12.0
+    }
+}
+
+fn sanitized_coord(value: f64, default: f64) -> f64 {
+    if value.is_finite() { value } else { default }
+}
+
+fn sanitized_size(value: f64, default: f64) -> f64 {
+    let value = if value.is_finite() { value } else { default };
+    value.max(1.0)
+}
+
+fn svg_number(value: f64) -> String {
+    format!("{:.1}", value)
+}
+
+fn escape_xml(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }
 
 fn doc_ref(
@@ -620,6 +860,30 @@ mod tests {
     }
 
     #[test]
+    fn renders_snapshot_to_visual_svg() {
+        let svg = render_snapshot_to_svg(&synthetic_snapshot());
+
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("class=\"page-boundary\""));
+        assert!(svg.contains("<text"));
+        assert!(svg.contains("&amp; &lt; &gt; &quot; &apos;"));
+        assert!(svg.contains("[image]"));
+        assert!(svg.contains("[table]"));
+        assert!(svg.contains("class=\"table-cell\""));
+    }
+
+    #[test]
+    fn renders_single_page_to_visual_svg() {
+        let snapshot = synthetic_snapshot();
+        let svg = render_page_to_svg(&snapshot.pages[0]);
+
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("alpha &amp; &lt; &gt; &quot; &apos;"));
+        assert!(svg.contains("[image]"));
+        assert!(svg.contains("[table]"));
+    }
+
+    #[test]
     fn reads_render_snapshot_from_temp_sample_hwp() -> Result<(), Box<dyn Error>> {
         let temp_dir = unique_temp_dir();
         fs::create_dir_all(&temp_dir)?;
@@ -689,6 +953,21 @@ mod tests {
             let summary = read_render_snapshot_summary(&sample_path)?;
             assert!(summary.page_count >= 1);
             assert_eq!(summary.page_count, summary.pages.len());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn renders_local_sample_documents_to_visual_svg_when_present() -> Result<(), Box<dyn Error>> {
+        let sample_paths = find_sample_documents(Path::new(env!("CARGO_MANIFEST_DIR")))?;
+
+        for sample_path in sample_paths {
+            let snapshot = read_render_snapshot(&sample_path)?;
+            let svg = render_snapshot_to_svg(&snapshot);
+
+            assert!(svg.contains("<svg"));
+            assert_eq!(snapshot.pages.len(), snapshot.summary().page_count);
         }
 
         Ok(())
@@ -785,6 +1064,55 @@ mod tests {
             .expect("system clock should be after UNIX_EPOCH")
             .as_nanos();
         std::env::temp_dir().join(format!("hwp-convert-render-snapshot-{suffix}"))
+    }
+
+    fn synthetic_snapshot() -> RenderSnapshot {
+        RenderSnapshot {
+            source_path: PathBuf::from("sample.hwp"),
+            pages: vec![RenderPage {
+                page_index: 0,
+                section_index: 0,
+                width: 320.0,
+                height: 240.0,
+                items: vec![
+                    RenderItem::Text(RenderText {
+                        bounds: RenderBounds::from_xywh(12.0, 16.0, 120.0, 14.0),
+                        text: "alpha & < > \" '".to_string(),
+                        char_offsets_x: vec![0.0, 8.0, 16.0],
+                        doc_ref: None,
+                    }),
+                    RenderItem::Image(RenderImage {
+                        bounds: RenderBounds::from_xywh(20.0, 48.0, 96.0, 48.0),
+                        doc_ref: None,
+                    }),
+                    RenderItem::Box(RenderBox {
+                        kind: RenderBoxKind::Table,
+                        bounds: RenderBounds::from_xywh(20.0, 120.0, 140.0, 70.0),
+                        doc_ref: None,
+                        row_count: Some(1),
+                        col_count: Some(2),
+                        cells: vec![
+                            RenderTableCell {
+                                bounds: RenderBounds::from_xywh(20.0, 120.0, 70.0, 70.0),
+                                row: 0,
+                                col: 0,
+                                row_span: 1,
+                                col_span: 1,
+                                cell_index: 0,
+                            },
+                            RenderTableCell {
+                                bounds: RenderBounds::from_xywh(90.0, 120.0, 70.0, 70.0),
+                                row: 0,
+                                col: 1,
+                                row_span: 1,
+                                col_span: 1,
+                                cell_index: 1,
+                            },
+                        ],
+                    }),
+                ],
+            }],
+        }
     }
 
     fn find_sample_documents(root: &Path) -> io::Result<Vec<PathBuf>> {
