@@ -3,6 +3,7 @@ mod cli;
 mod exporter;
 mod hwpx;
 mod ir;
+mod render;
 mod util;
 
 use std::error::Error;
