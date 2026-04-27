@@ -1,5 +1,6 @@
 # Rust build output
 /target/
+target/render-check/
 
 # IntelliJ IDEA
 .idea/
@@ -7,6 +8,7 @@
 out/
 
 # Local test files
+sample.hwp
 sample.hwpx
 sample.txt
 
