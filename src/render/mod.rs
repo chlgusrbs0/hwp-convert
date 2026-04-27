@@ -13,6 +13,7 @@
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt::Write as _;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -37,9 +38,41 @@ pub fn render_page_svg(input_path: &Path, page_index: u32) -> Result<String, Box
         .map_err(|error| render_error("render SVG page", error))
 }
 
+pub fn write_render_snapshot_visual_check(
+    input_path: &Path,
+    output_dir: &Path,
+) -> Result<RenderVisualCheckArtifact, Box<dyn Error>> {
+    let snapshot = read_render_snapshot(input_path)?;
+    let summary = snapshot.summary();
+    let svg = render_snapshot_to_svg(&snapshot);
+
+    fs::create_dir_all(output_dir)?;
+
+    let file_stem = input_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("sample");
+
+    let svg_path = output_dir.join(format!("{file_stem}.render-snapshot.svg"));
+    let summary_path = output_dir.join(format!("{file_stem}.render-snapshot-summary.json"));
+
+    fs::write(&svg_path, svg)?;
+    fs::write(&summary_path, serde_json::to_string_pretty(&summary)?)?;
+
+    Ok(RenderVisualCheckArtifact {
+        source_path: input_path.to_path_buf(),
+        svg_path,
+        summary_path,
+        summary,
+    })
+}
+
 pub fn render_page_to_svg(page: &RenderPage) -> String {
     // Experimental path: use rhwp renderer query coordinates as-is without
     // normalizing units or redefining a layout coordinate standard.
+    // TODO(v7.3): Real-sample validation is still needed for clipping, z-order,
+    // and baseline/font-size fidelity. This path remains inspection-only.
     let width = sanitized_size(page.width, 1.0);
     let height = sanitized_size(page.height, 1.0);
     let mut svg = String::new();
@@ -62,6 +95,8 @@ pub fn render_page_to_svg(page: &RenderPage) -> String {
 pub fn render_snapshot_to_svg(snapshot: &RenderSnapshot) -> String {
     // Experimental path: use rhwp renderer query coordinates as-is without
     // normalizing units or redefining a layout coordinate standard.
+    // TODO(v7.3): Images and non-text controls still render as placeholders.
+    // Real image embedding and full table paint remain intentionally out of scope.
     const PAGE_MARGIN: f64 = 16.0;
     const PAGE_GAP: f64 = 24.0;
 
@@ -192,6 +227,7 @@ impl RenderSnapshot {
             image_item_count: pages.iter().map(|page| page.image_item_count).sum(),
             table_item_count: pages.iter().map(|page| page.table_item_count).sum(),
             control_item_count: pages.iter().map(|page| page.control_item_count).sum(),
+            other_control_item_count: pages.iter().map(|page| page.other_control_item_count).sum(),
             pages,
         }
     }
@@ -205,6 +241,7 @@ pub struct RenderSnapshotSummary {
     pub image_item_count: usize,
     pub table_item_count: usize,
     pub control_item_count: usize,
+    pub other_control_item_count: usize,
     pub pages: Vec<RenderPageSummary>,
 }
 
@@ -235,6 +272,8 @@ impl RenderPage {
                     summary.control_item_count += 1;
                     if render_box.kind == RenderBoxKind::Table {
                         summary.table_item_count += 1;
+                    } else {
+                        summary.other_control_item_count += 1;
                     }
                 }
             }
@@ -251,6 +290,15 @@ pub struct RenderPageSummary {
     pub image_item_count: usize,
     pub table_item_count: usize,
     pub control_item_count: usize,
+    pub other_control_item_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenderVisualCheckArtifact {
+    pub source_path: PathBuf,
+    pub svg_path: PathBuf,
+    pub summary_path: PathBuf,
+    pub summary: RenderSnapshotSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -938,6 +986,10 @@ mod tests {
         assert!(summary.image_item_count >= 1);
         assert!(summary.table_item_count >= 1);
         assert!(summary.control_item_count >= 2);
+        assert_eq!(
+            summary.other_control_item_count,
+            summary.control_item_count - summary.image_item_count - summary.table_item_count
+        );
 
         fs::remove_file(&sample_path)?;
         fs::remove_dir_all(&temp_dir)?;
@@ -947,7 +999,8 @@ mod tests {
 
     #[test]
     fn summarizes_local_sample_documents_when_present() -> Result<(), Box<dyn Error>> {
-        let sample_paths = find_sample_documents(Path::new(env!("CARGO_MANIFEST_DIR")))?;
+        let sample_paths =
+            find_project_root_sample_documents(Path::new(env!("CARGO_MANIFEST_DIR")))?;
 
         for sample_path in sample_paths {
             let summary = read_render_snapshot_summary(&sample_path)?;
@@ -960,7 +1013,8 @@ mod tests {
 
     #[test]
     fn renders_local_sample_documents_to_visual_svg_when_present() -> Result<(), Box<dyn Error>> {
-        let sample_paths = find_sample_documents(Path::new(env!("CARGO_MANIFEST_DIR")))?;
+        let sample_paths =
+            find_project_root_sample_documents(Path::new(env!("CARGO_MANIFEST_DIR")))?;
 
         for sample_path in sample_paths {
             let snapshot = read_render_snapshot(&sample_path)?;
@@ -968,6 +1022,26 @@ mod tests {
 
             assert!(svg.contains("<svg"));
             assert_eq!(snapshot.pages.len(), snapshot.summary().page_count);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn writes_local_sample_visual_check_artifacts_when_present() -> Result<(), Box<dyn Error>> {
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let sample_paths = find_project_root_sample_documents(project_root)?;
+        let output_dir = project_root.join("target").join("render-check");
+
+        for sample_path in sample_paths {
+            let artifact = write_render_snapshot_visual_check(&sample_path, &output_dir)?;
+            assert!(artifact.svg_path.exists());
+            assert!(artifact.summary_path.exists());
+            assert!(artifact.summary.page_count >= 1);
+
+            let svg = fs::read_to_string(&artifact.svg_path)?;
+            assert!(svg.contains("<svg"));
+            assert!(svg.contains("class=\"page-boundary\""));
         }
 
         Ok(())
@@ -1115,38 +1189,27 @@ mod tests {
         }
     }
 
-    fn find_sample_documents(root: &Path) -> io::Result<Vec<PathBuf>> {
+    fn find_project_root_sample_documents(root: &Path) -> io::Result<Vec<PathBuf>> {
         let mut found = Vec::new();
-        collect_sample_documents(root, &mut found)?;
-        found.sort();
-        Ok(found)
-    }
 
-    fn collect_sample_documents(root: &Path, found: &mut Vec<PathBuf>) -> io::Result<()> {
         for entry in fs::read_dir(root)? {
             let entry = entry?;
-            let path = entry.path();
-            let file_type = entry.file_type()?;
-
-            if file_type.is_dir() {
-                if entry.file_name() == "target" {
-                    continue;
-                }
-                collect_sample_documents(&path, found)?;
+            if !entry.file_type()?.is_file() {
                 continue;
             }
 
-            if file_type.is_file()
-                && path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name == "sample.hwp" || name == "sample.hwpx")
+            let path = entry.path();
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "sample.hwp" || name == "sample.hwpx")
             {
                 found.push(path);
             }
         }
 
-        Ok(())
+        found.sort();
+        Ok(found)
     }
 
     fn tiny_png_bytes() -> Vec<u8> {
