@@ -36,13 +36,13 @@
 | shape | 예 | 부분 | 부분 | 부분<br>JSON/HTML/Markdown/TXT/SVG 모두 placeholder/fallback text 위주 | 아니오 | line/rect/ellipse/arc/polygon/curve/group/picture를 받아도 IR에는 `kind`, `fallback_text`, `description`만 남긴다. geometry, border/fill, text box, caption, child shape 정보가 소실된다. | `equation_shape_chart` fixture로 대표 shape의 현재 placeholder 동작을 고정한다. |
 | chart | 부분 | 아니오 | 예 | 부분<br>exporter는 `Block::Chart`를 그릴 수 있지만 bridge가 실제 문서에서 그 block을 만들지 못함 | 아니오 | 로컬 `rhwp` source에는 chart tag 흔적이 있지만 `Control::Chart` 같은 bridge-visible model은 없다. 현재 `hwp-convert` bridge 경로에서는 chart를 직접 매핑하지 못한다. | `equation_shape_chart` fixture는 우선 smoke/current-behavior 기록용으로 만들고, 실제 `Chart` block assert는 bridge 경로가 생긴 뒤 추가한다. |
 | unknown element | 부분 | 부분 | 예 | 부분<br>JSON/HTML/Markdown/TXT/SVG 모두 `fallback_text` 중심 | 아니오 | `Control::Unknown`은 `UnknownBlock`으로 감싸지만, `SectionDef`, `ColumnDef`, `Bookmark`, `Ruby`, `Form`, hyperlink 이외 `Field` 같은 known-but-unmapped control은 그냥 버려진다. `UnknownInline`도 현재 bridge에서 거의 쓰지 않는다. | `kitchen_sink` fixture에 unknown/ignored control이 섞인 문서를 넣고, 최소한 현재 누락 지점을 문서화하는 regression test를 설계한다. |
-| render snapshot | 해당 없음 | 아니오 | 아니오 | 아니오<br>현재 SVG exporter는 render snapshot이 아니라 plain text SVG | 아니오 | 저장소 안에 `RenderSnapshot` 모델이나 renderer integration이 없다. `rhwp` renderer를 직접 호출하지도 않는다. | semantic fixture coverage를 먼저 만든 뒤, 별도 snapshot abstraction 또는 renderer integration을 검토한다. |
+| render snapshot | 예 | 아니오 | 아니오 | 아니오<br>기본 CLI/exporter 경로의 `--to svg`는 RenderSnapshot visual SVG가 아니라 semantic/plain-text 기반 SVG exporter | 부분<br>`src/render/mod.rs`에 `RenderSnapshot`, `RenderSnapshotSummary`, `render_page_svg`, `write_render_snapshot_visual_check`가 있고 `rhwp::DocumentCore`와 rhwp renderer query API를 사용한다. | RenderSnapshot은 semantic Document IR과 분리된 experimental visual path다. 기본 사용자 경로에는 노출되지 않는다. visual SVG, summary, visual-check helper는 있지만 fidelity는 아직 낮고 이미지, 표, 도형 등은 placeholder 중심이다. | 기본 SVG fixture와 분리해서 RenderSnapshot visual SVG/summary/visual-check smoke를 별도 diagnostics fixture로 둔다. |
 
 ## 핵심 관찰
 
 1. 현재 bridge의 가장 안정적인 경로는 `text -> paragraph -> simple table/list/link -> JSON/HTML/Markdown/TXT/SVG`다.
 2. 이미지와 resource는 IR까지는 들어오지만, exporter가 asset bundle을 쓰지 않아서 HTML/Markdown의 실제 참조가 완결되지 않는다.
-3. chart와 render snapshot은 사실상 미지원 영역이다.
+3. chart는 bridge 기준으로 사실상 미지원이다. RenderSnapshot은 존재하지만 semantic IR/기본 CLI exporter와 분리된 experimental visual path다.
 4. unknown element 처리도 절반만 되어 있다. `UnknownControl`은 잡지만, 많은 known-but-unmapped control은 warning 없이 사라질 수 있다.
 
 ## 우선순위

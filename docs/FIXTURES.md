@@ -8,8 +8,9 @@
 1. 모든 fixture는 가능하면 `HWP`와 `HWPX`를 같은 의미 내용으로 한 쌍으로 둔다.
 2. 기대값은 "이상적인 미래 상태"가 아니라 "현재 코드가 보장해야 하는 상태"를 먼저 고정한다.
 3. 이미지 bytes 전체, HWP 내부 ID, warning 순서처럼 흔들릴 수 있는 값은 전체 비교보다 부분 비교를 우선한다.
-4. SVG는 현재 render snapshot이 아니라 plain text fallback 출력으로 다룬다.
-5. `equation_shape_chart`와 `kitchen_sink`는 누락 영역을 드러내는 smoke/regression fixture 역할도 해야 한다.
+4. 기본 SVG fixture는 현재 CLI의 `--to svg` 결과, 즉 semantic/plain-text 기반 SVG exporter 출력을 기준으로 다룬다.
+5. RenderSnapshot 기반 visual SVG와 visual-check artifact는 기본 SVG golden과 섞지 않고 별도 fixture 또는 diagnostics smoke로 분리한다.
+6. `equation_shape_chart`와 `kitchen_sink`는 누락 영역을 드러내는 smoke/regression fixture 역할도 해야 한다.
 
 ## 권장 fixture 구조
 
@@ -24,7 +25,12 @@ tests/fixtures/<fixture_name>/
     markdown.md
     html.html
     svg.svg
+  diagnostics/
+    render-snapshot.svg
+    render-snapshot-summary.json
 ```
+
+`diagnostics/`는 RenderSnapshot 경로를 검증하는 fixture에만 둔다. 일반 exporter golden의 `svg.svg`는 계속 CLI `--to svg` 결과를 의미한다.
 
 권장 비교 레이어:
 
