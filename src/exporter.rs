@@ -429,12 +429,13 @@ fn write_html_output(
     output_path: &Path,
     document: &Document,
 ) -> Result<(), io::Error> {
-    write_html_image_assets(output_path, &document.resources)?;
+    write_image_assets(output_path, &document.resources)?;
     let html = render_html_document(input_path, document);
     fs::write(output_path, html)
 }
 
 fn write_markdown_output(output_path: &Path, document: &Document) -> Result<(), io::Error> {
+    write_image_assets(output_path, &document.resources)?;
     let markdown = render_markdown_document(document);
     fs::write(output_path, markdown)
 }
@@ -1258,7 +1259,7 @@ fn render_markdown_image(image: &Image, resources: &ResourceStore) -> String {
     format!("![{alt}]({path})")
 }
 
-fn write_html_image_assets(output_path: &Path, resources: &ResourceStore) -> Result<(), io::Error> {
+fn write_image_assets(output_path: &Path, resources: &ResourceStore) -> Result<(), io::Error> {
     let image_resources = resources
         .entries
         .iter()
@@ -1272,7 +1273,7 @@ fn write_html_image_assets(output_path: &Path, resources: &ResourceStore) -> Res
         return Ok(());
     }
 
-    let asset_dir = html_asset_dir(output_path);
+    let asset_dir = image_asset_dir(output_path);
     fs::create_dir_all(&asset_dir)?;
 
     for image in image_resources {
@@ -1283,7 +1284,7 @@ fn write_html_image_assets(output_path: &Path, resources: &ResourceStore) -> Res
     Ok(())
 }
 
-fn html_asset_dir(output_path: &Path) -> PathBuf {
+fn image_asset_dir(output_path: &Path) -> PathBuf {
     output_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

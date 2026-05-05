@@ -44,6 +44,8 @@ The project now has two separate output paths:
 - Exporters must not read `rhwp` parser or renderer types directly.
 - The current `--to svg` behavior remains the semantic exporter path and is not replaced by renderer experiments.
 
+Asset output policy today is intentionally narrow: HTML and Markdown exports write `Resource::Image` bytes next to the output document under `images/`, then reference those files with relative `images/...` paths. The file name comes from the shared resource file-name rule. TXT, JSON, semantic SVG, and RenderSnapshot diagnostics do not share this asset writer.
+
 ### 5. `RenderSnapshot` and the visual path
 
 `src/render` contains the renderer-first experimental path.
@@ -157,7 +159,7 @@ The project now has two separate output paths:
 - Renderer-first image output is still placeholder-based. Image bytes are not embedded into SVG.
 - Renderer-first table output is still placeholder-oriented and does not implement full table visual fidelity.
 - PDF output is a separate future stage.
-- Asset bundle policy across exporters and diagnostics still needs a dedicated design pass.
+- Asset bundle policy beyond HTML/Markdown image files and renderer diagnostics still needs a dedicated design pass.
 
 ## Practical Guidance
 

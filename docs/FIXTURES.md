@@ -51,7 +51,7 @@ tests/fixtures/<fixture_name>/
 | `style` | P0 | style | bold, italic, underline, strike, font family, font size, text color, background color, 정렬, before/after spacing, indent | `TextStyle`, `ParagraphStyle`, `style_ref`, `StyleSheet.text_styles`, `StyleSheet.paragraph_styles` | JSON/HTML golden, Markdown에는 bold/italic만 유지되는 현재 동작 확인 | table/cell 배경색은 table fixture와 중복되지 않게 최소만 포함 |
 | `table` | P0 | table | 2x2 또는 3x2 단순 표, 각 셀은 단일 문단 텍스트 | `Block::Table`, row/cell count, 각 cell의 nested paragraph | HTML `<table>` 구조, Markdown simple table 유지, TXT/SVG fallback 텍스트 확인 | Markdown 표 경로를 살리려면 병합/복합 block 없이 단순 셀 유지 |
 | `merged_table` | P0 | merged table cell | row span 1개, col span 1개가 모두 있는 표 | 해당 cell의 `row_span`/`col_span` 값 고정 | HTML `rowspan`/`colspan` 확인, Markdown은 plain text fallback으로 내려가는 현재 동작 확인 | 표 병합 지원이 깨지면 바로 잡을 수 있는 fixture |
-| `image` | P0 | image, resource | png 또는 jpg 1개, description 기반 alt, 가능하면 caption 1개 | `Block::Image`, `ImageResource`, resource id, extension/media type, bytes 비어 있지 않음, width/height 힌트 | JSON resource 보존, HTML/Markdown `images/<id>.<ext>` 참조 문자열, TXT/SVG fallback 문구 확인 | 현재 asset bundle writer가 없다는 한계를 드러내는 fixture |
+| `image` | P0 | image, resource | png 또는 jpg 1개, description 기반 alt, 가능하면 caption 1개 | `Block::Image`, `ImageResource`, resource id, extension/media type, bytes 비어 있지 않음, width/height 힌트 | JSON resource 보존, HTML/Markdown `images/<id>.<ext>` 참조 문자열과 asset 파일 존재, TXT/SVG fallback 문구 확인 | HTML/Markdown asset writer의 기본 회귀 fixture |
 | `link_list` | P1 | link, list | hyperlink field 1개, hyperlink control 1개, bullet list, ordered list, nested list, numbering restart | `Inline::Link`, URL/label, `ListInfo.kind/level/number`, bullet marker 비어 있지 않음 | HTML/Markdown URL 유지, TXT/SVG prefix/fallback 확인 | list와 link가 같은 문서에서 같이 깨지기 쉬워 묶는 편이 효율적 |
 | `note_header_footer` | P1 | header/footer, footnote/endnote | header 1개, footer 1개, 본문 문단 안 footnote/endnote 각각 1개 | `Section.headers/footers`, `NoteStore`, note kind/id, trailing note ref append warning 발생 | HTML/Markdown note section, TXT/SVG 선형화 결과 확인 | note ref 위치가 정확하지 않다는 현재 제약을 fixture에 명시 |
 | `equation_shape_chart` | P2 | equation, shape, chart | equation 1개, 대표 shape 2~3개, chart 1개 | equation은 `Block::Equation`과 script/fallback 확인, shape는 placeholder 수준 정보 확인, chart는 우선 smoke/current-behavior 기록 | HTML/Markdown/TXT/SVG placeholder 출력 또는 누락 여부를 현재 상태 그대로 기록 | chart는 bridge 미지원이라 초기에는 "지원 안 됨"을 드러내는 fixture로 사용 |
@@ -84,7 +84,7 @@ tests/fixtures/<fixture_name>/
 ### `image`
 
 - resource bytes 전체를 golden file로 박제하지 말고, `resource_id`, `extension`, `media_type`, `bytes.len() > 0` 정도만 확인한다.
-- HTML/Markdown export는 현재 image asset 파일이 실제로 써지지 않으므로, 참조 문자열 생성까지만 현재 기대값으로 둔다.
+- HTML/Markdown export는 출력 문서 옆 `images/` 디렉터리에 image asset을 쓰고 `images/<resource_file_name>`로 참조하는 것을 현재 기대값으로 둔다.
 
 ### `link_list`
 
