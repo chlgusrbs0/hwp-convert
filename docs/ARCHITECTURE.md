@@ -44,7 +44,7 @@ The project now has two separate output paths:
 - Exporters must not read `rhwp` parser or renderer types directly.
 - The current `--to svg` behavior remains the semantic exporter path and is not replaced by renderer experiments.
 
-Asset output policy today is intentionally narrow: HTML and Markdown exports write `Resource::Image` bytes next to the output document under `images/`, then reference those files with relative `images/...` paths. The file name comes from the shared resource file-name rule. TXT, JSON, semantic SVG, and RenderSnapshot diagnostics do not share this asset writer.
+Asset output policy today is intentionally narrow: HTML and Markdown exports write `Resource::Image` bytes under a document-scoped asset directory based on the output file stem. For example, `out/sample.html` and `out/sample.md` reference `sample_assets/images/image-1.png`, with bytes written to `out/sample_assets/images/image-1.png`. This replaces the older shared sibling `images/` directory policy so multiple output documents in one directory do not collide on names like `image-1.png`. The file name still comes from the shared resource file-name rule. TXT, JSON, semantic SVG, and RenderSnapshot diagnostics do not share this asset writer.
 
 ### 5. `RenderSnapshot` and the visual path
 

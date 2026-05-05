@@ -13,8 +13,11 @@ use crate::ir::{
     HeaderFooterPlacement, Image, Inline, Link, ListInfo, ListKind, Note, NoteId, NoteKind,
     Paragraph, ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, Table,
     TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
+    UnknownInline,
 };
 use crate::util::plain_text;
+
+const DEFAULT_IMAGE_ASSET_PUBLIC_PREFIX: &str = "document_assets/images";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportedFile {
@@ -429,14 +432,18 @@ fn write_html_output(
     output_path: &Path,
     document: &Document,
 ) -> Result<(), io::Error> {
-    write_image_assets(output_path, &document.resources)?;
-    let html = render_html_document(input_path, document);
+    let image_assets = image_asset_paths(output_path);
+    write_image_assets(&image_assets, &document.resources)?;
+    let html =
+        render_html_document_with_asset_prefix(input_path, document, &image_assets.public_prefix);
     fs::write(output_path, html)
 }
 
 fn write_markdown_output(output_path: &Path, document: &Document) -> Result<(), io::Error> {
-    write_image_assets(output_path, &document.resources)?;
-    let markdown = render_markdown_document(document);
+    let image_assets = image_asset_paths(output_path);
+    write_image_assets(&image_assets, &document.resources)?;
+    let markdown =
+        render_markdown_document_with_asset_prefix(document, &image_assets.public_prefix);
     fs::write(output_path, markdown)
 }
 
@@ -502,14 +509,24 @@ fn render_svg_document(input_path: &Path, paragraphs: &[String]) -> String {
 }
 
 fn render_html_document(input_path: &Path, document: &Document) -> String {
+    let output_path = input_path.with_extension("html");
+    let asset_prefix = image_asset_public_prefix(&output_path);
+    render_html_document_with_asset_prefix(input_path, document, &asset_prefix)
+}
+
+fn render_html_document_with_asset_prefix(
+    input_path: &Path,
+    document: &Document,
+    image_asset_prefix: &str,
+) -> String {
     let file_name = input_path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("document");
     let title = escape_html(&format!("{file_name} text export"));
 
-    let document_nodes = render_html_sections(document);
-    let note_nodes = render_html_notes(document);
+    let document_nodes = render_html_sections(document, image_asset_prefix);
+    let note_nodes = render_html_notes(document, image_asset_prefix);
 
     format!(
         "<!DOCTYPE html>\n\
@@ -630,11 +647,15 @@ fn render_html_document(input_path: &Path, document: &Document) -> String {
     )
 }
 
-fn render_html_sections(document: &Document) -> String {
+fn render_html_sections(document: &Document, image_asset_prefix: &str) -> String {
     let mut document_nodes = String::new();
 
     for section in &document.sections {
-        document_nodes.push_str(&render_html_section(section, &document.resources));
+        document_nodes.push_str(&render_html_section(
+            section,
+            &document.resources,
+            image_asset_prefix,
+        ));
     }
 
     if document_nodes.is_empty() {
@@ -644,17 +665,31 @@ fn render_html_sections(document: &Document) -> String {
     document_nodes
 }
 
-fn render_html_section(section: &Section, resources: &ResourceStore) -> String {
+fn render_html_section(
+    section: &Section,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let mut nodes = String::new();
 
     for header in &section.headers {
-        nodes.push_str(&render_html_header_footer("header", header, resources));
+        nodes.push_str(&render_html_header_footer(
+            "header",
+            header,
+            resources,
+            image_asset_prefix,
+        ));
     }
     for block in &section.blocks {
-        nodes.push_str(&render_html_block(block, resources));
+        nodes.push_str(&render_html_block(block, resources, image_asset_prefix));
     }
     for footer in &section.footers {
-        nodes.push_str(&render_html_header_footer("footer", footer, resources));
+        nodes.push_str(&render_html_header_footer(
+            "footer",
+            footer,
+            resources,
+            image_asset_prefix,
+        ));
     }
 
     nodes
@@ -664,11 +699,12 @@ fn render_html_header_footer(
     tag_name: &str,
     header_footer: &HeaderFooter,
     resources: &ResourceStore,
+    image_asset_prefix: &str,
 ) -> String {
     let content = header_footer
         .blocks
         .iter()
-        .map(|block| render_html_block(block, resources))
+        .map(|block| render_html_block(block, resources, image_asset_prefix))
         .collect::<Vec<_>>()
         .join("");
     let placement = escape_html(header_footer_placement_name(&header_footer.placement));
@@ -676,7 +712,7 @@ fn render_html_header_footer(
     format!("<{tag_name} data-placement=\"{placement}\">{content}</{tag_name}>\n")
 }
 
-fn render_html_notes(document: &Document) -> String {
+fn render_html_notes(document: &Document, image_asset_prefix: &str) -> String {
     if document.notes.notes.is_empty() {
         return String::new();
     }
@@ -685,40 +721,36 @@ fn render_html_notes(document: &Document) -> String {
         .notes
         .notes
         .iter()
-        .map(|note| render_html_note(note, &document.resources))
+        .map(|note| render_html_note(note, &document.resources, image_asset_prefix))
         .collect::<Vec<_>>()
         .join("");
 
     format!("<section class=\"notes\">\n<h2>주석</h2>\n<ol>\n{note_items}</ol>\n</section>\n")
 }
 
-fn render_html_note(note: &Note, resources: &ResourceStore) -> String {
+fn render_html_note(note: &Note, resources: &ResourceStore, image_asset_prefix: &str) -> String {
     let id = escape_html(&note_html_anchor_id(&note.id));
     let kind = escape_html(note_kind_name(&note.kind));
     let content = note
         .blocks
         .iter()
-        .map(|block| render_html_block(block, resources))
+        .map(|block| render_html_block(block, resources, image_asset_prefix))
         .collect::<Vec<_>>()
         .join("");
 
     format!("<li id=\"{id}\" data-kind=\"{kind}\">{content}</li>\n")
 }
 
-fn render_html_block(block: &Block, resources: &ResourceStore) -> String {
+fn render_html_block(block: &Block, resources: &ResourceStore, image_asset_prefix: &str) -> String {
     match block {
         Block::Paragraph(paragraph) => render_html_paragraph(paragraph),
-        Block::Table(table) => render_html_table(table, resources),
-        Block::Image(image) => render_html_image(image, resources),
+        Block::Table(table) => render_html_table(table, resources, image_asset_prefix),
+        Block::Image(image) => render_html_image(image, resources, image_asset_prefix),
         Block::Equation(equation) => render_html_equation(equation),
         Block::Shape(shape) => render_html_shape(shape),
         Block::Chart(chart) => render_html_chart(chart),
         Block::Unknown(unknown) => {
-            let content = unknown
-                .fallback_text
-                .as_deref()
-                .map(render_html_fallback_text)
-                .unwrap_or_default();
+            let content = render_html_fallback_text(&unknown_block_display_text(unknown));
             format!("<p>{content}</p>\n")
         }
     }
@@ -751,9 +783,9 @@ fn render_html_inlines(inlines: &[Inline]) -> String {
                 content.push_str(&render_html_note_ref(note_id, NoteKind::Endnote));
             }
             Inline::Unknown(unknown) => {
-                if let Some(fallback) = &unknown.fallback_text {
-                    content.push_str(&render_html_fallback_text(fallback));
-                }
+                content.push_str(&render_html_fallback_text(&unknown_inline_display_text(
+                    unknown,
+                )));
             }
         }
     }
@@ -960,36 +992,82 @@ fn header_footer_placement_name(placement: &HeaderFooterPlacement) -> &'static s
 }
 
 fn equation_display_text(equation: &Equation) -> String {
-    equation
+    let text = equation
         .fallback_text
-        .clone()
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
         .or_else(|| {
             if matches!(
                 equation.kind,
                 EquationKind::PlainText | EquationKind::Latex | EquationKind::MathMl
             ) {
-                equation.content.clone()
+                equation
+                    .content
+                    .as_deref()
+                    .filter(|text| !text.is_empty())
+                    .map(ToOwned::to_owned)
             } else {
                 None
             }
         })
-        .unwrap_or_else(|| "[수식]".to_string())
+        .unwrap_or_else(|| "unsupported".to_string());
+
+    format!("[equation: {text}]")
 }
 
 fn shape_display_text(shape: &Shape) -> String {
-    shape
+    let text = shape
         .fallback_text
-        .clone()
-        .or_else(|| shape.description.clone())
-        .unwrap_or_else(|| "[도형]".to_string())
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            shape
+                .description
+                .as_deref()
+                .filter(|text| !text.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "unsupported".to_string());
+
+    format!("[shape: {text}]")
 }
 
 fn chart_display_text(chart: &Chart) -> String {
-    chart
+    let text = chart
         .fallback_text
-        .clone()
-        .or_else(|| chart.title.clone())
-        .unwrap_or_else(|| "[차트]".to_string())
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            chart
+                .title
+                .as_deref()
+                .filter(|text| !text.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "unsupported".to_string());
+
+    format!("[chart: {text}]")
+}
+
+fn unknown_block_display_text(unknown: &UnknownBlock) -> String {
+    unknown
+        .fallback_text
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("[unknown: {}]", unknown.kind))
+}
+
+fn unknown_inline_display_text(unknown: &UnknownInline) -> String {
+    unknown
+        .fallback_text
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("[unknown: {}]", unknown.kind))
 }
 
 fn alignment_to_css(alignment: &Alignment) -> &'static str {
@@ -1035,8 +1113,12 @@ fn sanitize_css_font_family(font_family: &str) -> Option<String> {
     }
 }
 
-fn render_html_image(image: &Image, resources: &ResourceStore) -> String {
-    let src = escape_html(&resource_public_path(resources, &image.resource_id));
+fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefix: &str) -> String {
+    let src = escape_html(&resource_public_path(
+        resources,
+        &image.resource_id,
+        image_asset_prefix,
+    ));
     let alt = escape_html(image.alt.as_deref().unwrap_or(image.resource_id.as_str()));
     let width = image
         .width
@@ -1058,32 +1140,40 @@ fn render_html_image(image: &Image, resources: &ResourceStore) -> String {
     format!("{tag}\n")
 }
 
-fn render_html_table(table: &Table, resources: &ResourceStore) -> String {
+fn render_html_table(table: &Table, resources: &ResourceStore, image_asset_prefix: &str) -> String {
     let mut html = format!(
         "<table{}>\n",
         render_html_style_attr(&render_html_table_style(&table.style))
     );
 
     for row in &table.rows {
-        html.push_str(&render_html_table_row(row, resources));
+        html.push_str(&render_html_table_row(row, resources, image_asset_prefix));
     }
 
     html.push_str("</table>\n");
     html
 }
 
-fn render_html_table_row(row: &TableRow, resources: &ResourceStore) -> String {
+fn render_html_table_row(
+    row: &TableRow,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let mut html = String::from("<tr>\n");
 
     for cell in &row.cells {
-        html.push_str(&render_html_table_cell(cell, resources));
+        html.push_str(&render_html_table_cell(cell, resources, image_asset_prefix));
     }
 
     html.push_str("</tr>\n");
     html
 }
 
-fn render_html_table_cell(cell: &TableCell, resources: &ResourceStore) -> String {
+fn render_html_table_cell(
+    cell: &TableCell,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let rowspan = if cell.row_span > 1 {
         format!(" rowspan=\"{}\"", cell.row_span)
     } else {
@@ -1094,21 +1184,32 @@ fn render_html_table_cell(cell: &TableCell, resources: &ResourceStore) -> String
     } else {
         String::new()
     };
-    let content = render_html_table_cell_blocks(&cell.blocks, resources);
+    let content = render_html_table_cell_blocks(&cell.blocks, resources, image_asset_prefix);
     let style = render_html_style_attr(&render_html_table_cell_style(&cell.style));
 
     format!("<td{rowspan}{colspan}{style}>{content}</td>\n")
 }
 
-fn render_html_table_cell_blocks(blocks: &[Block], resources: &ResourceStore) -> String {
+fn render_html_table_cell_blocks(
+    blocks: &[Block],
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     blocks
         .iter()
-        .map(|block| render_html_block(block, resources))
+        .map(|block| render_html_block(block, resources, image_asset_prefix))
         .collect::<Vec<_>>()
         .join("")
 }
 
 fn render_markdown_document(document: &Document) -> String {
+    render_markdown_document_with_asset_prefix(document, DEFAULT_IMAGE_ASSET_PUBLIC_PREFIX)
+}
+
+fn render_markdown_document_with_asset_prefix(
+    document: &Document,
+    image_asset_prefix: &str,
+) -> String {
     let mut blocks = Vec::new();
 
     for section in &document.sections {
@@ -1117,34 +1218,48 @@ fn render_markdown_document(document: &Document) -> String {
                 "머리말",
                 header,
                 &document.resources,
+                image_asset_prefix,
             ));
         }
         for block in &section.blocks {
-            blocks.push(render_markdown_block(block, &document.resources));
+            blocks.push(render_markdown_block(
+                block,
+                &document.resources,
+                image_asset_prefix,
+            ));
         }
         for footer in &section.footers {
             blocks.push(render_markdown_header_footer(
                 "꼬리말",
                 footer,
                 &document.resources,
+                image_asset_prefix,
             ));
         }
     }
 
     if !document.notes.notes.is_empty() {
         for note in &document.notes.notes {
-            blocks.push(render_markdown_note(note, &document.resources));
+            blocks.push(render_markdown_note(
+                note,
+                &document.resources,
+                image_asset_prefix,
+            ));
         }
     }
 
     blocks.join("\n\n")
 }
 
-fn render_markdown_block(block: &Block, resources: &ResourceStore) -> String {
+fn render_markdown_block(
+    block: &Block,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     match block {
         Block::Paragraph(paragraph) => render_markdown_paragraph(paragraph),
         Block::Table(table) => render_markdown_table(table),
-        Block::Image(image) => render_markdown_image(image, resources),
+        Block::Image(image) => render_markdown_image(image, resources, image_asset_prefix),
         Block::Equation(equation) => render_markdown_equation(equation),
         Block::Shape(shape) => render_markdown_shape(shape),
         Block::Chart(chart) => render_markdown_chart(chart),
@@ -1153,11 +1268,7 @@ fn render_markdown_block(block: &Block, resources: &ResourceStore) -> String {
 }
 
 fn render_markdown_unknown_block(unknown: &UnknownBlock) -> String {
-    unknown
-        .fallback_text
-        .as_deref()
-        .map(render_markdown_text)
-        .unwrap_or_default()
+    render_markdown_text(&unknown_block_display_text(unknown))
 }
 
 fn render_markdown_paragraph(paragraph: &Paragraph) -> String {
@@ -1182,9 +1293,7 @@ fn render_markdown_inlines(inlines: &[Inline]) -> String {
             Inline::FootnoteRef { note_id } => content.push_str(&render_markdown_note_ref(note_id)),
             Inline::EndnoteRef { note_id } => content.push_str(&render_markdown_note_ref(note_id)),
             Inline::Unknown(unknown) => {
-                if let Some(fallback) = &unknown.fallback_text {
-                    content.push_str(&render_markdown_text(fallback));
-                }
+                content.push_str(&render_markdown_text(&unknown_inline_display_text(unknown)));
             }
         }
     }
@@ -1252,14 +1361,27 @@ fn render_markdown_table_cell(cell: &TableCell) -> String {
     escape_markdown_table_cell(&plain_text::blocks_to_plain_text(&cell.blocks).replace('\n', " "))
 }
 
-fn render_markdown_image(image: &Image, resources: &ResourceStore) -> String {
+fn render_markdown_image(
+    image: &Image,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let alt = escape_markdown_image_alt(image.alt.as_deref().unwrap_or(image.resource_id.as_str()));
-    let path = resource_public_path(resources, &image.resource_id);
+    let path = resource_public_path(resources, &image.resource_id, image_asset_prefix);
 
     format!("![{alt}]({path})")
 }
 
-fn write_image_assets(output_path: &Path, resources: &ResourceStore) -> Result<(), io::Error> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImageAssetPaths {
+    output_dir: PathBuf,
+    public_prefix: String,
+}
+
+fn write_image_assets(
+    image_assets: &ImageAssetPaths,
+    resources: &ResourceStore,
+) -> Result<(), io::Error> {
     let image_resources = resources
         .entries
         .iter()
@@ -1273,7 +1395,7 @@ fn write_image_assets(output_path: &Path, resources: &ResourceStore) -> Result<(
         return Ok(());
     }
 
-    let asset_dir = image_asset_dir(output_path);
+    let asset_dir = &image_assets.output_dir;
     fs::create_dir_all(&asset_dir)?;
 
     for image in image_resources {
@@ -1285,11 +1407,56 @@ fn write_image_assets(output_path: &Path, resources: &ResourceStore) -> Result<(
 }
 
 fn image_asset_dir(output_path: &Path) -> PathBuf {
-    output_path
+    image_asset_paths(output_path).output_dir
+}
+
+fn image_asset_public_prefix(output_path: &Path) -> String {
+    image_asset_paths(output_path).public_prefix
+}
+
+fn image_asset_paths(output_path: &Path) -> ImageAssetPaths {
+    let asset_root = format!("{}_assets", sanitized_output_file_stem(output_path));
+    let output_dir = output_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
-        .join("images")
+        .join(&asset_root)
+        .join("images");
+
+    ImageAssetPaths {
+        output_dir,
+        public_prefix: format!("{asset_root}/images"),
+    }
+}
+
+fn sanitized_output_file_stem(output_path: &Path) -> String {
+    let stem = output_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("document");
+    sanitize_asset_path_segment(stem)
+}
+
+fn sanitize_asset_path_segment(segment: &str) -> String {
+    let mut sanitized = String::new();
+    let mut previous_was_separator = false;
+
+    for ch in segment.chars() {
+        if ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            sanitized.push(ch);
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            sanitized.push('_');
+            previous_was_separator = true;
+        }
+    }
+
+    let sanitized = sanitized.trim_matches(|ch| ch == '_' || ch == '.');
+    if sanitized.is_empty() {
+        "document".to_string()
+    } else {
+        sanitized.to_string()
+    }
 }
 
 fn render_markdown_equation(equation: &Equation) -> String {
@@ -1333,11 +1500,9 @@ fn markdown_link_label_inline(inline: &Inline) -> String {
         Inline::Link(link) => render_markdown_link_label(&link.inlines),
         Inline::FootnoteRef { note_id } => format!("[^{}]", note_id.as_str()),
         Inline::EndnoteRef { note_id } => format!("[^{}]", note_id.as_str()),
-        Inline::Unknown(unknown) => unknown
-            .fallback_text
-            .as_deref()
-            .map(escape_markdown_image_alt)
-            .unwrap_or_default(),
+        Inline::Unknown(unknown) => {
+            escape_markdown_image_alt(&unknown_inline_display_text(unknown))
+        }
     }
 }
 
@@ -1345,12 +1510,16 @@ fn render_markdown_note_ref(note_id: &NoteId) -> String {
     format!("[^{}]", escape_markdown_note_id(note_id.as_str()))
 }
 
-fn render_markdown_note(note: &Note, resources: &ResourceStore) -> String {
+fn render_markdown_note(
+    note: &Note,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let note_id = escape_markdown_note_id(note.id.as_str());
     let content = note
         .blocks
         .iter()
-        .map(|block| render_markdown_block(block, resources))
+        .map(|block| render_markdown_block(block, resources, image_asset_prefix))
         .collect::<Vec<_>>()
         .join(" ");
 
@@ -1361,11 +1530,12 @@ fn render_markdown_header_footer(
     label: &str,
     header_footer: &HeaderFooter,
     resources: &ResourceStore,
+    image_asset_prefix: &str,
 ) -> String {
     let content = header_footer
         .blocks
         .iter()
-        .map(|block| render_markdown_block(block, resources))
+        .map(|block| render_markdown_block(block, resources, image_asset_prefix))
         .collect::<Vec<_>>()
         .join("\n\n");
 
@@ -1380,13 +1550,19 @@ fn render_markdown_header_footer(
 }
 
 fn render_markdown_text_run(run: &TextRun) -> String {
-    let text = render_markdown_text(&run.text);
+    let mut text = render_markdown_text(&run.text);
 
-    match (run.style.bold, run.style.italic) {
+    text = match (run.style.bold, run.style.italic) {
         (true, true) => format!("***{text}***"),
         (true, false) => format!("**{text}**"),
         (false, true) => format!("*{text}*"),
         (false, false) => text,
+    };
+
+    if run.style.strike {
+        format!("~~{text}~~")
+    } else {
+        text
     }
 }
 
@@ -1425,9 +1601,13 @@ fn render_markdown_text(text: &str) -> String {
         .join("  \n")
 }
 
-fn resource_public_path(resources: &ResourceStore, resource_id: &ResourceId) -> String {
+fn resource_public_path(
+    resources: &ResourceStore,
+    resource_id: &ResourceId,
+    image_asset_prefix: &str,
+) -> String {
     let file_name = resource_file_name(resources, resource_id);
-    format!("images/{file_name}")
+    format!("{image_asset_prefix}/{file_name}")
 }
 
 fn resource_file_name(resources: &ResourceStore, resource_id: &ResourceId) -> String {
@@ -2174,12 +2354,48 @@ mod tests {
     }
 
     #[test]
+    fn renders_unknown_fallback_labels_when_text_is_missing() {
+        let document = document_with_blocks(vec![
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Unknown(UnknownInline {
+                    kind: "opaque_inline".to_string(),
+                    fallback_text: None,
+                    message: None,
+                    source: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: None,
+            }),
+            Block::Unknown(UnknownBlock {
+                kind: "opaque_block".to_string(),
+                fallback_text: None,
+                message: None,
+                source: None,
+            }),
+        ]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+        let markdown = render_markdown_document(&document);
+        let text = plain_text::to_plain_text(&document);
+
+        assert!(html.contains("<p>[unknown: opaque_inline]</p>"));
+        assert!(html.contains("<p>[unknown: opaque_block]</p>"));
+        assert!(markdown.contains("[unknown: opaque_inline]"));
+        assert!(markdown.contains("[unknown: opaque_block]"));
+        assert!(text.contains("[unknown: opaque_inline]"));
+        assert!(text.contains("[unknown: opaque_block]"));
+    }
+
+    #[test]
     fn renders_markdown_image_from_document_ir() {
         let document = document_with_image_block("image-1", Some("로고"), Some("png"));
 
-        let markdown = render_markdown_document(&document);
+        let asset_prefix = image_asset_public_prefix(Path::new("sample.md"));
+        let markdown = render_markdown_document_with_asset_prefix(&document, &asset_prefix);
 
-        assert!(markdown.contains("![로고](images/image-1.png)"));
+        assert!(markdown.contains("![로고](sample_assets/images/image-1.png)"));
     }
 
     #[test]
@@ -2188,7 +2404,49 @@ mod tests {
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
-        assert!(html.contains("<img src=\"images/image-1.png\" alt=\"로고\""));
+        assert!(html.contains("<img src=\"sample_assets/images/image-1.png\" alt=\"로고\""));
+    }
+
+    #[test]
+    fn writes_image_assets_to_document_scoped_directory() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("image-assets");
+        fs::create_dir_all(&root)?;
+        let document = document_with_image_block("image-1", Some("로고"), Some("png"));
+        let html_path = root.join("sample.html");
+        let markdown_path = root.join("sample.md");
+
+        write_html_output(Path::new("sample.hwpx"), &html_path, &document)?;
+        write_markdown_output(&markdown_path, &document)?;
+
+        let asset_path = root
+            .join("sample_assets")
+            .join("images")
+            .join("image-1.png");
+        assert_eq!(fs::read(asset_path)?, vec![137, 80, 78, 71]);
+        assert!(
+            fs::read_to_string(&html_path)?.contains("src=\"sample_assets/images/image-1.png\"")
+        );
+        assert!(
+            fs::read_to_string(&markdown_path)?.contains("](sample_assets/images/image-1.png)")
+        );
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn sanitizes_document_scoped_asset_directory_names() {
+        let output_path = Path::new("out").join("my report!.html");
+
+        assert_eq!(
+            image_asset_public_prefix(&output_path),
+            "my_report_assets/images"
+        );
+        assert_eq!(
+            image_asset_dir(&output_path),
+            Path::new("out").join("my_report_assets").join("images")
+        );
     }
 
     #[test]
@@ -2325,7 +2583,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_markdown_bold_and_italic_from_text_style() {
+    fn renders_markdown_text_style_from_text_style() {
         let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
             role: ParagraphRole::Body,
             inlines: vec![
@@ -2364,6 +2622,19 @@ mod tests {
                     },
                     style_ref: None,
                 }),
+                Inline::Text(TextRun {
+                    text: " ".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                }),
+                Inline::Text(TextRun {
+                    text: "strike".to_string(),
+                    style: TextStyle {
+                        strike: true,
+                        ..Default::default()
+                    },
+                    style_ref: None,
+                }),
             ],
             style: ParagraphStyle::default(),
             style_ref: None,
@@ -2375,6 +2646,7 @@ mod tests {
         assert!(markdown.contains("**bold**"));
         assert!(markdown.contains("*italic*"));
         assert!(markdown.contains("***both***"));
+        assert!(markdown.contains("~~strike~~"));
     }
 
     #[test]
@@ -2633,9 +2905,9 @@ mod tests {
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
-        assert!(html.contains("<span class=\"equation\">x + y</span>"));
-        assert!(html.contains("<span class=\"shape-placeholder\">callout box</span>"));
-        assert!(html.contains("<span class=\"chart-placeholder\">Sales</span>"));
+        assert!(html.contains("<span class=\"equation\">[equation: x + y]</span>"));
+        assert!(html.contains("<span class=\"shape-placeholder\">[shape: callout box]</span>"));
+        assert!(html.contains("<span class=\"chart-placeholder\">[chart: Sales]</span>"));
     }
 
     #[test]

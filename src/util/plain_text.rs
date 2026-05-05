@@ -1,6 +1,6 @@
 use crate::ir::{
     Block, Chart, Document, Equation, EquationKind, HeaderFooter, Image, Inline, ListInfo,
-    ListKind, Note, NoteKind, Paragraph, Shape, Table, TableCell,
+    ListKind, Note, NoteKind, Paragraph, Shape, Table, TableCell, UnknownBlock, UnknownInline,
 };
 
 const TABLE_FALLBACK_LABEL: &str = "[\u{D45C}]";
@@ -8,9 +8,6 @@ const HEADER_FALLBACK_LABEL: &str = "[\u{BA38}\u{B9AC}\u{B9D0}]";
 const FOOTER_FALLBACK_LABEL: &str = "[\u{AF2C}\u{B9AC}\u{B9D0}]";
 const FOOTNOTE_REF_LABEL: &str = "[\u{AC01}\u{C8FC}";
 const ENDNOTE_REF_LABEL: &str = "[\u{BBF8}\u{C8FC}";
-const EQUATION_FALLBACK_LABEL: &str = "[\u{C218}\u{C2DD}]";
-const SHAPE_FALLBACK_LABEL: &str = "[\u{B3C4}\u{D615}]";
-const CHART_FALLBACK_LABEL: &str = "[\u{CC28}\u{D2B8}]";
 
 #[allow(dead_code)]
 pub fn collect_paragraph_texts(document: &Document) -> Vec<String> {
@@ -69,7 +66,7 @@ pub(crate) fn block_to_plain_text(block: &Block) -> String {
         Block::Equation(equation) => equation_to_plain_text(equation),
         Block::Shape(shape) => shape_to_plain_text(shape),
         Block::Chart(chart) => chart_to_plain_text(chart),
-        Block::Unknown(unknown) => unknown.fallback_text.clone().unwrap_or_default(),
+        Block::Unknown(unknown) => unknown_block_to_plain_text(unknown),
     }
 }
 
@@ -110,36 +107,82 @@ pub(crate) fn image_to_plain_text(image: &Image) -> String {
 }
 
 pub(crate) fn equation_to_plain_text(equation: &Equation) -> String {
-    equation
+    let text = equation
         .fallback_text
-        .clone()
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
         .or_else(|| {
             if matches!(
                 equation.kind,
                 EquationKind::PlainText | EquationKind::Latex | EquationKind::MathMl
             ) {
-                equation.content.clone()
+                equation
+                    .content
+                    .as_deref()
+                    .filter(|text| !text.is_empty())
+                    .map(ToOwned::to_owned)
             } else {
                 None
             }
         })
-        .unwrap_or_else(|| EQUATION_FALLBACK_LABEL.to_string())
+        .unwrap_or_else(|| "unsupported".to_string());
+
+    format!("[equation: {text}]")
 }
 
 pub(crate) fn shape_to_plain_text(shape: &Shape) -> String {
-    shape
+    let text = shape
         .fallback_text
-        .clone()
-        .or_else(|| shape.description.clone())
-        .unwrap_or_else(|| SHAPE_FALLBACK_LABEL.to_string())
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            shape
+                .description
+                .as_deref()
+                .filter(|text| !text.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "unsupported".to_string());
+
+    format!("[shape: {text}]")
 }
 
 pub(crate) fn chart_to_plain_text(chart: &Chart) -> String {
-    chart
+    let text = chart
         .fallback_text
-        .clone()
-        .or_else(|| chart.title.clone())
-        .unwrap_or_else(|| CHART_FALLBACK_LABEL.to_string())
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            chart
+                .title
+                .as_deref()
+                .filter(|text| !text.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "unsupported".to_string());
+
+    format!("[chart: {text}]")
+}
+
+pub(crate) fn unknown_block_to_plain_text(unknown: &UnknownBlock) -> String {
+    unknown
+        .fallback_text
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("[unknown: {}]", unknown.kind))
+}
+
+fn unknown_inline_to_plain_text(unknown: &UnknownInline) -> String {
+    unknown
+        .fallback_text
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("[unknown: {}]", unknown.kind))
 }
 
 pub(crate) fn header_footer_to_plain_text(label: &str, header_footer: &HeaderFooter) -> String {
@@ -216,9 +259,7 @@ fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
                 text.push_str(&format!("{ENDNOTE_REF_LABEL}: {}]", note_id.as_str()));
             }
             Inline::Unknown(unknown) => {
-                if let Some(fallback) = &unknown.fallback_text {
-                    text.push_str(fallback);
-                }
+                text.push_str(&unknown_inline_to_plain_text(unknown));
             }
         }
     }
@@ -439,7 +480,10 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(to_plain_text(&document), "x + y\ncallout box\nSales");
+        assert_eq!(
+            to_plain_text(&document),
+            "[equation: x + y]\n[shape: callout box]\n[chart: Sales]"
+        );
     }
 
     fn table_cell(text: &str) -> TableCell {
