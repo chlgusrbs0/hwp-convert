@@ -429,6 +429,7 @@ fn write_html_output(
     output_path: &Path,
     document: &Document,
 ) -> Result<(), io::Error> {
+    write_html_image_assets(output_path, &document.resources)?;
     let html = render_html_document(input_path, document);
     fs::write(output_path, html)
 }
@@ -1255,6 +1256,39 @@ fn render_markdown_image(image: &Image, resources: &ResourceStore) -> String {
     let path = resource_public_path(resources, &image.resource_id);
 
     format!("![{alt}]({path})")
+}
+
+fn write_html_image_assets(output_path: &Path, resources: &ResourceStore) -> Result<(), io::Error> {
+    let image_resources = resources
+        .entries
+        .iter()
+        .filter_map(|resource| match resource {
+            Resource::Image(image) => Some(image),
+            Resource::Binary(_) => None,
+        })
+        .collect::<Vec<_>>();
+
+    if image_resources.is_empty() {
+        return Ok(());
+    }
+
+    let asset_dir = html_asset_dir(output_path);
+    fs::create_dir_all(&asset_dir)?;
+
+    for image in image_resources {
+        let file_name = resource_file_name(resources, &image.id);
+        fs::write(asset_dir.join(file_name), &image.bytes)?;
+    }
+
+    Ok(())
+}
+
+fn html_asset_dir(output_path: &Path) -> PathBuf {
+    output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join("images")
 }
 
 fn render_markdown_equation(equation: &Equation) -> String {
