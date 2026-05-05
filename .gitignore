@@ -10,7 +10,13 @@ out/
 # Local test files
 sample.hwp
 sample.hwpx
+sample.hwp
 sample.txt
+sample.json
+sample.md
+sample.html
+sample.svg
+sample.pdf
 
 # Logs
 *.log
