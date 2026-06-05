@@ -719,11 +719,7 @@ impl<'a> BridgeContext<'a> {
             return Some(resource_id);
         }
 
-        let bin_data = self
-            .source
-            .bin_data_content
-            .iter()
-            .find(|bin_data| bin_data.id == bin_data_id)?;
+        let bin_data = self.find_bin_data_content(bin_data_id)?;
         let extension = non_empty_string(&bin_data.extension);
         let media_type = extension
             .as_deref()
@@ -740,6 +736,30 @@ impl<'a> BridgeContext<'a> {
             .ok()?;
 
         Some(resource_id)
+    }
+
+    fn find_bin_data_content(
+        &self,
+        bin_data_id: u16,
+    ) -> Option<&rhwp::model::bin_data::BinDataContent> {
+        let list_index = bin_data_id.checked_sub(1)? as usize;
+
+        if let Some(bin_data) = self.source.doc_info.bin_data_list.get(list_index) {
+            if let Some(content) = self
+                .source
+                .bin_data_content
+                .iter()
+                .find(|content| content.id == bin_data.storage_id)
+            {
+                return Some(content);
+            }
+        }
+
+        self.source
+            .bin_data_content
+            .iter()
+            .find(|content| content.id == bin_data_id)
+            .or_else(|| self.source.bin_data_content.get(list_index))
     }
 
     fn map_style_sheet(&self) -> StyleSheet {
@@ -1123,7 +1143,9 @@ fn text_style_key(index: usize) -> String {
 mod tests {
     use super::*;
 
-    use rhwp::model::bin_data::BinDataContent;
+    use rhwp::model::bin_data::{
+        BinData, BinDataCompression, BinDataContent, BinDataStatus, BinDataType,
+    };
     use rhwp::model::control::Field as RhwpField;
     use rhwp::model::document::{DocInfo, Document as RhwpDocument, Section as RhwpSection};
     use rhwp::model::footnote::Footnote as RhwpFootnote;
@@ -1242,6 +1264,68 @@ mod tests {
                 assert_eq!(resource.id.as_str(), "image-7");
                 assert_eq!(resource.extension.as_deref(), Some("png"));
                 assert_eq!(resource.media_type.as_deref(), Some("image/png"));
+            }
+            other => panic!("expected image resource, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_picture_bin_data_id_through_doc_info_list_index() {
+        let picture = Picture {
+            image_attr: ImageAttr {
+                bin_data_id: 1,
+                ..Default::default()
+            },
+            common: rhwp::model::shape::CommonObjAttr {
+                width: 7500,
+                height: 3750,
+                description: "indexed image".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                bin_data_list: vec![BinData {
+                    attr: 0x0101,
+                    data_type: BinDataType::Embedding,
+                    compression: BinDataCompression::Default,
+                    status: BinDataStatus::Success,
+                    storage_id: 3,
+                    extension: Some("png".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Picture(Box::new(picture))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            bin_data_content: vec![BinDataContent {
+                id: 3,
+                data: vec![137, 80, 78, 71],
+                extension: "png".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Image(image) => {
+                assert_eq!(image.resource_id.as_str(), "image-1");
+                assert_eq!(image.alt.as_deref(), Some("indexed image"));
+            }
+            other => panic!("expected image block, got {other:?}"),
+        }
+
+        match bridged.resources.entries.first() {
+            Some(Resource::Image(resource)) => {
+                assert_eq!(resource.id.as_str(), "image-1");
+                assert_eq!(resource.bytes, vec![137, 80, 78, 71]);
             }
             other => panic!("expected image resource, got {other:?}"),
         }
