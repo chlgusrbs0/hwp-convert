@@ -110,7 +110,63 @@ fn official_fixtures_export_all_current_formats() {
                 format,
                 output_path.display()
             );
+
+            assert_fixture_export_artifacts(&input, format, output_path);
         }
+    }
+}
+
+fn assert_fixture_export_artifacts(input: &FixtureInput, format: OutputFormat, output_path: &Path) {
+    if input.fixture_name != "image" {
+        return;
+    }
+
+    match format {
+        OutputFormat::Html | OutputFormat::Markdown => {
+            let asset_ref = "input_assets/images/image-1.png";
+            let asset_path = output_path
+                .parent()
+                .expect("export output should have a parent directory")
+                .join("input_assets")
+                .join("images")
+                .join("image-1.png");
+            assert!(
+                asset_path.is_file(),
+                "fixture {} should write image asset for {} export: {}",
+                input.label,
+                format,
+                asset_path.display()
+            );
+            let asset_bytes = fs::read(&asset_path).unwrap_or_else(|error| {
+                panic!(
+                    "fixture {} should allow reading exported image asset {}: {error}",
+                    input.label,
+                    asset_path.display()
+                )
+            });
+            assert!(
+                asset_bytes.starts_with(IMAGE_PNG_SIGNATURE),
+                "fixture {} should export PNG resource bytes for {}",
+                input.label,
+                format
+            );
+
+            let output = fs::read_to_string(output_path).unwrap_or_else(|error| {
+                panic!(
+                    "fixture {} should allow reading exported {} output {}: {error}",
+                    input.label,
+                    format,
+                    output_path.display()
+                )
+            });
+            assert!(
+                output.contains(asset_ref),
+                "fixture {} should reference exported image asset in {} output",
+                input.label,
+                format
+            );
+        }
+        _ => {}
     }
 }
 
