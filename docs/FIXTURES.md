@@ -125,3 +125,38 @@ tests/fixtures/<fixture_name>/
 - 최소 P0 fixture 다섯 개가 `HWP`/`HWPX` 쌍으로 준비된다.
 - 각 fixture마다 bridge assert 1세트와 exporter smoke 1세트가 있다.
 - `equation_shape_chart`와 `kitchen_sink`는 미지원 영역을 숨기지 않고 현재 동작을 기록한다.
+
+## Bridge stats expectation
+
+`tests/fixture_smoke.rs`는 선택적으로 bridge stats expectation을 비교할 수 있다.
+
+파일 위치:
+
+```text
+tests/fixtures/<fixture_name>/expected/bridge-stats.json
+tests/fixtures/<fixture_name>/expected/bridge-stats.hwp.json
+tests/fixtures/<fixture_name>/expected/bridge-stats.hwpx.json
+```
+
+우선순위:
+
+1. 입력 확장자별 파일이 있으면 그것을 사용한다.
+2. 확장자별 파일이 없고 `bridge-stats.json`이 있으면 공통 기대값으로 사용한다.
+3. 둘 다 없으면 bridge stats comparison은 준비 상태로 넘어간다.
+
+이 파일은 전체 IR golden이 아니라 안정적인 개수 지표를 고정하기 위한 장치다.
+
+포함되는 지표 예:
+
+- section, body block, header, footer, note count
+- paragraph, table, row, cell count
+- image, equation, shape, chart, unknown block count
+- text run, line break, tab, link, note ref count
+- resource, image resource, binary resource count
+- warning count
+
+사용 원칙:
+
+- bridge stats는 실제 문서 fixture가 추가된 뒤 작성한다.
+- stats가 바뀌면 expected를 즉시 수정하지 않는다. 먼저 bridge 개선인지 회귀인지 판단한다.
+- 구조가 복잡한 fixture에서는 전체 JSON golden보다 bridge stats와 feature-level assertion을 우선한다.

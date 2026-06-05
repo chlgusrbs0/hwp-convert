@@ -63,3 +63,17 @@ RenderSnapshot 기반 visual SVG와 `write_render_snapshot_visual_check` artifac
 4. `golden comparison`: 출력이 안정적인 fixture에 한해 제한적으로 추가한다.
 
 예를 들어 `image` fixture는 resource bytes 전체 비교보다 `Block::Image`, `ImageResource`, extension/media type, `bytes.len() > 0` 같은 feature-level assertion을 우선한다.
+
+## Bridge stats expectation
+
+fixture별로 안정적인 개수 지표를 고정하고 싶으면 `expected/` 아래에 bridge stats expectation을 둘 수 있다.
+
+```text
+tests/fixtures/<fixture_name>/expected/bridge-stats.json
+tests/fixtures/<fixture_name>/expected/bridge-stats.hwp.json
+tests/fixtures/<fixture_name>/expected/bridge-stats.hwpx.json
+```
+
+확장자별 파일이 있으면 해당 입력에만 적용하고, 없으면 `bridge-stats.json`을 공통 기대값으로 사용한다.
+
+이 expected는 전체 `Document IR` golden이 아니라 문단/표/이미지/링크/warning 같은 개수 지표를 고정하기 위한 장치다. stats가 바뀌면 기대값을 바로 고치지 말고 변환 정확도 개선인지 회귀인지 먼저 판단한다.

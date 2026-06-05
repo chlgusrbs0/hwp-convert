@@ -5,7 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hwp_convert::bridge;
 use hwp_convert::cli::{CliArgs, OutputFormat};
 use hwp_convert::exporter;
-use hwp_convert::ir::{Block, Document, Inline, Paragraph};
+use hwp_convert::ir::{Block, Document, Inline, Paragraph, ParagraphStyle, Resource, TextStyle};
+use serde::{Deserialize, Serialize};
 
 const FIXTURE_ROOT: &str = "tests/fixtures";
 const BASIC_TEXT_KOREAN_PARAGRAPH: &str = "기본 한글 문단";
@@ -26,11 +27,12 @@ fn official_fixtures_parse_into_non_empty_ir() {
     for input in inputs {
         let document = bridge::rhwp::read_document(&input.path)
             .unwrap_or_else(|error| panic!("failed to parse {}: {error}", input.label));
+        let stats = DocumentStats::from_document(&document);
 
         assert!(
-            document_has_semantic_content(&document),
-            "fixture {} parsed successfully but produced no semantic content",
-            input.label
+            stats.has_semantic_content(),
+            "fixture {} parsed successfully but produced no semantic content: {stats:#?}",
+            input.label,
         );
     }
 }
@@ -39,7 +41,9 @@ fn official_fixtures_parse_into_non_empty_ir() {
 fn official_fixtures_export_all_current_formats() {
     let inputs = discover_fixture_inputs();
     if inputs.is_empty() {
-        eprintln!("no official fixture inputs found under {FIXTURE_ROOT}; export smoke test is armed");
+        eprintln!(
+            "no official fixture inputs found under {FIXTURE_ROOT}; export smoke test is armed"
+        );
         return;
     }
 
@@ -47,7 +51,9 @@ fn official_fixtures_export_all_current_formats() {
 
     for input in inputs {
         for format in current_output_formats() {
-            let output_dir = output_root.join(&input.fixture_name).join(format.extension());
+            let output_dir = output_root
+                .join(&input.fixture_name)
+                .join(format.extension());
             let args = CliArgs {
                 input_path: input.path.clone(),
                 format,
@@ -60,10 +66,7 @@ fn official_fixtures_export_all_current_formats() {
             };
 
             let report = exporter::export(&args).unwrap_or_else(|error| {
-                panic!(
-                    "failed to export {} as {}: {error}",
-                    input.label, format
-                )
+                panic!("failed to export {} as {}: {error}", input.label, format)
             });
 
             assert_eq!(
@@ -117,11 +120,68 @@ fn official_fixtures_match_feature_expectations() {
     }
 }
 
+#[test]
+fn official_fixtures_match_expected_bridge_stats() {
+    let inputs = discover_fixture_inputs();
+    if inputs.is_empty() {
+        eprintln!(
+            "no official fixture inputs found under {FIXTURE_ROOT}; bridge stats test is armed"
+        );
+        return;
+    }
+
+    let mut checked = 0usize;
+
+    for input in inputs {
+        let Some(expected_path) = input.bridge_stats_expected_path() else {
+            continue;
+        };
+        let expected = read_expected_bridge_stats(&expected_path);
+        let document = bridge::rhwp::read_document(&input.path)
+            .unwrap_or_else(|error| panic!("failed to parse {}: {error}", input.label));
+        let actual = DocumentStats::from_document(&document);
+
+        assert_eq!(
+            actual,
+            expected,
+            "fixture {} bridge stats changed; update {} only after deciding the change is correct",
+            input.label,
+            expected_path.display()
+        );
+        checked += 1;
+    }
+
+    if checked == 0 {
+        eprintln!(
+            "no bridge stats expectation files found under {FIXTURE_ROOT}; bridge stats test is armed"
+        );
+    }
+}
+
 #[derive(Debug, Clone)]
 struct FixtureInput {
     fixture_name: String,
     label: String,
     path: PathBuf,
+}
+
+impl FixtureInput {
+    fn bridge_stats_expected_path(&self) -> Option<PathBuf> {
+        let fixture_dir = self.path.parent()?;
+        let extension = self.path.extension()?.to_str()?;
+        let expected_dir = fixture_dir.join("expected");
+        let specific = expected_dir.join(format!("bridge-stats.{extension}.json"));
+        if specific.is_file() {
+            return Some(specific);
+        }
+
+        let shared = expected_dir.join("bridge-stats.json");
+        if shared.is_file() {
+            return Some(shared);
+        }
+
+        None
+    }
 }
 
 fn discover_fixture_inputs() -> Vec<FixtureInput> {
@@ -162,24 +222,12 @@ fn discover_fixture_inputs() -> Vec<FixtureInput> {
     inputs
 }
 
-fn document_has_semantic_content(document: &Document) -> bool {
-    !document.notes.notes.is_empty()
-        || document.sections.iter().any(|section| {
-            !section.headers.is_empty()
-                || !section.footers.is_empty()
-                || section.blocks.iter().any(block_has_semantic_content)
-        })
-}
+fn read_expected_bridge_stats(path: &Path) -> DocumentStats {
+    let content = fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
 
-fn block_has_semantic_content(block: &Block) -> bool {
-    match block {
-        Block::Paragraph(paragraph) => !paragraph.inlines.is_empty(),
-        Block::Table(table) => !table.rows.is_empty(),
-        Block::Image(_) | Block::Equation(_) | Block::Shape(_) | Block::Chart(_) => true,
-        Block::Unknown(unknown) => {
-            unknown.fallback_text.is_some() || unknown.message.is_some() || unknown.source.is_some()
-        }
-    }
+    serde_json::from_str(&content)
+        .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()))
 }
 
 fn assert_basic_text_fixture(input: &FixtureInput, document: &Document) {
@@ -288,6 +336,157 @@ fn link_plain_text(inlines: &[Inline]) -> String {
     };
 
     paragraph_plain_text(&paragraph)
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+struct DocumentStats {
+    sections: usize,
+    body_blocks: usize,
+    headers: usize,
+    footers: usize,
+    notes: usize,
+    resources: usize,
+    image_resources: usize,
+    binary_resources: usize,
+    warnings: usize,
+    paragraphs: usize,
+    list_paragraphs: usize,
+    styled_paragraphs: usize,
+    tables: usize,
+    table_rows: usize,
+    table_cells: usize,
+    table_cells_with_background: usize,
+    images: usize,
+    equations: usize,
+    shapes: usize,
+    charts: usize,
+    unknown_blocks: usize,
+    text_runs: usize,
+    styled_text_runs: usize,
+    line_breaks: usize,
+    tabs: usize,
+    links: usize,
+    footnote_refs: usize,
+    endnote_refs: usize,
+    unknown_inlines: usize,
+}
+
+impl DocumentStats {
+    fn from_document(document: &Document) -> Self {
+        let mut stats = Self {
+            sections: document.sections.len(),
+            notes: document.notes.notes.len(),
+            resources: document.resources.entries.len(),
+            warnings: document.warnings.len(),
+            ..Default::default()
+        };
+
+        for resource in &document.resources.entries {
+            match resource {
+                Resource::Image(_) => stats.image_resources += 1,
+                Resource::Binary(_) => stats.binary_resources += 1,
+            }
+        }
+
+        for section in &document.sections {
+            stats.body_blocks += section.blocks.len();
+            stats.headers += section.headers.len();
+            stats.footers += section.footers.len();
+            stats.count_blocks(&section.blocks);
+
+            for header in &section.headers {
+                stats.count_blocks(&header.blocks);
+            }
+
+            for footer in &section.footers {
+                stats.count_blocks(&footer.blocks);
+            }
+        }
+
+        for note in &document.notes.notes {
+            stats.count_blocks(&note.blocks);
+        }
+
+        stats
+    }
+
+    fn has_semantic_content(&self) -> bool {
+        self.paragraphs > 0
+            || self.tables > 0
+            || self.images > 0
+            || self.equations > 0
+            || self.shapes > 0
+            || self.charts > 0
+            || self.unknown_blocks > 0
+            || self.notes > 0
+            || self.headers > 0
+            || self.footers > 0
+    }
+
+    fn count_blocks(&mut self, blocks: &[Block]) {
+        for block in blocks {
+            self.count_block(block);
+        }
+    }
+
+    fn count_block(&mut self, block: &Block) {
+        match block {
+            Block::Paragraph(paragraph) => self.count_paragraph(paragraph),
+            Block::Table(table) => {
+                self.tables += 1;
+                self.table_rows += table.rows.len();
+
+                for row in &table.rows {
+                    self.table_cells += row.cells.len();
+                    for cell in &row.cells {
+                        if cell.style.background_color.is_some() {
+                            self.table_cells_with_background += 1;
+                        }
+                        self.count_blocks(&cell.blocks);
+                    }
+                }
+            }
+            Block::Image(_) => self.images += 1,
+            Block::Equation(_) => self.equations += 1,
+            Block::Shape(_) => self.shapes += 1,
+            Block::Chart(_) => self.charts += 1,
+            Block::Unknown(_) => self.unknown_blocks += 1,
+        }
+    }
+
+    fn count_paragraph(&mut self, paragraph: &Paragraph) {
+        self.paragraphs += 1;
+        if paragraph.list.is_some() {
+            self.list_paragraphs += 1;
+        }
+        if paragraph.style_ref.is_some() || paragraph.style != ParagraphStyle::default() {
+            self.styled_paragraphs += 1;
+        }
+        self.count_inlines(&paragraph.inlines);
+    }
+
+    fn count_inlines(&mut self, inlines: &[Inline]) {
+        for inline in inlines {
+            match inline {
+                Inline::Text(run) => {
+                    self.text_runs += 1;
+                    if run.style_ref.is_some() || run.style != TextStyle::default() {
+                        self.styled_text_runs += 1;
+                    }
+                }
+                Inline::LineBreak => self.line_breaks += 1,
+                Inline::Tab => self.tabs += 1,
+                Inline::Link(link) => {
+                    self.links += 1;
+                    self.count_inlines(&link.inlines);
+                }
+                Inline::FootnoteRef { .. } => self.footnote_refs += 1,
+                Inline::EndnoteRef { .. } => self.endnote_refs += 1,
+                Inline::Unknown(_) => self.unknown_inlines += 1,
+            }
+        }
+    }
 }
 
 fn current_output_formats() -> [OutputFormat; 5] {
