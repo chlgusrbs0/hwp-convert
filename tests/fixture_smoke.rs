@@ -6,7 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hwp_convert::bridge;
 use hwp_convert::cli::{CliArgs, OutputFormat};
 use hwp_convert::exporter;
-use hwp_convert::ir::{Block, Document, Inline, Paragraph, ParagraphStyle, Resource, TextStyle};
+use hwp_convert::ir::{
+    Block, Document, Inline, Paragraph, ParagraphStyle, Resource, Table, TableCell, TextStyle,
+};
 use serde::{Deserialize, Serialize};
 
 const FIXTURE_ROOT: &str = "tests/fixtures";
@@ -17,6 +19,7 @@ const BASIC_TEXT_LINE_BREAK_BEFORE: &str = "줄바꿈 앞";
 const BASIC_TEXT_LINE_BREAK_AFTER: &str = "줄바꿈 뒤";
 const BASIC_TEXT_TAB_BEFORE: &str = "탭 앞";
 const BASIC_TEXT_TAB_AFTER: &str = "탭 뒤";
+const TABLE_CELL_TEXTS: [&str; 4] = ["cell 1-1", "cell 1-2", "cell 2-1", "cell 2-2"];
 
 #[test]
 fn official_fixtures_parse_into_non_empty_ir() {
@@ -117,6 +120,7 @@ fn official_fixtures_match_feature_expectations() {
 
         match input.fixture_name.as_str() {
             "basic_text" => assert_basic_text_fixture(&input, &document),
+            "table" => assert_table_fixture(&input, &document),
             _ => {}
         }
     }
@@ -384,6 +388,64 @@ fn link_plain_text(inlines: &[Inline]) -> String {
     };
 
     paragraph_plain_text(&paragraph)
+}
+
+fn assert_table_fixture(input: &FixtureInput, document: &Document) {
+    let tables = collect_tables(document);
+    assert_eq!(
+        tables.len(),
+        1,
+        "fixture {} should preserve exactly one table",
+        input.label
+    );
+
+    let table = tables[0];
+    assert_eq!(
+        table.rows.len(),
+        2,
+        "fixture {} should preserve two table rows",
+        input.label
+    );
+    assert!(
+        table.rows.iter().all(|row| row.cells.len() == 2),
+        "fixture {} should preserve two cells in each table row",
+        input.label
+    );
+
+    let cell_texts = table
+        .rows
+        .iter()
+        .flat_map(|row| &row.cells)
+        .map(table_cell_plain_text)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cell_texts, TABLE_CELL_TEXTS,
+        "fixture {} should preserve table cell text in row-major order",
+        input.label
+    );
+}
+
+fn collect_tables(document: &Document) -> Vec<&Table> {
+    document
+        .sections
+        .iter()
+        .flat_map(|section| &section.blocks)
+        .filter_map(|block| match block {
+            Block::Table(table) => Some(table),
+            _ => None,
+        })
+        .collect()
+}
+
+fn table_cell_plain_text(cell: &TableCell) -> String {
+    cell.blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph_plain_text(paragraph)),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
