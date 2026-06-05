@@ -7,8 +7,8 @@ use hwp_convert::bridge;
 use hwp_convert::cli::{CliArgs, OutputFormat};
 use hwp_convert::exporter;
 use hwp_convert::ir::{
-    Alignment, Block, Color, Document, Inline, LengthPt, Paragraph, ParagraphStyle, Resource,
-    Table, TableCell, TextStyle,
+    Alignment, Block, Color, Document, Image, Inline, LengthPt, LengthPx, Paragraph,
+    ParagraphStyle, Resource, Table, TableCell, TextStyle,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,9 @@ const BASIC_TEXT_LINE_BREAK_BEFORE: &str = "줄바꿈 앞";
 const BASIC_TEXT_LINE_BREAK_AFTER: &str = "줄바꿈 뒤";
 const BASIC_TEXT_TAB_BEFORE: &str = "탭 앞";
 const BASIC_TEXT_TAB_AFTER: &str = "탭 뒤";
+const IMAGE_ALT_TEXT: &str = "sample image";
+const IMAGE_RESOURCE_ID: &str = "image-1";
+const IMAGE_PNG_SIGNATURE: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10];
 const MERGED_TABLE_CELL_TEXTS: [&str; 7] = [
     "row span", "col span", "cell 2-2", "cell 2-3", "cell 3-1", "cell 3-2", "cell 3-3",
 ];
@@ -125,6 +128,7 @@ fn official_fixtures_match_feature_expectations() {
 
         match input.fixture_name.as_str() {
             "basic_text" => assert_basic_text_fixture(&input, &document),
+            "image" => assert_image_fixture(&input, &document),
             "merged_table" => assert_merged_table_fixture(&input, &document),
             "style" => assert_style_fixture(&input, &document),
             "table" => assert_table_fixture(&input, &document),
@@ -345,6 +349,18 @@ fn collect_paragraphs(document: &Document) -> Vec<&Paragraph> {
         .collect()
 }
 
+fn collect_images(document: &Document) -> Vec<&Image> {
+    document
+        .sections
+        .iter()
+        .flat_map(|section| &section.blocks)
+        .filter_map(|block| match block {
+            Block::Image(image) => Some(image),
+            _ => None,
+        })
+        .collect()
+}
+
 fn paragraph_has_line_break_case(paragraph: &Paragraph) -> bool {
     let text = paragraph_plain_text(paragraph);
 
@@ -476,6 +492,72 @@ fn assert_merged_table_fixture(input: &FixtureInput, document: &Document) {
     assert_eq!(
         cell_texts, MERGED_TABLE_CELL_TEXTS,
         "fixture {} should preserve merged table cell text in row-major owner-cell order",
+        input.label
+    );
+}
+
+fn assert_image_fixture(input: &FixtureInput, document: &Document) {
+    let images = collect_images(document);
+    assert_eq!(
+        images.len(),
+        1,
+        "fixture {} should preserve exactly one image block",
+        input.label
+    );
+
+    let image = images[0];
+    assert_eq!(
+        image.resource_id.as_str(),
+        IMAGE_RESOURCE_ID,
+        "fixture {} should preserve the image resource reference",
+        input.label
+    );
+    assert_eq!(
+        image.alt.as_deref(),
+        Some(IMAGE_ALT_TEXT),
+        "fixture {} should preserve image alt/description text",
+        input.label
+    );
+    assert_eq!(
+        image.width,
+        Some(LengthPx(96.0)),
+        "fixture {} should preserve image display width",
+        input.label
+    );
+    assert_eq!(
+        image.height,
+        Some(LengthPx(48.0)),
+        "fixture {} should preserve image display height",
+        input.label
+    );
+
+    let resource = document
+        .resources
+        .entries
+        .iter()
+        .find_map(|resource| match resource {
+            Resource::Image(resource) if resource.id.as_str() == IMAGE_RESOURCE_ID => {
+                Some(resource)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("fixture {} should preserve the image resource", input.label));
+
+    assert_eq!(
+        resource.extension.as_deref(),
+        Some("png"),
+        "fixture {} should preserve image extension",
+        input.label
+    );
+    assert_eq!(
+        resource.media_type.as_deref(),
+        Some("image/png"),
+        "fixture {} should preserve image media type",
+        input.label
+    );
+    assert!(
+        resource.bytes.starts_with(IMAGE_PNG_SIGNATURE),
+        "fixture {} should preserve PNG resource bytes",
         input.label
     );
 }
