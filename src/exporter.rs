@@ -17,6 +17,7 @@ use crate::ir::{
 };
 use crate::util::plain_text;
 
+#[cfg(test)]
 const DEFAULT_IMAGE_ASSET_PUBLIC_PREFIX: &str = "document_assets/images";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -508,6 +509,7 @@ fn render_svg_document(input_path: &Path, paragraphs: &[String]) -> String {
     )
 }
 
+#[cfg(test)]
 fn render_html_document(input_path: &Path, document: &Document) -> String {
     let output_path = input_path.with_extension("html");
     let asset_prefix = image_asset_public_prefix(&output_path);
@@ -1202,6 +1204,7 @@ fn render_html_table_cell_blocks(
         .join("")
 }
 
+#[cfg(test)]
 fn render_markdown_document(document: &Document) -> String {
     render_markdown_document_with_asset_prefix(document, DEFAULT_IMAGE_ASSET_PUBLIC_PREFIX)
 }
@@ -1406,10 +1409,12 @@ fn write_image_assets(
     Ok(())
 }
 
+#[cfg(test)]
 fn image_asset_dir(output_path: &Path) -> PathBuf {
     image_asset_paths(output_path).output_dir
 }
 
+#[cfg(test)]
 fn image_asset_public_prefix(output_path: &Path) -> String {
     image_asset_paths(output_path).public_prefix
 }
