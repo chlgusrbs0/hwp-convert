@@ -19,6 +19,9 @@ const BASIC_TEXT_LINE_BREAK_BEFORE: &str = "줄바꿈 앞";
 const BASIC_TEXT_LINE_BREAK_AFTER: &str = "줄바꿈 뒤";
 const BASIC_TEXT_TAB_BEFORE: &str = "탭 앞";
 const BASIC_TEXT_TAB_AFTER: &str = "탭 뒤";
+const MERGED_TABLE_CELL_TEXTS: [&str; 7] = [
+    "row span", "col span", "cell 2-2", "cell 2-3", "cell 3-1", "cell 3-2", "cell 3-3",
+];
 const TABLE_CELL_TEXTS: [&str; 4] = ["cell 1-1", "cell 1-2", "cell 2-1", "cell 2-2"];
 
 #[test]
@@ -120,6 +123,7 @@ fn official_fixtures_match_feature_expectations() {
 
         match input.fixture_name.as_str() {
             "basic_text" => assert_basic_text_fixture(&input, &document),
+            "merged_table" => assert_merged_table_fixture(&input, &document),
             "table" => assert_table_fixture(&input, &document),
             _ => {}
         }
@@ -421,6 +425,54 @@ fn assert_table_fixture(input: &FixtureInput, document: &Document) {
     assert_eq!(
         cell_texts, TABLE_CELL_TEXTS,
         "fixture {} should preserve table cell text in row-major order",
+        input.label
+    );
+}
+
+fn assert_merged_table_fixture(input: &FixtureInput, document: &Document) {
+    let tables = collect_tables(document);
+    assert_eq!(
+        tables.len(),
+        1,
+        "fixture {} should preserve exactly one merged table",
+        input.label
+    );
+
+    let table = tables[0];
+    assert_eq!(
+        table.rows.len(),
+        3,
+        "fixture {} should preserve three table rows",
+        input.label
+    );
+    assert!(
+        table
+            .rows
+            .iter()
+            .flat_map(|row| &row.cells)
+            .any(|cell| cell.row_span == 2),
+        "fixture {} should preserve a row-spanning cell",
+        input.label
+    );
+    assert!(
+        table
+            .rows
+            .iter()
+            .flat_map(|row| &row.cells)
+            .any(|cell| cell.col_span == 2),
+        "fixture {} should preserve a column-spanning cell",
+        input.label
+    );
+
+    let cell_texts = table
+        .rows
+        .iter()
+        .flat_map(|row| &row.cells)
+        .map(table_cell_plain_text)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cell_texts, MERGED_TABLE_CELL_TEXTS,
+        "fixture {} should preserve merged table cell text in row-major owner-cell order",
         input.label
     );
 }
