@@ -7,8 +7,8 @@ use hwp_convert::bridge;
 use hwp_convert::cli::{CliArgs, OutputFormat};
 use hwp_convert::exporter;
 use hwp_convert::ir::{
-    Alignment, Block, Color, Document, Image, Inline, LengthPt, LengthPx, Paragraph,
-    ParagraphStyle, Resource, Table, TableCell, TextStyle,
+    Alignment, Block, Color, Document, HeaderFooterPlacement, Image, Inline, LengthPt, LengthPx,
+    Paragraph, ParagraphStyle, Resource, Table, TableCell, TextStyle,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,8 @@ const BASIC_TEXT_LINE_BREAK_BEFORE: &str = "줄바꿈 앞";
 const BASIC_TEXT_LINE_BREAK_AFTER: &str = "줄바꿈 뒤";
 const BASIC_TEXT_TAB_BEFORE: &str = "탭 앞";
 const BASIC_TEXT_TAB_AFTER: &str = "탭 뒤";
+const HEADER_TEXT: &str = "header text";
+const FOOTER_TEXT: &str = "footer text";
 const IMAGE_ALT_TEXT: &str = "sample image";
 const IMAGE_RESOURCE_ID: &str = "image-1";
 const IMAGE_PNG_SIGNATURE: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10];
@@ -184,6 +186,7 @@ fn official_fixtures_match_feature_expectations() {
 
         match input.fixture_name.as_str() {
             "basic_text" => assert_basic_text_fixture(&input, &document),
+            "header_footer" => assert_header_footer_fixture(&input, &document),
             "image" => assert_image_fixture(&input, &document),
             "merged_table" => assert_merged_table_fixture(&input, &document),
             "style" => assert_style_fixture(&input, &document),
@@ -618,6 +621,59 @@ fn assert_image_fixture(input: &FixtureInput, document: &Document) {
     );
 }
 
+fn assert_header_footer_fixture(input: &FixtureInput, document: &Document) {
+    let section = document
+        .sections
+        .first()
+        .unwrap_or_else(|| panic!("fixture {} should preserve one section", input.label));
+
+    assert!(
+        section.blocks.is_empty(),
+        "fixture {} should not leak header/footer controls into body blocks",
+        input.label
+    );
+    assert_eq!(
+        section.headers.len(),
+        1,
+        "fixture {} should preserve exactly one header",
+        input.label
+    );
+    assert_eq!(
+        section.footers.len(),
+        1,
+        "fixture {} should preserve exactly one footer",
+        input.label
+    );
+
+    let header = &section.headers[0];
+    assert_eq!(
+        header.placement,
+        HeaderFooterPlacement::Default,
+        "fixture {} should preserve header placement",
+        input.label
+    );
+    assert_eq!(
+        block_paragraph_texts(&header.blocks),
+        vec![HEADER_TEXT.to_string()],
+        "fixture {} should preserve header text",
+        input.label
+    );
+
+    let footer = &section.footers[0];
+    assert_eq!(
+        footer.placement,
+        HeaderFooterPlacement::EvenPage,
+        "fixture {} should preserve footer placement",
+        input.label
+    );
+    assert_eq!(
+        block_paragraph_texts(&footer.blocks),
+        vec![FOOTER_TEXT.to_string()],
+        "fixture {} should preserve footer text",
+        input.label
+    );
+}
+
 fn assert_style_fixture(input: &FixtureInput, document: &Document) {
     let paragraphs = collect_paragraphs(document);
     let paragraph = paragraphs
@@ -719,6 +775,16 @@ fn assert_style_fixture(input: &FixtureInput, document: &Document) {
         "fixture {} should preserve text background color",
         input.label
     );
+}
+
+fn block_paragraph_texts(blocks: &[Block]) -> Vec<String> {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph_plain_text(paragraph)),
+            _ => None,
+        })
+        .collect()
 }
 
 fn collect_tables(document: &Document) -> Vec<&Table> {
