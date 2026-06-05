@@ -7,7 +7,8 @@ use hwp_convert::bridge;
 use hwp_convert::cli::{CliArgs, OutputFormat};
 use hwp_convert::exporter;
 use hwp_convert::ir::{
-    Block, Document, Inline, Paragraph, ParagraphStyle, Resource, Table, TableCell, TextStyle,
+    Alignment, Block, Color, Document, Inline, LengthPt, Paragraph, ParagraphStyle, Resource,
+    Table, TableCell, TextStyle,
 };
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +23,7 @@ const BASIC_TEXT_TAB_AFTER: &str = "탭 뒤";
 const MERGED_TABLE_CELL_TEXTS: [&str; 7] = [
     "row span", "col span", "cell 2-2", "cell 2-3", "cell 3-1", "cell 3-2", "cell 3-3",
 ];
+const STYLE_PARAGRAPH_TEXT: &str = "styled text";
 const TABLE_CELL_TEXTS: [&str; 4] = ["cell 1-1", "cell 1-2", "cell 2-1", "cell 2-2"];
 
 #[test]
@@ -124,6 +126,7 @@ fn official_fixtures_match_feature_expectations() {
         match input.fixture_name.as_str() {
             "basic_text" => assert_basic_text_fixture(&input, &document),
             "merged_table" => assert_merged_table_fixture(&input, &document),
+            "style" => assert_style_fixture(&input, &document),
             "table" => assert_table_fixture(&input, &document),
             _ => {}
         }
@@ -473,6 +476,109 @@ fn assert_merged_table_fixture(input: &FixtureInput, document: &Document) {
     assert_eq!(
         cell_texts, MERGED_TABLE_CELL_TEXTS,
         "fixture {} should preserve merged table cell text in row-major owner-cell order",
+        input.label
+    );
+}
+
+fn assert_style_fixture(input: &FixtureInput, document: &Document) {
+    let paragraphs = collect_paragraphs(document);
+    let paragraph = paragraphs
+        .iter()
+        .copied()
+        .find(|paragraph| paragraph_plain_text(paragraph) == STYLE_PARAGRAPH_TEXT)
+        .unwrap_or_else(|| {
+            panic!(
+                "fixture {} should preserve the styled paragraph text",
+                input.label
+            )
+        });
+
+    assert_eq!(
+        paragraph.style.alignment,
+        Some(Alignment::Center),
+        "fixture {} should preserve paragraph alignment",
+        input.label
+    );
+    assert_eq!(
+        paragraph.style.spacing.before_pt,
+        Some(LengthPt(4.0)),
+        "fixture {} should preserve paragraph before spacing",
+        input.label
+    );
+    assert_eq!(
+        paragraph.style.spacing.after_pt,
+        Some(LengthPt(5.0)),
+        "fixture {} should preserve paragraph after spacing",
+        input.label
+    );
+    assert_eq!(
+        paragraph.style.indent.left_pt,
+        Some(LengthPt(3.0)),
+        "fixture {} should preserve paragraph left indent",
+        input.label
+    );
+
+    let text_run = paragraph
+        .inlines
+        .iter()
+        .find_map(|inline| match inline {
+            Inline::Text(run) => Some(run),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("fixture {} should preserve a styled text run", input.label));
+
+    assert!(
+        text_run.style.bold,
+        "fixture {} should preserve bold style",
+        input.label
+    );
+    assert!(
+        text_run.style.italic,
+        "fixture {} should preserve italic style",
+        input.label
+    );
+    assert!(
+        text_run.style.underline,
+        "fixture {} should preserve underline style",
+        input.label
+    );
+    assert!(
+        text_run.style.strike,
+        "fixture {} should preserve strike style",
+        input.label
+    );
+    assert_eq!(
+        text_run.style.font_family.as_deref(),
+        Some("Noto Sans KR"),
+        "fixture {} should preserve font family",
+        input.label
+    );
+    assert_eq!(
+        text_run.style.font_size_pt,
+        Some(LengthPt(12.0)),
+        "fixture {} should preserve font size",
+        input.label
+    );
+    assert_eq!(
+        text_run.style.color,
+        Some(Color {
+            r: 3,
+            g: 2,
+            b: 1,
+            a: 255,
+        }),
+        "fixture {} should preserve text color",
+        input.label
+    );
+    assert_eq!(
+        text_run.style.background_color,
+        Some(Color {
+            r: 6,
+            g: 5,
+            b: 4,
+            a: 255,
+        }),
+        "fixture {} should preserve text background color",
         input.label
     );
 }
