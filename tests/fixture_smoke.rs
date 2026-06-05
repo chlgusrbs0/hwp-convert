@@ -8,7 +8,7 @@ use hwp_convert::cli::{CliArgs, OutputFormat};
 use hwp_convert::exporter;
 use hwp_convert::ir::{
     Alignment, Block, Color, Document, HeaderFooterPlacement, Image, Inline, LengthPt, LengthPx,
-    NoteKind, Paragraph, ParagraphStyle, Resource, Table, TableCell, TextStyle,
+    ListKind, NoteKind, Paragraph, ParagraphStyle, Resource, Table, TableCell, TextStyle,
 };
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +28,9 @@ const FOOTER_TEXT: &str = "footer text";
 const IMAGE_ALT_TEXT: &str = "sample image";
 const IMAGE_RESOURCE_ID: &str = "image-1";
 const IMAGE_PNG_SIGNATURE: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10];
+const LIST_BULLET_TEXT: &str = "bullet item";
+const LIST_ORDERED_FIRST_TEXT: &str = "first item";
+const LIST_ORDERED_SECOND_TEXT: &str = "second item";
 const MERGED_TABLE_CELL_TEXTS: [&str; 7] = [
     "row span", "col span", "cell 2-2", "cell 2-3", "cell 3-1", "cell 3-2", "cell 3-3",
 ];
@@ -192,6 +195,7 @@ fn official_fixtures_match_feature_expectations() {
             "footnote" => assert_footnote_fixture(&input, &document),
             "header_footer" => assert_header_footer_fixture(&input, &document),
             "image" => assert_image_fixture(&input, &document),
+            "list" => assert_list_fixture(&input, &document),
             "merged_table" => assert_merged_table_fixture(&input, &document),
             "style" => assert_style_fixture(&input, &document),
             "table" => assert_table_fixture(&input, &document),
@@ -746,6 +750,85 @@ fn assert_footnote_fixture(input: &FixtureInput, document: &Document) {
     }
 }
 
+fn assert_list_fixture(input: &FixtureInput, document: &Document) {
+    let paragraphs = collect_paragraphs(document);
+    assert_eq!(
+        paragraphs.len(),
+        3,
+        "fixture {} should preserve three list paragraphs",
+        input.label
+    );
+
+    let bullet = find_paragraph_by_text(&paragraphs, LIST_BULLET_TEXT)
+        .unwrap_or_else(|| panic!("fixture {} should preserve bullet item text", input.label));
+    let bullet_list = bullet
+        .list
+        .as_ref()
+        .unwrap_or_else(|| panic!("fixture {} should preserve bullet list info", input.label));
+    assert_eq!(
+        bullet_list.kind,
+        ListKind::Unordered,
+        "fixture {} should preserve unordered list kind",
+        input.label
+    );
+    assert_eq!(
+        bullet_list.level, 0,
+        "fixture {} should preserve bullet level",
+        input.label
+    );
+
+    let first = find_paragraph_by_text(&paragraphs, LIST_ORDERED_FIRST_TEXT).unwrap_or_else(|| {
+        panic!(
+            "fixture {} should preserve first numbered text",
+            input.label
+        )
+    });
+    let first_list = first.list.as_ref().unwrap_or_else(|| {
+        panic!(
+            "fixture {} should preserve first numbered list info",
+            input.label
+        )
+    });
+    assert_eq!(
+        first_list.kind,
+        ListKind::Ordered,
+        "fixture {} should preserve ordered list kind",
+        input.label
+    );
+    assert_eq!(
+        first_list.number,
+        Some(1),
+        "fixture {} should preserve first ordered number",
+        input.label
+    );
+
+    let second =
+        find_paragraph_by_text(&paragraphs, LIST_ORDERED_SECOND_TEXT).unwrap_or_else(|| {
+            panic!(
+                "fixture {} should preserve second numbered text",
+                input.label
+            )
+        });
+    let second_list = second.list.as_ref().unwrap_or_else(|| {
+        panic!(
+            "fixture {} should preserve second numbered list info",
+            input.label
+        )
+    });
+    assert_eq!(
+        second_list.kind,
+        ListKind::Ordered,
+        "fixture {} should preserve continued ordered list kind",
+        input.label
+    );
+    assert_eq!(
+        second_list.number,
+        Some(2),
+        "fixture {} should preserve continued ordered number",
+        input.label
+    );
+}
+
 fn assert_style_fixture(input: &FixtureInput, document: &Document) {
     let paragraphs = collect_paragraphs(document);
     let paragraph = paragraphs
@@ -857,6 +940,13 @@ fn block_paragraph_texts(blocks: &[Block]) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+fn find_paragraph_by_text<'a>(paragraphs: &[&'a Paragraph], text: &str) -> Option<&'a Paragraph> {
+    paragraphs
+        .iter()
+        .copied()
+        .find(|paragraph| paragraph_plain_text(paragraph) == text)
 }
 
 fn collect_tables(document: &Document) -> Vec<&Table> {
