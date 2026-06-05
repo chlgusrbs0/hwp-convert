@@ -8,7 +8,7 @@ use hwp_convert::cli::{CliArgs, OutputFormat};
 use hwp_convert::exporter;
 use hwp_convert::ir::{
     Alignment, Block, Color, Document, HeaderFooterPlacement, Image, Inline, LengthPt, LengthPx,
-    Paragraph, ParagraphStyle, Resource, Table, TableCell, TextStyle,
+    NoteKind, Paragraph, ParagraphStyle, Resource, Table, TableCell, TextStyle,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,9 @@ const BASIC_TEXT_LINE_BREAK_BEFORE: &str = "줄바꿈 앞";
 const BASIC_TEXT_LINE_BREAK_AFTER: &str = "줄바꿈 뒤";
 const BASIC_TEXT_TAB_BEFORE: &str = "탭 앞";
 const BASIC_TEXT_TAB_AFTER: &str = "탭 뒤";
+const FOOTNOTE_BODY_TEXT: &str = "body text";
+const FOOTNOTE_ID: &str = "footnote-3";
+const FOOTNOTE_NOTE_TEXT: &str = "note body";
 const HEADER_TEXT: &str = "header text";
 const FOOTER_TEXT: &str = "footer text";
 const IMAGE_ALT_TEXT: &str = "sample image";
@@ -186,6 +189,7 @@ fn official_fixtures_match_feature_expectations() {
 
         match input.fixture_name.as_str() {
             "basic_text" => assert_basic_text_fixture(&input, &document),
+            "footnote" => assert_footnote_fixture(&input, &document),
             "header_footer" => assert_header_footer_fixture(&input, &document),
             "image" => assert_image_fixture(&input, &document),
             "merged_table" => assert_merged_table_fixture(&input, &document),
@@ -672,6 +676,74 @@ fn assert_header_footer_fixture(input: &FixtureInput, document: &Document) {
         "fixture {} should preserve footer text",
         input.label
     );
+}
+
+fn assert_footnote_fixture(input: &FixtureInput, document: &Document) {
+    let note = document
+        .notes
+        .notes
+        .first()
+        .unwrap_or_else(|| panic!("fixture {} should preserve one footnote", input.label));
+    assert_eq!(
+        document.notes.notes.len(),
+        1,
+        "fixture {} should preserve exactly one note",
+        input.label
+    );
+    assert_eq!(
+        note.id.as_str(),
+        FOOTNOTE_ID,
+        "fixture {} should preserve the footnote id",
+        input.label
+    );
+    assert_eq!(
+        note.kind,
+        NoteKind::Footnote,
+        "fixture {} should preserve footnote kind",
+        input.label
+    );
+    assert_eq!(
+        block_paragraph_texts(&note.blocks),
+        vec![FOOTNOTE_NOTE_TEXT.to_string()],
+        "fixture {} should preserve footnote body text",
+        input.label
+    );
+    assert!(
+        document
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("footnote/endnote")),
+        "fixture {} should report the current rhwp note-position limitation",
+        input.label
+    );
+
+    let paragraph = collect_paragraphs(document)
+        .into_iter()
+        .find(|paragraph| {
+            paragraph
+                .inlines
+                .iter()
+                .any(|inline| matches!(inline, Inline::Text(run) if run.text == FOOTNOTE_BODY_TEXT))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "fixture {} should preserve the paragraph with a footnote",
+                input.label
+            )
+        });
+
+    match paragraph.inlines.last() {
+        Some(Inline::FootnoteRef { note_id }) => assert_eq!(
+            note_id.as_str(),
+            FOOTNOTE_ID,
+            "fixture {} should append the current footnote reference",
+            input.label
+        ),
+        other => panic!(
+            "fixture {} should preserve a trailing footnote ref, got {other:?}",
+            input.label
+        ),
+    }
 }
 
 fn assert_style_fixture(input: &FixtureInput, document: &Document) {
