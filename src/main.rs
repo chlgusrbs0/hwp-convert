@@ -1,14 +1,7 @@
-mod bridge;
-mod cli;
-mod exporter;
-mod hwpx;
-mod ir;
-mod render;
-mod util;
-
 use std::error::Error;
 
-use cli::{parse_args, print_usage};
+use hwp_convert::cli::{parse_args, print_usage};
+use hwp_convert::exporter;
 
 fn main() {
     if let Err(error) = run() {

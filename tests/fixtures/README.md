@@ -27,6 +27,10 @@ fixture는 다음 순서로 확장한다.
 
 `basic_text`가 첫 fixture다. 이 fixture에서 HWP/HWPX parse smoke, bridge feature assertion, exporter smoke의 기본 형태를 먼저 고정한다.
 
+`tests/fixture_smoke.rs`는 `tests/fixtures/<fixture_name>/input.hwp`와
+`tests/fixtures/<fixture_name>/input.hwpx`를 자동으로 발견해 기본 smoke를 실행한다.
+아직 fixture 입력 파일이 없으면 테스트는 준비 상태로 통과한다.
+
 ## 권장 구조
 
 ```text
