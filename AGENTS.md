@@ -232,6 +232,14 @@ cargo test
 cargo test --test fixture_smoke
 ```
 
+Bridge stats expected 갱신:
+
+```bash
+HWP_CONVERT_UPDATE_FIXTURE_STATS=1 cargo test --test fixture_smoke official_fixtures_match_expected_bridge_stats
+```
+
+이 명령은 fixture 입력 파일이 있을 때 `expected/bridge-stats.hwp.json` 또는 `expected/bridge-stats.hwpx.json`을 쓴다. 일반 테스트에서는 expected 파일을 만들거나 고치지 않는다.
+
 문서만 바꿔도 가능하면 `cargo test`를 실행해 현재 기준이 깨지지 않았는지 확인한다.
 
 ## Git/commit 규칙
@@ -269,4 +277,3 @@ type(scope): 한국어 설명
 5. P0 fixture가 쌓이면 rHWP revision update rehearsal을 한다.
 
 새 출력 형식 추가보다 이 순서를 우선한다.
-

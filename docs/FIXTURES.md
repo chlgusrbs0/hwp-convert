@@ -160,3 +160,18 @@ tests/fixtures/<fixture_name>/expected/bridge-stats.hwpx.json
 - bridge stats는 실제 문서 fixture가 추가된 뒤 작성한다.
 - stats가 바뀌면 expected를 즉시 수정하지 않는다. 먼저 bridge 개선인지 회귀인지 판단한다.
 - 구조가 복잡한 fixture에서는 전체 JSON golden보다 bridge stats와 feature-level assertion을 우선한다.
+
+갱신 방법:
+
+```bash
+HWP_CONVERT_UPDATE_FIXTURE_STATS=1 cargo test --test fixture_smoke official_fixtures_match_expected_bridge_stats
+```
+
+이 명령은 발견된 각 `input.hwp`와 `input.hwpx`에 대해 확장자별 파일을 생성하거나 갱신한다.
+
+```text
+expected/bridge-stats.hwp.json
+expected/bridge-stats.hwpx.json
+```
+
+기본 테스트 실행에서는 expected 파일을 쓰지 않는다. expected 갱신은 위 환경변수를 명시했을 때만 수행한다.

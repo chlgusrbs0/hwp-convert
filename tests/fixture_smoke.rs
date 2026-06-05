@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,6 +10,7 @@ use hwp_convert::ir::{Block, Document, Inline, Paragraph, ParagraphStyle, Resour
 use serde::{Deserialize, Serialize};
 
 const FIXTURE_ROOT: &str = "tests/fixtures";
+const UPDATE_FIXTURE_STATS_ENV: &str = "HWP_CONVERT_UPDATE_FIXTURE_STATS";
 const BASIC_TEXT_KOREAN_PARAGRAPH: &str = "기본 한글 문단";
 const BASIC_TEXT_MIXED_PARAGRAPH: &str = "English 123 mixed text";
 const BASIC_TEXT_LINE_BREAK_BEFORE: &str = "줄바꿈 앞";
@@ -130,16 +132,25 @@ fn official_fixtures_match_expected_bridge_stats() {
         return;
     }
 
+    let update_stats = env_flag(UPDATE_FIXTURE_STATS_ENV);
     let mut checked = 0usize;
 
     for input in inputs {
+        let document = bridge::rhwp::read_document(&input.path)
+            .unwrap_or_else(|error| panic!("failed to parse {}: {error}", input.label));
+        let actual = DocumentStats::from_document(&document);
+
+        if update_stats {
+            let expected_path = input.bridge_stats_update_path();
+            write_expected_bridge_stats(&expected_path, &actual);
+            checked += 1;
+            continue;
+        }
+
         let Some(expected_path) = input.bridge_stats_expected_path() else {
             continue;
         };
         let expected = read_expected_bridge_stats(&expected_path);
-        let document = bridge::rhwp::read_document(&input.path)
-            .unwrap_or_else(|error| panic!("failed to parse {}: {error}", input.label));
-        let actual = DocumentStats::from_document(&document);
 
         assert_eq!(
             actual,
@@ -155,6 +166,8 @@ fn official_fixtures_match_expected_bridge_stats() {
         eprintln!(
             "no bridge stats expectation files found under {FIXTURE_ROOT}; bridge stats test is armed"
         );
+    } else if update_stats {
+        eprintln!("updated {checked} bridge stats expectation file(s)");
     }
 }
 
@@ -181,6 +194,22 @@ impl FixtureInput {
         }
 
         None
+    }
+
+    fn bridge_stats_update_path(&self) -> PathBuf {
+        let fixture_dir = self
+            .path
+            .parent()
+            .expect("fixture input should have a parent directory");
+        let extension = self
+            .path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .expect("fixture input should have a UTF-8 extension");
+
+        fixture_dir
+            .join("expected")
+            .join(format!("bridge-stats.{extension}.json"))
     }
 }
 
@@ -228,6 +257,25 @@ fn read_expected_bridge_stats(path: &Path) -> DocumentStats {
 
     serde_json::from_str(&content)
         .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()))
+}
+
+fn write_expected_bridge_stats(path: &Path, stats: &DocumentStats) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .unwrap_or_else(|error| panic!("failed to create {}: {error}", parent.display()));
+    }
+
+    let mut content = serde_json::to_string_pretty(stats)
+        .unwrap_or_else(|error| panic!("failed to serialize bridge stats: {error}"));
+    content.push('\n');
+    fs::write(path, content)
+        .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
 }
 
 fn assert_basic_text_fixture(input: &FixtureInput, document: &Document) {

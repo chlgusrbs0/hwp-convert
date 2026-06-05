@@ -77,3 +77,11 @@ tests/fixtures/<fixture_name>/expected/bridge-stats.hwpx.json
 확장자별 파일이 있으면 해당 입력에만 적용하고, 없으면 `bridge-stats.json`을 공통 기대값으로 사용한다.
 
 이 expected는 전체 `Document IR` golden이 아니라 문단/표/이미지/링크/warning 같은 개수 지표를 고정하기 위한 장치다. stats가 바뀌면 기대값을 바로 고치지 말고 변환 정확도 개선인지 회귀인지 먼저 판단한다.
+
+expected 파일 생성 또는 갱신:
+
+```bash
+HWP_CONVERT_UPDATE_FIXTURE_STATS=1 cargo test --test fixture_smoke official_fixtures_match_expected_bridge_stats
+```
+
+이 명령은 기본적으로 `bridge-stats.hwp.json`과 `bridge-stats.hwpx.json`처럼 입력 확장자별 expected를 쓴다. 일반 `cargo test`에서는 expected 파일을 생성하거나 수정하지 않는다.
