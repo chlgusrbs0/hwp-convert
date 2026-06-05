@@ -5,9 +5,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hwp_convert::bridge;
 use hwp_convert::cli::{CliArgs, OutputFormat};
 use hwp_convert::exporter;
-use hwp_convert::ir::{Block, Document};
+use hwp_convert::ir::{Block, Document, Inline, Paragraph};
 
 const FIXTURE_ROOT: &str = "tests/fixtures";
+const BASIC_TEXT_KOREAN_PARAGRAPH: &str = "기본 한글 문단";
+const BASIC_TEXT_MIXED_PARAGRAPH: &str = "English 123 mixed text";
+const BASIC_TEXT_LINE_BREAK_BEFORE: &str = "줄바꿈 앞";
+const BASIC_TEXT_LINE_BREAK_AFTER: &str = "줄바꿈 뒤";
+const BASIC_TEXT_TAB_BEFORE: &str = "탭 앞";
+const BASIC_TEXT_TAB_AFTER: &str = "탭 뒤";
 
 #[test]
 fn official_fixtures_parse_into_non_empty_ir() {
@@ -92,6 +98,25 @@ fn official_fixtures_export_all_current_formats() {
     }
 }
 
+#[test]
+fn official_fixtures_match_feature_expectations() {
+    let inputs = discover_fixture_inputs();
+    if inputs.is_empty() {
+        eprintln!("no official fixture inputs found under {FIXTURE_ROOT}; feature test is armed");
+        return;
+    }
+
+    for input in inputs {
+        let document = bridge::rhwp::read_document(&input.path)
+            .unwrap_or_else(|error| panic!("failed to parse {}: {error}", input.label));
+
+        match input.fixture_name.as_str() {
+            "basic_text" => assert_basic_text_fixture(&input, &document),
+            _ => {}
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct FixtureInput {
     fixture_name: String,
@@ -155,6 +180,114 @@ fn block_has_semantic_content(block: &Block) -> bool {
             unknown.fallback_text.is_some() || unknown.message.is_some() || unknown.source.is_some()
         }
     }
+}
+
+fn assert_basic_text_fixture(input: &FixtureInput, document: &Document) {
+    let paragraphs = collect_paragraphs(document);
+    assert_eq!(
+        paragraphs.len(),
+        4,
+        "fixture {} should preserve exactly four non-empty paragraphs and drop the empty paragraph",
+        input.label
+    );
+
+    let paragraph_texts = paragraphs
+        .iter()
+        .map(|paragraph| paragraph_plain_text(paragraph))
+        .collect::<Vec<_>>();
+
+    assert!(
+        paragraph_texts
+            .iter()
+            .any(|text| text == BASIC_TEXT_KOREAN_PARAGRAPH),
+        "fixture {} should preserve the Korean paragraph text",
+        input.label
+    );
+    assert!(
+        paragraph_texts
+            .iter()
+            .any(|text| text == BASIC_TEXT_MIXED_PARAGRAPH),
+        "fixture {} should preserve the mixed English/number paragraph text",
+        input.label
+    );
+    assert!(
+        paragraphs
+            .iter()
+            .any(|paragraph| paragraph_has_line_break_case(paragraph)),
+        "fixture {} should preserve an inline line break inside a paragraph",
+        input.label
+    );
+    assert!(
+        paragraphs
+            .iter()
+            .any(|paragraph| paragraph_has_tab_case(paragraph)),
+        "fixture {} should preserve an inline tab inside a paragraph",
+        input.label
+    );
+}
+
+fn collect_paragraphs(document: &Document) -> Vec<&Paragraph> {
+    document
+        .sections
+        .iter()
+        .flat_map(|section| &section.blocks)
+        .filter_map(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph),
+            _ => None,
+        })
+        .collect()
+}
+
+fn paragraph_has_line_break_case(paragraph: &Paragraph) -> bool {
+    let text = paragraph_plain_text(paragraph);
+
+    text == format!("{BASIC_TEXT_LINE_BREAK_BEFORE}\n{BASIC_TEXT_LINE_BREAK_AFTER}")
+        && paragraph
+            .inlines
+            .iter()
+            .any(|inline| matches!(inline, Inline::LineBreak))
+}
+
+fn paragraph_has_tab_case(paragraph: &Paragraph) -> bool {
+    let text = paragraph_plain_text(paragraph);
+
+    text == format!("{BASIC_TEXT_TAB_BEFORE}\t{BASIC_TEXT_TAB_AFTER}")
+        && paragraph
+            .inlines
+            .iter()
+            .any(|inline| matches!(inline, Inline::Tab))
+}
+
+fn paragraph_plain_text(paragraph: &Paragraph) -> String {
+    let mut text = String::new();
+
+    for inline in &paragraph.inlines {
+        match inline {
+            Inline::Text(run) => text.push_str(&run.text),
+            Inline::LineBreak => text.push('\n'),
+            Inline::Tab => text.push('\t'),
+            Inline::Link(link) => text.push_str(&link_plain_text(&link.inlines)),
+            Inline::FootnoteRef { note_id } | Inline::EndnoteRef { note_id } => {
+                text.push_str(note_id.as_str());
+            }
+            Inline::Unknown(unknown) => {
+                if let Some(fallback_text) = &unknown.fallback_text {
+                    text.push_str(fallback_text);
+                }
+            }
+        }
+    }
+
+    text
+}
+
+fn link_plain_text(inlines: &[Inline]) -> String {
+    let paragraph = Paragraph {
+        inlines: inlines.to_vec(),
+        ..Default::default()
+    };
+
+    paragraph_plain_text(&paragraph)
 }
 
 fn current_output_formats() -> [OutputFormat; 5] {
