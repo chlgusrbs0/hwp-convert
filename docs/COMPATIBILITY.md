@@ -8,6 +8,12 @@ Synthetic HWP to HWPX attempts for `table`, `style`, `equation`, `shape`, `footn
 
 This means HWP support and HWPX support must not be described as equivalent unless the specific element has a passing HWPX fixture or another explicit test.
 
+## Current unsupported control warning behavior
+
+`src/bridge/rhwp.rs` now records `ConversionWarning` entries for known rHWP controls that are exposed by the parser but not yet semantically mapped by hwp-convert. This currently covers controls such as auto number, new number, page number position, bookmark, ruby, character overlap, page hide, hidden comment, non-hyperlink fields, and form objects.
+
+Section/column definition controls and controls already handled through another path, such as table, image, equation, shape, header/footer, footnote/endnote, and hyperlink, are not covered by this generic warning path.
+
 이 문서는 현재 `hwp-convert` 코드 기준의 bridge/exporter 지원 상태를 정리한다.
 새 Document IR 버전을 제안하는 문서가 아니며, 현재 `IR_VERSION`은 그대로 `6`이다.
 
