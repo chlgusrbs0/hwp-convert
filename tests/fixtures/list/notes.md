@@ -1,38 +1,33 @@
 # list fixture
 
-## 목적
+이 fixture는 HWP/HWPX 입력에서 기본 list metadata와 읽기 순서가 `Document IR`로 보존되는지 검증한다.
 
-HWP 문서의 목록 문단이 Document IR의 `Paragraph.list` 정보로 보존되는지 확인한다.
+입력 파일:
 
-## 현재 입력
+- `input.hwp`: rHWP model로 구성한 synthetic HWP fixture.
+- `input.hwpx`: `input.hwp`를 rHWP로 parse한 뒤 rHWP HWPX serializer로 생성한 paired fixture.
 
-- `input.hwp`: 준비됨
-- `input.hwpx`: 아직 없음
+문서 내용:
 
-HWP fixture는 rHWP 모델을 사용해 생성한 합성 문서다. 실제 HWP 파일 포맷 바이트로 직렬화되어 `bridge::rhwp::read_document` 경로를 통과한다.
+- bullet list paragraph: `bullet item`
+- ordered list paragraph 1: `first item`
+- ordered list paragraph 2: `second item`
 
-## 포함된 기능
+현재 기대 동작:
 
-- unordered/bullet paragraph 1개
-- ordered paragraph 2개
-- bullet text: `bullet item`
-- ordered text:
-  - `first item`
-  - `second item`
-- ordered numbering:
-  - `first item`: `1`
-  - `second item`: `2`
+- `bridge::rhwp::read_document`가 HWP와 HWPX 입력 모두에서 성공한다.
+- 세 문단의 텍스트와 읽기 순서가 유지된다.
+- 첫 문단은 unordered list로 매핑된다.
+- 둘째/셋째 문단은 ordered list로 매핑된다.
+- ordered list numbering은 같은 list item series 안에서 이어진다.
+- `txt`, `json`, `markdown`, `html`, `svg` export가 모두 성공한다.
 
-## 검증 기준
+현재 한계:
 
-`tests/fixture_smoke.rs`의 `assert_list_fixture`가 다음을 확인한다.
+- synthetic HWP reparse에서 bullet marker 문자가 안정적으로 복원되지 않아 marker glyph 자체는 fixture 기준으로 삼지 않는다.
+- 이 fixture는 list metadata 보존을 확인하지만, exporter별 list rendering fidelity 전체를 golden 비교하지는 않는다.
 
-- list paragraph가 정확히 3개 생성된다.
-- bullet paragraph가 `ListKind::Unordered`로 보존된다.
-- bullet level이 `0`으로 보존된다.
-- ordered paragraph들이 `ListKind::Ordered`로 보존된다.
-- ordered numbering state가 `1`, `2`로 이어진다.
+Expected files:
 
-## 주의
-
-이 fixture는 bullet marker 문자를 정확도 기준으로 삼지 않는다. 현재 synthetic HWP 재파싱에서는 bullet kind는 보존되지만 marker 문자가 안정적인 기준으로 돌아오지 않는다. 실제 문서 fixture에서 marker 보존이 확인되면 별도 fixture나 assertion으로 승격한다.
+- `expected/bridge-stats.hwp.json`
+- `expected/bridge-stats.hwpx.json`
