@@ -45,15 +45,7 @@ impl Document {
     pub fn from_paragraphs(paragraphs: Vec<String>) -> Self {
         let blocks = paragraphs
             .into_iter()
-            .map(|text| {
-                Block::Paragraph(Paragraph {
-                    role: ParagraphRole::Body,
-                    inlines: inlines_from_plain_text(text),
-                    style: ParagraphStyle::default(),
-                    style_ref: None,
-                    list: None,
-                })
-            })
+            .map(|text| Block::Paragraph(Paragraph::from_plain_text(text)))
             .collect();
 
         Self {
@@ -67,6 +59,18 @@ impl Document {
             styles: StyleSheet::default(),
             notes: NoteStore::default(),
             warnings: Vec::new(),
+        }
+    }
+}
+
+impl Paragraph {
+    pub fn from_plain_text(text: String) -> Self {
+        Self {
+            role: ParagraphRole::Body,
+            inlines: inlines_from_plain_text(text),
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: None,
         }
     }
 }

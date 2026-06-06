@@ -32,7 +32,7 @@ use crate::ir::{
 };
 
 /// Parse a source document with `rhwp` and bridge the resulting model into the
-/// local `Document` IR. For `.hwpx`, text-only fallback remains available
+/// local `Document` IR. For `.hwpx`, section XML fallback remains available
 /// when parsing fails or when the mapped body is structurally empty.
 pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
     let (input_kind, bytes) = hwpx::read_input_bytes(input_path)?;
@@ -44,7 +44,7 @@ pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
                 Ok(bridged)
             } else if input_kind == InputKind::Hwpx {
                 let empty_error = empty_document_error();
-                fallback_to_hwpx_text(&bytes, &empty_error).map_err(Into::into)
+                fallback_to_hwpx_document(&bytes, &empty_error).map_err(Into::into)
             } else {
                 Err(empty_document_error().into())
             }
@@ -56,7 +56,7 @@ pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
             );
 
             if input_kind == InputKind::Hwpx {
-                fallback_to_hwpx_text(&bytes, &rhwp_error).map_err(Into::into)
+                fallback_to_hwpx_document(&bytes, &rhwp_error).map_err(Into::into)
             } else {
                 Err(rhwp_error.into())
             }
@@ -64,25 +64,21 @@ pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
     }
 }
 
-fn fallback_to_hwpx_text(bytes: &[u8], source_error: &io::Error) -> io::Result<Document> {
-    let fallback = hwpx::read_text_fallback_from_archive(bytes)
+fn fallback_to_hwpx_document(bytes: &[u8], source_error: &io::Error) -> io::Result<Document> {
+    let fallback = hwpx::read_document_fallback_from_archive(bytes)
         .map_err(|fallback_error| hwpx::combine_hwpx_errors(source_error, &fallback_error))?;
 
-    Ok(document_from_hwpx_text_fallback(
-        fallback.paragraphs,
+    Ok(document_from_hwpx_fallback(
+        fallback.document,
         fallback.source,
     ))
 }
 
-fn document_from_hwpx_text_fallback(
-    paragraphs: Vec<String>,
-    source: HwpxTextFallbackSource,
-) -> Document {
-    let mut document = Document::from_paragraphs(paragraphs);
+fn document_from_hwpx_fallback(mut document: Document, source: HwpxTextFallbackSource) -> Document {
     let warning = match source {
         HwpxTextFallbackSource::SectionXml => ConversionWarning {
             code: WarningCode::Unknown,
-            message: "Used HWPX section XML text fallback. This recovers paragraph text and inline line breaks/tabs, but table, image, and style data may be missing.".to_string(),
+            message: "Used HWPX section XML fallback. This recovers paragraph text, inline line breaks/tabs, and simple table structure, but image, style, and layout data may be missing.".to_string(),
         },
         HwpxTextFallbackSource::PreviewText => ConversionWarning {
             code: WarningCode::UsedHwpxPreviewFallback,
@@ -1967,8 +1963,8 @@ mod tests {
 
     #[test]
     fn preview_fallback_marks_warning() {
-        let document = document_from_hwpx_text_fallback(
-            vec!["preview".to_string()],
+        let document = document_from_hwpx_fallback(
+            Document::from_paragraphs(vec!["preview".to_string()]),
             HwpxTextFallbackSource::PreviewText,
         );
 

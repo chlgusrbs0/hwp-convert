@@ -8,7 +8,7 @@ Synthetic HWP to HWPX attempts for `table`, `style`, `equation`, `shape`, `footn
 
 This means HWP support and HWPX support must not be described as equivalent unless the specific element has a passing HWPX fixture or another explicit test.
 
-When rHWP parsing fails or maps a HWPX file to an empty semantic document, hwp-convert now tries a text-only `Contents/section*.xml` fallback before `Preview/PrvText.txt`. This can recover paragraph text plus inline line breaks/tabs, but it does not preserve table, image, style, or layout structure.
+When rHWP parsing fails or maps a HWPX file to an empty semantic document, hwp-convert now tries a structured `Contents/section*.xml` fallback before `Preview/PrvText.txt`. This can recover paragraph text, inline line breaks/tabs, and simple table rows/cells/spans, but it does not preserve image, style, or layout structure.
 
 ## Current unsupported control warning behavior
 

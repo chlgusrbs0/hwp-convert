@@ -5,6 +5,11 @@ use std::path::Path;
 
 use zip::ZipArchive;
 
+use crate::ir::{
+    Block, Document, Metadata, NoteStore, Paragraph, ResourceStore, Section, StyleSheet, Table,
+    TableCell, TableCellStyle, TableRow, TableStyle,
+};
+
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +27,12 @@ pub(crate) enum HwpxTextFallbackSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HwpxTextFallback {
     pub paragraphs: Vec<String>,
+    pub source: HwpxTextFallbackSource,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HwpxDocumentFallback {
+    pub document: Document,
     pub source: HwpxTextFallbackSource,
 }
 
@@ -121,6 +132,30 @@ pub(crate) fn read_text_fallback_from_archive(bytes: &[u8]) -> io::Result<HwpxTe
     }
 }
 
+pub(crate) fn read_document_fallback_from_archive(
+    bytes: &[u8],
+) -> io::Result<HwpxDocumentFallback> {
+    match read_section_document_from_archive(bytes) {
+        Ok(document) => Ok(HwpxDocumentFallback {
+            document,
+            source: HwpxTextFallbackSource::SectionXml,
+        }),
+        Err(section_error) => read_preview_text_from_archive(bytes)
+            .map(|paragraphs| HwpxDocumentFallback {
+                document: Document::from_paragraphs(paragraphs),
+                source: HwpxTextFallbackSource::PreviewText,
+            })
+            .map_err(|preview_error| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "HWPX section XML fallback failed: {section_error}; HWPX preview fallback failed: {preview_error}"
+                    ),
+                )
+            }),
+    }
+}
+
 fn read_paragraphs_with_rhwp(bytes: &[u8]) -> io::Result<Vec<String>> {
     let document = rhwp::parse_document(bytes).map_err(|error| {
         io::Error::new(
@@ -208,6 +243,375 @@ pub(crate) fn read_section_text_from_archive(bytes: &[u8]) -> io::Result<Vec<Str
     }
 
     Ok(paragraphs)
+}
+
+pub(crate) fn read_section_document_from_archive(bytes: &[u8]) -> io::Result<Document> {
+    let cursor = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("HWPX archive could not be opened: {error}"),
+        )
+    })?;
+
+    let mut section_paths = collect_section_xml_paths(&mut archive)?;
+    section_paths.sort_by_key(|path| section_xml_index(path).unwrap_or(u32::MAX));
+
+    if section_paths.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Contents/section*.xml entries were not found",
+        ));
+    }
+
+    let mut blocks = Vec::new();
+    for section_path in section_paths {
+        let section_xml = read_zip_text_entry(&mut archive, &section_path)?;
+        blocks.extend(extract_section_xml_blocks(&section_xml));
+    }
+
+    if blocks.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "HWPX section XML did not contain recoverable document blocks",
+        ));
+    }
+
+    Ok(document_from_blocks(blocks))
+}
+
+fn collect_section_xml_paths<R: Read + io::Seek>(
+    archive: &mut ZipArchive<R>,
+) -> io::Result<Vec<String>> {
+    let mut section_paths = Vec::new();
+
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("HWPX archive entry could not be read: {error}"),
+            )
+        })?;
+        let name = entry.name().to_string();
+        if is_section_xml_path(&name) {
+            section_paths.push(name);
+        }
+    }
+
+    Ok(section_paths)
+}
+
+fn document_from_blocks(blocks: Vec<Block>) -> Document {
+    Document {
+        ir_version: crate::ir::IR_VERSION,
+        metadata: Metadata::default(),
+        sections: vec![Section {
+            blocks,
+            ..Default::default()
+        }],
+        resources: ResourceStore::default(),
+        styles: StyleSheet::default(),
+        notes: NoteStore::default(),
+        warnings: Vec::new(),
+    }
+}
+
+fn extract_section_xml_blocks(xml: &str) -> Vec<Block> {
+    let mut blocks = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(xml, cursor) {
+        if tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+
+        match tag.name {
+            "tbl" => {
+                let Some(table_end) = find_matching_element_end(xml, &tag) else {
+                    cursor = tag.end;
+                    continue;
+                };
+                let table_xml = &xml[tag.start..table_end];
+                if let Some(table) = extract_table_from_xml(table_xml) {
+                    blocks.push(Block::Table(table));
+                }
+                cursor = table_end;
+            }
+            "p" => {
+                let Some(paragraph_end) = find_matching_element_end(xml, &tag) else {
+                    cursor = tag.end;
+                    continue;
+                };
+                let paragraph_xml = &xml[tag.start..paragraph_end];
+                blocks.extend(extract_blocks_from_paragraph_xml(paragraph_xml));
+                cursor = paragraph_end;
+            }
+            _ => {
+                cursor = tag.end;
+            }
+        }
+    }
+
+    blocks
+}
+
+fn extract_table_from_xml(table_xml: &str) -> Option<Table> {
+    let mut rows = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(table_xml, cursor) {
+        if tag.name != "tr" || tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+
+        let Some(row_end) = find_matching_element_end(table_xml, &tag) else {
+            cursor = tag.end;
+            continue;
+        };
+        let row_xml = &table_xml[tag.start..row_end];
+        let cells = extract_table_cells_from_row_xml(row_xml);
+        if !cells.is_empty() {
+            rows.push(TableRow { cells });
+        }
+        cursor = row_end;
+    }
+
+    if rows.is_empty() {
+        return None;
+    }
+
+    Some(Table {
+        rows,
+        style: TableStyle::default(),
+    })
+}
+
+fn extract_table_cells_from_row_xml(row_xml: &str) -> Vec<TableCell> {
+    let mut cells = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(row_xml, cursor) {
+        if tag.name != "tc" || tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+
+        let Some(cell_end) = find_matching_element_end(row_xml, &tag) else {
+            cursor = tag.end;
+            continue;
+        };
+        let cell_xml = &row_xml[tag.start..cell_end];
+        cells.push(extract_table_cell_from_xml(cell_xml));
+        cursor = cell_end;
+    }
+
+    cells
+}
+
+fn extract_table_cell_from_xml(cell_xml: &str) -> TableCell {
+    TableCell {
+        row_span: first_xml_attribute_u32(cell_xml, "cellSpan", "rowSpan").unwrap_or(1),
+        col_span: first_xml_attribute_u32(cell_xml, "cellSpan", "colSpan").unwrap_or(1),
+        blocks: extract_section_xml_blocks(cell_xml),
+        style: TableCellStyle::default(),
+    }
+}
+
+fn extract_blocks_from_paragraph_xml(paragraph_xml: &str) -> Vec<Block> {
+    let mut blocks = Vec::new();
+    let mut fragment_start = 0usize;
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(paragraph_xml, cursor) {
+        if tag.name != "tbl" || tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+
+        let Some(table_end) = find_matching_element_end(paragraph_xml, &tag) else {
+            cursor = tag.end;
+            continue;
+        };
+
+        push_paragraph_text_fragment_as_block(
+            &mut blocks,
+            &paragraph_xml[fragment_start..tag.start],
+        );
+        let table_xml = &paragraph_xml[tag.start..table_end];
+        if let Some(table) = extract_table_from_xml(table_xml) {
+            blocks.push(Block::Table(table));
+        }
+
+        fragment_start = table_end;
+        cursor = table_end;
+    }
+
+    push_paragraph_text_fragment_as_block(&mut blocks, &paragraph_xml[fragment_start..]);
+    blocks
+}
+
+fn push_paragraph_text_fragment_as_block(blocks: &mut Vec<Block>, xml: &str) {
+    let text = extract_text_from_xml_fragment(xml);
+    if !text.is_empty() {
+        blocks.push(Block::Paragraph(Paragraph::from_plain_text(text)));
+    }
+}
+
+fn extract_text_from_xml_fragment(xml: &str) -> String {
+    let mut current = String::new();
+    let mut cursor = 0usize;
+    let mut text_depth = 0usize;
+
+    while let Some(relative_tag_start) = xml[cursor..].find('<') {
+        let tag_start = cursor + relative_tag_start;
+        if text_depth > 0 && tag_start > cursor {
+            current.push_str(&decode_xml_text(&xml[cursor..tag_start]));
+        }
+
+        let Some(relative_tag_end) = xml[tag_start..].find('>') else {
+            break;
+        };
+        let tag_end = tag_start + relative_tag_end;
+        let tag = &xml[tag_start + 1..tag_end];
+        let tag_name = xml_tag_local_name(tag);
+        let is_closing = is_xml_closing_tag(tag);
+        let is_self_closing = is_xml_self_closing_tag(tag);
+
+        match tag_name {
+            Some("t") if is_closing => {
+                text_depth = text_depth.saturating_sub(1);
+            }
+            Some("t") if !is_closing && !is_self_closing => {
+                text_depth += 1;
+            }
+            Some("lineBreak") if text_depth > 0 => current.push('\n'),
+            Some("tab") if text_depth > 0 => current.push('\t'),
+            _ => {}
+        }
+
+        cursor = tag_end + 1;
+    }
+
+    if text_depth > 0 && cursor < xml.len() {
+        current.push_str(&decode_xml_text(&xml[cursor..]));
+    }
+
+    current.trim_end().to_string()
+}
+
+fn first_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> Option<u32> {
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(xml, cursor) {
+        if tag.name == tag_name && !tag.is_closing {
+            if let Some(value) = xml_attribute_value(tag.raw, attribute_name) {
+                return value.parse().ok();
+            }
+        }
+        cursor = tag.end;
+    }
+
+    None
+}
+
+#[derive(Clone, Copy, Debug)]
+struct XmlTag<'a> {
+    start: usize,
+    end: usize,
+    raw: &'a str,
+    name: &'a str,
+    is_closing: bool,
+    is_self_closing: bool,
+}
+
+fn next_xml_tag(xml: &str, cursor: usize) -> Option<XmlTag<'_>> {
+    let relative_start = xml.get(cursor..)?.find('<')?;
+    let start = cursor + relative_start;
+    let relative_end = xml.get(start..)?.find('>')?;
+    let end = start + relative_end + 1;
+    let raw = xml.get(start + 1..end - 1)?;
+    let name = xml_tag_local_name(raw)?;
+
+    Some(XmlTag {
+        start,
+        end,
+        raw,
+        name,
+        is_closing: is_xml_closing_tag(raw),
+        is_self_closing: is_xml_self_closing_tag(raw),
+    })
+}
+
+fn find_matching_element_end(xml: &str, start_tag: &XmlTag<'_>) -> Option<usize> {
+    if start_tag.is_closing {
+        return None;
+    }
+
+    if start_tag.is_self_closing {
+        return Some(start_tag.end);
+    }
+
+    let mut cursor = start_tag.end;
+    let mut depth = 1usize;
+
+    while let Some(tag) = next_xml_tag(xml, cursor) {
+        if tag.name == start_tag.name {
+            if tag.is_closing {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(tag.end);
+                }
+            } else if !tag.is_self_closing {
+                depth += 1;
+            }
+        }
+
+        cursor = tag.end;
+    }
+
+    None
+}
+
+fn xml_attribute_value<'a>(tag: &'a str, attribute_name: &str) -> Option<&'a str> {
+    let mut search_start = 0usize;
+
+    while let Some(relative_attr_start) = tag.get(search_start..)?.find(attribute_name) {
+        let attr_start = search_start + relative_attr_start;
+        let attr_end = attr_start + attribute_name.len();
+        if !is_xml_attribute_boundary(tag, attr_start, attr_end) {
+            search_start = attr_end;
+            continue;
+        }
+
+        let after_name = tag.get(attr_end..)?.trim_start();
+        let after_equals = after_name.strip_prefix('=')?.trim_start();
+        let quote = after_equals.chars().next()?;
+        if quote != '"' && quote != '\'' {
+            return None;
+        }
+
+        let value_start = quote.len_utf8();
+        let value_end = after_equals.get(value_start..)?.find(quote)?;
+        return after_equals.get(value_start..value_start + value_end);
+    }
+
+    None
+}
+
+fn is_xml_attribute_boundary(tag: &str, attr_start: usize, attr_end: usize) -> bool {
+    let before_ok = attr_start == 0
+        || tag
+            .as_bytes()
+            .get(attr_start.saturating_sub(1))
+            .is_some_and(|byte| byte.is_ascii_whitespace());
+    let after_ok = tag
+        .as_bytes()
+        .get(attr_end)
+        .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'=');
+
+    before_ok && after_ok
 }
 
 /// HWPX preview fallback is text-only.
@@ -536,6 +940,78 @@ mod tests {
                 "tab 앞\ttab 뒤".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn extracts_simple_table_from_section_xml_blocks() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p><hp:run><hp:t>before table</hp:t></hp:run></hp:p>
+              <hp:p>
+                <hp:run><hp:t>table lead</hp:t></hp:run>
+                <hp:ctrl>
+                  <hp:tbl>
+                    <hp:tr>
+                      <hp:tc>
+                        <hp:cellSpan rowSpan="1" colSpan="2"/>
+                        <hp:subList>
+                          <hp:p><hp:run><hp:t>left cell</hp:t></hp:run></hp:p>
+                        </hp:subList>
+                      </hp:tc>
+                      <hp:tc>
+                        <hp:cellSpan rowSpan="2" colSpan="1"/>
+                        <hp:subList>
+                          <hp:p><hp:run><hp:t>right cell</hp:t></hp:run></hp:p>
+                        </hp:subList>
+                      </hp:tc>
+                    </hp:tr>
+                  </hp:tbl>
+                </hp:ctrl>
+              </hp:p>
+              <hp:p><hp:run><hp:t>after table</hp:t></hp:run></hp:p>
+            </hs:sec>
+        "#;
+
+        let blocks = extract_section_xml_blocks(xml);
+
+        assert_eq!(blocks.len(), 4);
+        match &blocks[0] {
+            Block::Paragraph(paragraph) => match &paragraph.inlines[0] {
+                crate::ir::Inline::Text(run) => assert_eq!(run.text, "before table"),
+                other => panic!("expected text inline, got {other:?}"),
+            },
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+        match &blocks[1] {
+            Block::Paragraph(paragraph) => match &paragraph.inlines[0] {
+                crate::ir::Inline::Text(run) => assert_eq!(run.text, "table lead"),
+                other => panic!("expected text inline, got {other:?}"),
+            },
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+        match &blocks[2] {
+            Block::Table(table) => {
+                assert_eq!(table.rows.len(), 1);
+                assert_eq!(table.rows[0].cells.len(), 2);
+                assert_eq!(table.rows[0].cells[0].col_span, 2);
+                assert_eq!(table.rows[0].cells[1].row_span, 2);
+                match &table.rows[0].cells[0].blocks[0] {
+                    Block::Paragraph(paragraph) => match &paragraph.inlines[0] {
+                        crate::ir::Inline::Text(run) => assert_eq!(run.text, "left cell"),
+                        other => panic!("expected text inline, got {other:?}"),
+                    },
+                    other => panic!("expected paragraph in table cell, got {other:?}"),
+                }
+            }
+            other => panic!("expected table block, got {other:?}"),
+        }
+        match &blocks[3] {
+            Block::Paragraph(paragraph) => match &paragraph.inlines[0] {
+                crate::ir::Inline::Text(run) => assert_eq!(run.text, "after table"),
+                other => panic!("expected text inline, got {other:?}"),
+            },
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
     }
 
     #[test]

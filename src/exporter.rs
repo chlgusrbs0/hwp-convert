@@ -2313,7 +2313,7 @@ mod tests {
         assert!(
             report.failed_files()[0]
                 .error_message
-                .contains("HWPX preview fallback 실패:")
+                .contains("HWPX preview fallback")
         );
         assert_eq!(fs::read_to_string(root.join("alpha.txt"))?, "first line");
         assert!(!root.join("nested").join("broken.txt").exists());
@@ -2343,7 +2343,7 @@ mod tests {
         let error = export(&args).unwrap_err();
 
         assert!(error.to_string().contains("rhwp 파싱 실패:"));
-        assert!(error.to_string().contains("HWPX preview fallback 실패:"));
+        assert!(error.to_string().contains("HWPX preview fallback"));
 
         fs::remove_dir_all(&root)?;
 
