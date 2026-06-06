@@ -528,4 +528,14 @@ tests/fixtures/<fixture_name>/
 - rHWP revision update를 최소 1회 fixture 기반으로 성공적으로 수행.
 - `cargo test`가 전체 통과.
 - `docs/COMPATIBILITY.md`가 현재 코드와 일치.
+## Current addendum: 2026-06-06 KST
+
+- Current pushed HEAD has moved beyond the older baseline recorded below. Use `git log --oneline` for the exact current commit.
+- Official HWP fixtures now exist for `basic_text`, `table`, `merged_table`, `style`, `image`, `header_footer`, `footnote`, `list`, `equation`, and `shape`.
+- Accepted paired HWPX fixtures currently exist for `basic_text` and `list`.
+- Synthetic HWP to HWPX attempts for `table`, `style`, `equation`, `shape`, `footnote`, `header_footer`, and `image` were rejected at the current rHWP pin because they lost required structure. See `docs/HWPX_FIXTURE_FINDINGS.md`.
+- `cargo test` currently passes with 112 unit tests plus the fixture smoke integration tests.
+- HTML export now renders consecutive list paragraphs as semantic `<ul>`/`<ol>` lists, and manifest success entries include recoverable conversion warnings.
+
+The older roadmap body below remains useful for direction, but treat this addendum and `docs/COMPATIBILITY.md` as the fresher source for current implementation state.
 

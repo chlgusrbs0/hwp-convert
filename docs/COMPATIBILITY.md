@@ -49,7 +49,7 @@ HTML export now groups consecutive list paragraphs into semantic `<ul>` or `<ol>
 | header/footer | 예 | 예 | 예 | 부분<br>JSON/HTML/Markdown/TXT/SVG 모두 선형화해서 출력 | 아니오 | 현재 exporter는 페이지 반복 레이아웃이 아니라 본문 앞뒤의 block 묶음으로만 다룬다. `FirstPage` 배치는 bridge에서 생성되지 않는다. | `note_header_footer` fixture로 odd/even placement와 block 내용을 고정한다. |
 | footnote/endnote | 예 | 부분 | 예 | 부분<br>JSON/HTML/Markdown/TXT/SVG 모두 note ref와 note body를 출력 | 아니오 | `rhwp`가 정확한 inline 위치를 주지 않아 note ref가 문단 끝에 append된다. 페이지 하단 배치, note separator, 위치 보존은 없다. | `note_header_footer` fixture로 note store, trailing ref, warning 발생 여부를 고정한다. |
 | link | 부분 | 부분 | 예 | 부분<br>JSON/HTML/Markdown은 URL 보존, TXT/SVG는 링크 라벨 중심 fallback | 아니오 | hyperlink field range는 inline으로 옮기지만 일부 hyperlink control은 문단 끝 append fallback이다. `title`은 채우지 않고, hyperlink 외 field는 link로 다루지 않는다. | `link_list` fixture로 field-range link와 trailing hyperlink control을 각각 고정한다. |
-| list | 부분 | 부분 | 예 | 부분<br>JSON/TXT/Markdown은 prefix 보존, HTML은 실제 `<ul>/<ol>` 없이 문단 앞에 literal prefix만 넣음, SVG는 평문 | 아니오 | bullet/number/outline만 `ListInfo`로 옮기고 list container 구조는 없다. nested/restart 케이스도 fixture가 아직 없다. | `link_list` fixture로 bullet, ordered, nested, restart 케이스를 고정한다. |
+| list | 부분 | 부분 | 예 | 부분<br>JSON/TXT/Markdown은 prefix 보존, HTML은 연속 list paragraph를 실제 `<ul>/<ol>`로 묶음, SVG는 평문 | 아니오 | bullet/number/outline만 `ListInfo`로 옮기며 IR에는 explicit list container 구조가 없다. nested/restart 케이스도 fixture가 아직 없다. | `link_list` fixture로 bullet, ordered, nested, restart 케이스를 고정한다. |
 | equation | 예 | 부분 | 예 | 부분<br>JSON은 구조 보존, HTML/Markdown/TXT/SVG는 `[equation: ...]` fallback 중심. Markdown은 `EquationKind::Latex`일 때만 `$$...$$`를 쓴다. | 아니오 | bridge가 `EquationKind::PlainText`만 생성한다. LaTeX/MathML 판별, numbering, resource 연결, 시각 렌더링이 없다. Markdown 수식 블록은 `Latex`일 때만 강화되는데 현재 bridge는 그 경로를 만들지 않는다. | `equation_shape_chart` fixture로 equation script와 현재 fallback 출력을 고정한다. |
 | shape | 예 | 부분 | 부분 | 부분<br>JSON/HTML/Markdown/TXT/SVG 모두 `[shape: ...]` placeholder/fallback text 위주 | 아니오 | line/rect/ellipse/arc/polygon/curve/group/picture를 받아도 IR에는 `kind`, `fallback_text`, `description`만 남긴다. geometry, border/fill, text box, caption, child shape 정보가 소실된다. | `equation_shape_chart` fixture로 대표 shape의 현재 placeholder 동작을 고정한다. |
 | chart | 부분 | 아니오 | 예 | 부분<br>exporter는 `Block::Chart`를 `[chart: ...]` fallback으로 출력할 수 있지만 bridge가 실제 문서에서 그 block을 만들지 못함 | 아니오 | 로컬 `rhwp` source에는 chart tag 흔적이 있지만 `Control::Chart` 같은 bridge-visible model은 없다. 현재 `hwp-convert` bridge 경로에서는 chart를 직접 매핑하지 못한다. | `equation_shape_chart` fixture는 우선 smoke/current-behavior 기록용으로 만들고, 실제 `Chart` block assert는 bridge 경로가 생긴 뒤 추가한다. |
@@ -61,7 +61,7 @@ HTML export now groups consecutive list paragraphs into semantic `<ul>` or `<ol>
 1. 현재 bridge의 가장 안정적인 경로는 `text -> paragraph -> simple table/list/link -> JSON/HTML/Markdown/TXT/SVG`다.
 2. 이미지와 resource는 IR까지 들어오며 HTML/Markdown exporter는 `Resource::Image` bytes를 출력 파일 stem 기준 `<stem>_assets/images/`에 저장한다. 예: `out/sample.html`과 `out/sample.md`는 `out/sample_assets/images/image-1.png`를 쓰고 문서에서는 `sample_assets/images/image-1.png`로 참조한다. TXT/SVG와 RenderSnapshot visual path의 asset 처리는 별도다.
 3. chart는 bridge 기준으로 사실상 미지원이다. RenderSnapshot은 존재하지만 semantic IR/기본 CLI exporter와 분리된 experimental visual path다.
-4. unknown element 처리도 절반만 되어 있다. `UnknownControl`은 잡지만, 많은 known-but-unmapped control은 warning 없이 사라질 수 있다.
+4. unknown element 처리는 아직 제한적이다. `UnknownControl`은 `UnknownBlock`으로 남기고, 일부 known-but-unmapped control은 `ConversionWarning`으로 추적하지만, 모든 unsupported 정보가 구조적으로 보존되는 것은 아니다.
 
 ## 우선순위
 
