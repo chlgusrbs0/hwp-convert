@@ -8,8 +8,8 @@ use hwp_convert::cli::{CliArgs, OutputFormat};
 use hwp_convert::exporter;
 use hwp_convert::ir::{
     Alignment, Block, Color, Document, Equation, EquationKind, HeaderFooterPlacement, Image,
-    Inline, LengthPt, LengthPx, ListKind, NoteKind, Paragraph, ParagraphStyle, Resource, Table,
-    TableCell, TextStyle,
+    Inline, LengthPt, LengthPx, ListKind, NoteKind, Paragraph, ParagraphStyle, Resource, Shape,
+    ShapeKind, Table, TableCell, TextStyle,
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +33,7 @@ const IMAGE_PNG_SIGNATURE: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10];
 const LIST_BULLET_TEXT: &str = "bullet item";
 const LIST_ORDERED_FIRST_TEXT: &str = "first item";
 const LIST_ORDERED_SECOND_TEXT: &str = "second item";
+const SHAPE_DESCRIPTION: &str = "sample rectangle";
 const MERGED_TABLE_CELL_TEXTS: [&str; 7] = [
     "row span", "col span", "cell 2-2", "cell 2-3", "cell 3-1", "cell 3-2", "cell 3-3",
 ];
@@ -200,6 +201,7 @@ fn official_fixtures_match_feature_expectations() {
             "image" => assert_image_fixture(&input, &document),
             "list" => assert_list_fixture(&input, &document),
             "merged_table" => assert_merged_table_fixture(&input, &document),
+            "shape" => assert_shape_fixture(&input, &document),
             "style" => assert_style_fixture(&input, &document),
             "table" => assert_table_fixture(&input, &document),
             _ => {}
@@ -438,6 +440,18 @@ fn collect_equations(document: &Document) -> Vec<&Equation> {
         .flat_map(|section| &section.blocks)
         .filter_map(|block| match block {
             Block::Equation(equation) => Some(equation),
+            _ => None,
+        })
+        .collect()
+}
+
+fn collect_shapes(document: &Document) -> Vec<&Shape> {
+    document
+        .sections
+        .iter()
+        .flat_map(|section| &section.blocks)
+        .filter_map(|block| match block {
+            Block::Shape(shape) => Some(shape),
             _ => None,
         })
         .collect()
@@ -870,6 +884,36 @@ fn assert_list_fixture(input: &FixtureInput, document: &Document) {
         second_list.number,
         Some(2),
         "fixture {} should preserve continued ordered number",
+        input.label
+    );
+}
+
+fn assert_shape_fixture(input: &FixtureInput, document: &Document) {
+    let shapes = collect_shapes(document);
+    assert_eq!(
+        shapes.len(),
+        1,
+        "fixture {} should preserve exactly one shape block",
+        input.label
+    );
+
+    let shape = shapes[0];
+    assert_eq!(
+        shape.kind,
+        ShapeKind::Rectangle,
+        "fixture {} should preserve rectangle shape kind",
+        input.label
+    );
+    assert_eq!(
+        shape.description.as_deref(),
+        Some(SHAPE_DESCRIPTION),
+        "fixture {} should preserve shape description",
+        input.label
+    );
+    assert_eq!(
+        shape.fallback_text.as_deref(),
+        Some(SHAPE_DESCRIPTION),
+        "fixture {} should preserve shape fallback text",
         input.label
     );
 }
