@@ -24,6 +24,7 @@ const DEFAULT_IMAGE_ASSET_PUBLIC_PREFIX: &str = "document_assets/images";
 pub struct ExportedFile {
     pub input_path: PathBuf,
     pub output_path: PathBuf,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +80,8 @@ pub fn write_manifest(
             output_path: Some(file.output_path.display().to_string()),
             status: "success",
             error: None,
+            warning_count: file.warnings.len(),
+            warnings: file.warnings.clone(),
         });
     }
 
@@ -88,6 +91,8 @@ pub fn write_manifest(
             output_path: Some(file.output_path.display().to_string()),
             status: "skipped",
             error: None,
+            warning_count: 0,
+            warnings: Vec::new(),
         });
     }
 
@@ -97,6 +102,8 @@ pub fn write_manifest(
             output_path: None,
             status: "failed",
             error: Some(file.error_message.clone()),
+            warning_count: 0,
+            warnings: Vec::new(),
         });
     }
 
@@ -271,6 +278,11 @@ fn export_file(
     }
 
     let document = bridge::rhwp::read_document(input_path)?;
+    let warnings = document
+        .warnings
+        .iter()
+        .map(|warning| warning.message.clone())
+        .collect::<Vec<_>>();
 
     match format {
         OutputFormat::Txt => {
@@ -294,6 +306,7 @@ fn export_file(
     Ok(ExportOutcome::Converted(ExportedFile {
         input_path: input_path.to_path_buf(),
         output_path,
+        warnings,
     }))
 }
 
@@ -1689,6 +1702,14 @@ struct ManifestFileEntry {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "is_zero")]
+    warning_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 #[derive(Deserialize)]
@@ -2105,6 +2126,38 @@ mod tests {
         assert_eq!(
             fs::read_to_string(output_dir.join("alpha.txt"))?,
             "first line"
+        );
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn reports_conversion_warnings_for_converted_files() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("converted-warning-report");
+        fs::create_dir_all(&root)?;
+        write_preview_hwpx(&root.join("alpha.hwpx"), "first line")?;
+
+        let args = CliArgs {
+            input_path: root.join("alpha.hwpx"),
+            format: OutputFormat::Json,
+            recursive: false,
+            manifest_path: None,
+            resume_manifest_path: None,
+            continue_on_error: false,
+            output_dir: None,
+            skip_existing: false,
+        };
+
+        let report = export(&args)?;
+
+        assert_eq!(report.converted_files().len(), 1);
+        assert_eq!(report.converted_files()[0].warnings.len(), 1);
+        assert!(
+            report.converted_files()[0].warnings[0].contains("Used HWPX preview fallback"),
+            "expected preview fallback warning, got {:?}",
+            report.converted_files()[0].warnings
         );
 
         fs::remove_dir_all(&root)?;
@@ -2924,6 +2977,10 @@ mod tests {
             converted_files: vec![ExportedFile {
                 input_path: PathBuf::from("docs/alpha.hwpx"),
                 output_path: PathBuf::from("docs/alpha.svg"),
+                warnings: vec![
+                    "Used HWPX preview fallback. Preview/PrvText.txt only recovers plain text."
+                        .to_string(),
+                ],
             }],
             skipped_files: vec![SkippedFile {
                 input_path: PathBuf::from("docs/existing.hwpx"),
@@ -2961,6 +3018,8 @@ mod tests {
         assert!(content.contains("\"status\": \"skipped\""));
         assert!(content.contains("\"status\": \"failed\""));
         assert!(content.contains("\"error\": \"parse failed\""));
+        assert!(content.contains("\"warning_count\": 1"));
+        assert!(content.contains("Used HWPX preview fallback"));
 
         fs::remove_dir_all(&root)?;
 

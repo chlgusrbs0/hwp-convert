@@ -77,6 +77,8 @@ cargo run -- docs --to txt --recursive --output-dir out
 cargo run -- docs --to txt --recursive --output-dir out --manifest manifest.json
 ```
 
+Successful manifest entries include `warning_count` and `warnings` when conversion completed with recoverable data-loss warnings, such as HWPX preview fallback or unsupported controls.
+
 ### Resume
 
 이전 manifest를 기반으로 변환을 이어서 진행할 수 있습니다.
