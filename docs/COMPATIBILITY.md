@@ -14,6 +14,10 @@ This means HWP support and HWPX support must not be described as equivalent unle
 
 Section/column definition controls and controls already handled through another path, such as table, image, equation, shape, header/footer, footnote/endnote, and hyperlink, are not covered by this generic warning path.
 
+## Current HTML list rendering behavior
+
+HTML export now groups consecutive list paragraphs into semantic `<ul>` or `<ol>` elements and writes ordered list numbers as `<li value="...">` when available. Nested list fidelity is still limited because the current `Document IR` stores list metadata per paragraph rather than as explicit list containers.
+
 이 문서는 현재 `hwp-convert` 코드 기준의 bridge/exporter 지원 상태를 정리한다.
 새 Document IR 버전을 제안하는 문서가 아니며, 현재 `IR_VERSION`은 그대로 `6`이다.
 

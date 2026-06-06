@@ -695,9 +695,11 @@ fn render_html_section(
             image_asset_prefix,
         ));
     }
-    for block in &section.blocks {
-        nodes.push_str(&render_html_block(block, resources, image_asset_prefix));
-    }
+    nodes.push_str(&render_html_blocks(
+        &section.blocks,
+        resources,
+        image_asset_prefix,
+    ));
     for footer in &section.footers {
         nodes.push_str(&render_html_header_footer(
             "footer",
@@ -716,12 +718,7 @@ fn render_html_header_footer(
     resources: &ResourceStore,
     image_asset_prefix: &str,
 ) -> String {
-    let content = header_footer
-        .blocks
-        .iter()
-        .map(|block| render_html_block(block, resources, image_asset_prefix))
-        .collect::<Vec<_>>()
-        .join("");
+    let content = render_html_blocks(&header_footer.blocks, resources, image_asset_prefix);
     let placement = escape_html(header_footer_placement_name(&header_footer.placement));
 
     format!("<{tag_name} data-placement=\"{placement}\">{content}</{tag_name}>\n")
@@ -746,14 +743,86 @@ fn render_html_notes(document: &Document, image_asset_prefix: &str) -> String {
 fn render_html_note(note: &Note, resources: &ResourceStore, image_asset_prefix: &str) -> String {
     let id = escape_html(&note_html_anchor_id(&note.id));
     let kind = escape_html(note_kind_name(&note.kind));
-    let content = note
-        .blocks
-        .iter()
-        .map(|block| render_html_block(block, resources, image_asset_prefix))
-        .collect::<Vec<_>>()
-        .join("");
+    let content = render_html_blocks(&note.blocks, resources, image_asset_prefix);
 
     format!("<li id=\"{id}\" data-kind=\"{kind}\">{content}</li>\n")
+}
+
+fn render_html_blocks(
+    blocks: &[Block],
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
+    let mut html = String::new();
+    let mut index = 0;
+
+    while index < blocks.len() {
+        if let Block::Paragraph(paragraph) = &blocks[index] {
+            if let Some(list) = &paragraph.list {
+                let (list_html, next_index) = render_html_list(blocks, index, list);
+                html.push_str(&list_html);
+                index = next_index;
+                continue;
+            }
+        }
+
+        html.push_str(&render_html_block(
+            &blocks[index],
+            resources,
+            image_asset_prefix,
+        ));
+        index += 1;
+    }
+
+    html
+}
+
+fn render_html_list(
+    blocks: &[Block],
+    start_index: usize,
+    first_list: &ListInfo,
+) -> (String, usize) {
+    let tag_name = html_list_tag_name(&first_list.kind);
+    let level = first_list.level;
+    let mut html = format!("<{tag_name}>\n");
+    let mut index = start_index;
+
+    while let Some(Block::Paragraph(paragraph)) = blocks.get(index) {
+        let Some(list) = &paragraph.list else {
+            break;
+        };
+        if html_list_tag_name(&list.kind) != tag_name || list.level != level {
+            break;
+        }
+
+        html.push_str(&render_html_list_item(paragraph, list));
+        index += 1;
+    }
+
+    html.push_str(&format!("</{tag_name}>\n"));
+
+    (html, index)
+}
+
+fn render_html_list_item(paragraph: &Paragraph, list: &ListInfo) -> String {
+    let value = if list.kind == ListKind::Ordered {
+        list.number
+            .map(|number| format!(" value=\"{number}\""))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
+    let content = render_html_inlines(&paragraph.inlines);
+
+    format!("<li{value}{style}>{content}</li>\n")
+}
+
+fn html_list_tag_name(kind: &ListKind) -> &'static str {
+    match kind {
+        ListKind::Ordered => "ol",
+        ListKind::Unordered | ListKind::Unknown => "ul",
+    }
 }
 
 fn render_html_block(block: &Block, resources: &ResourceStore, image_asset_prefix: &str) -> String {
@@ -1210,11 +1279,7 @@ fn render_html_table_cell_blocks(
     resources: &ResourceStore,
     image_asset_prefix: &str,
 ) -> String {
-    blocks
-        .iter()
-        .map(|block| render_html_block(block, resources, image_asset_prefix))
-        .collect::<Vec<_>>()
-        .join("")
+    render_html_blocks(blocks, resources, image_asset_prefix)
 }
 
 #[cfg(test)]
@@ -2373,6 +2438,51 @@ mod tests {
         assert!(html.contains("<title>sample.hwpx text export</title>"));
         assert!(html.contains("<p>&amp; &lt; &gt; &quot; &apos;<br />second line + extra</p>"));
         assert!(html.contains("<p>fallback block</p>"));
+    }
+
+    #[test]
+    fn renders_html_list_paragraphs_as_semantic_lists() {
+        let document = document_with_blocks(vec![
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "first".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: Some(ListInfo {
+                    kind: ListKind::Ordered,
+                    level: 0,
+                    marker: None,
+                    number: Some(1),
+                }),
+            }),
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "second".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: Some(ListInfo {
+                    kind: ListKind::Ordered,
+                    level: 0,
+                    marker: None,
+                    number: Some(2),
+                }),
+            }),
+        ]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(
+            html.contains("<ol>\n<li value=\"1\">first</li>\n<li value=\"2\">second</li>\n</ol>")
+        );
+        assert!(!html.contains("1. first"));
     }
 
     #[test]
