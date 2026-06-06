@@ -128,10 +128,14 @@ fn official_fixtures_export_all_current_formats() {
 }
 
 fn assert_fixture_export_artifacts(input: &FixtureInput, format: OutputFormat, output_path: &Path) {
-    if input.fixture_name != "image" {
-        return;
+    match input.fixture_name.as_str() {
+        "image" => assert_image_export_artifacts(input, format, output_path),
+        "list" => assert_list_export_artifacts(input, format, output_path),
+        _ => {}
     }
+}
 
+fn assert_image_export_artifacts(input: &FixtureInput, format: OutputFormat, output_path: &Path) {
     match format {
         OutputFormat::Html | OutputFormat::Markdown => {
             let asset_ref = "input_assets/images/image-1.png";
@@ -162,14 +166,7 @@ fn assert_fixture_export_artifacts(input: &FixtureInput, format: OutputFormat, o
                 format
             );
 
-            let output = fs::read_to_string(output_path).unwrap_or_else(|error| {
-                panic!(
-                    "fixture {} should allow reading exported {} output {}: {error}",
-                    input.label,
-                    format,
-                    output_path.display()
-                )
-            });
+            let output = read_export_output(input, format, output_path);
             assert!(
                 output.contains(asset_ref),
                 "fixture {} should reference exported image asset in {} output",
@@ -179,6 +176,56 @@ fn assert_fixture_export_artifacts(input: &FixtureInput, format: OutputFormat, o
         }
         _ => {}
     }
+}
+
+fn assert_list_export_artifacts(input: &FixtureInput, format: OutputFormat, output_path: &Path) {
+    let output = match format {
+        OutputFormat::Html | OutputFormat::Markdown => {
+            read_export_output(input, format, output_path)
+        }
+        _ => return,
+    };
+
+    match format {
+        OutputFormat::Html => {
+            assert!(
+                output.contains("<ul>") && output.contains("<ol>"),
+                "fixture {} should render unordered and ordered semantic HTML lists",
+                input.label
+            );
+            assert!(
+                output.contains("<li")
+                    && output.contains("bullet item")
+                    && output.contains("<li value=\"1\"")
+                    && output.contains("first item")
+                    && output.contains("<li value=\"2\"")
+                    && output.contains("second item"),
+                "fixture {} should render list items as HTML li elements",
+                input.label
+            );
+        }
+        OutputFormat::Markdown => {
+            assert!(
+                output.contains("bullet item")
+                    && output.contains("1. first item")
+                    && output.contains("2. second item"),
+                "fixture {} should preserve list text and ordered numbers in Markdown",
+                input.label
+            );
+        }
+        _ => {}
+    }
+}
+
+fn read_export_output(input: &FixtureInput, format: OutputFormat, output_path: &Path) -> String {
+    fs::read_to_string(output_path).unwrap_or_else(|error| {
+        panic!(
+            "fixture {} should allow reading exported {} output {}: {error}",
+            input.label,
+            format,
+            output_path.display()
+        )
+    })
 }
 
 #[test]
