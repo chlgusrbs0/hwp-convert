@@ -1,23 +1,38 @@
 # basic_text fixture
 
-이 fixture는 변환 정확도 검증의 첫 기준점이다.
+## 목적
 
-현재 `input.hwp`가 준비되어 있다. `input.hwpx`는 아직 추가하지 않았다. 두 파일은 가능하면 같은 의미의 문서여야 하며, 아래 내용을 포함한다.
+가장 기본적인 텍스트 변환 기준점이다. HWP/HWPX 입력에서 일반 문단, 한국어 텍스트, 영문/숫자 혼합 텍스트, 문단 내부 줄바꿈, 문단 내부 탭이 Document IR로 보존되는지 확인한다.
 
-- `기본 한글 문단`
-- `English 123 mixed text`
-- `줄바꿈 앞`과 `줄바꿈 뒤` 사이에 문단 내부 줄바꿈 1개
-- `탭 앞`과 `탭 뒤` 사이에 탭 문자 1개
+## 현재 입력
+
+- `input.hwp`: 준비됨
+- `input.hwpx`: 준비됨
+
+`input.hwpx`는 같은 fixture의 `input.hwp`를 rHWP로 파싱한 뒤 rHWP HWPX serializer로 직렬화해 만든 동등 의미 문서다. 두 입력 모두 `bridge::rhwp::read_document` 경로를 통과하며, feature assertion과 exporter smoke를 함께 실행한다.
+
+## 포함된 기능
+
+- 한국어 문단 1개
+- 영문/숫자 혼합 문단 1개
+- 문단 내부 line break 1개
+- 문단 내부 tab 1개
 - 빈 문단 1개
 
-현재 기대 동작:
+## 검증 기준
 
-- `bridge::rhwp::read_document`가 준비된 입력 파일에서 성공한다.
-- 비어 있지 않은 문단 4개만 `Block::Paragraph`로 남는다.
-- 줄바꿈은 `Inline::LineBreak`, 탭은 `Inline::Tab`으로 보존된다.
-- `txt`, `json`, `markdown`, `html`, `svg` export가 모두 성공한다.
+`tests/fixture_smoke.rs`의 `assert_basic_text_fixture`가 다음을 확인한다.
 
-현재 HWP 관찰값:
+- 비어 있지 않은 문단 4개가 `Block::Paragraph`로 생성된다.
+- 한국어 문단 텍스트가 보존된다.
+- `English 123 mixed text`가 보존된다.
+- 문단 내부 줄바꿈이 `Inline::LineBreak`로 보존된다.
+- 문단 내부 탭이 `Inline::Tab`으로 보존된다.
+- 빈 문단은 현재 IR body block으로 만들지 않는다.
+
+## 현재 관찰값
+
+HWP와 HWPX 모두 현재 bridge stats가 같은 구조를 가진다.
 
 - `sections`: 1
 - `body_blocks`: 4
@@ -27,4 +42,7 @@
 - `tabs`: 1
 - `warnings`: 0
 
-`expected/bridge-stats.hwp.json`은 이 관찰값을 회귀 기준으로 고정한다.
+기대값은 다음 파일로 고정한다.
+
+- `expected/bridge-stats.hwp.json`
+- `expected/bridge-stats.hwpx.json`
