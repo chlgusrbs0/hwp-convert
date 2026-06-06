@@ -620,8 +620,30 @@ impl<'a> BridgeContext<'a> {
                 message: Some("rhwp exposed this control as Unknown".to_string()),
                 source: Some("rhwp".to_string()),
             })),
+            Control::AutoNumber(_) => self.warn_unsupported_control("auto_number"),
+            Control::NewNumber(_) => self.warn_unsupported_control("new_number"),
+            Control::PageNumberPos(_) => self.warn_unsupported_control("page_number_position"),
+            Control::Bookmark(_) => self.warn_unsupported_control("bookmark"),
+            Control::Ruby(_) => self.warn_unsupported_control("ruby"),
+            Control::CharOverlap(_) => self.warn_unsupported_control("char_overlap"),
+            Control::PageHide(_) => self.warn_unsupported_control("page_hide"),
+            Control::HiddenComment(_) => self.warn_unsupported_control("hidden_comment"),
+            Control::Field(field) => {
+                if field.field_type != RhwpFieldType::Hyperlink {
+                    self.warn_unsupported_control(field_type_warning_name(field.field_type));
+                }
+                None
+            }
+            Control::Form(_) => self.warn_unsupported_control("form"),
             _ => None,
         }
+    }
+
+    fn warn_unsupported_control(&mut self, kind: &str) -> Option<Block> {
+        self.add_warning_once(&format!(
+            "rhwp exposed unsupported control `{kind}`; hwp-convert recorded this warning to avoid silent data loss."
+        ));
+        None
     }
 
     fn map_table(&mut self, table: &RhwpTable) -> Table {
@@ -1084,6 +1106,26 @@ fn resolve_numbering_id(para_shape: &RhwpParaShape, outline_numbering_id: u16) -
     }
 }
 
+fn field_type_warning_name(field_type: RhwpFieldType) -> &'static str {
+    match field_type {
+        RhwpFieldType::Unknown => "field:unknown",
+        RhwpFieldType::Date => "field:date",
+        RhwpFieldType::DocDate => "field:docdate",
+        RhwpFieldType::Path => "field:path",
+        RhwpFieldType::Bookmark => "field:bookmark",
+        RhwpFieldType::MailMerge => "field:mailmerge",
+        RhwpFieldType::CrossRef => "field:crossref",
+        RhwpFieldType::Formula => "field:formula",
+        RhwpFieldType::ClickHere => "field:clickhere",
+        RhwpFieldType::Summary => "field:summary",
+        RhwpFieldType::UserInfo => "field:userinfo",
+        RhwpFieldType::Hyperlink => "field:hyperlink",
+        RhwpFieldType::Memo => "field:memo",
+        RhwpFieldType::PrivateInfoSecurity => "field:private_info",
+        RhwpFieldType::TableOfContents => "field:table_of_contents",
+    }
+}
+
 fn bullet_marker(source: &RhwpDocument, bullet_id: u16) -> Option<String> {
     if bullet_id == 0 {
         return None;
@@ -1146,7 +1188,7 @@ mod tests {
     use rhwp::model::bin_data::{
         BinData, BinDataCompression, BinDataContent, BinDataStatus, BinDataType,
     };
-    use rhwp::model::control::Field as RhwpField;
+    use rhwp::model::control::{Bookmark as RhwpBookmark, Field as RhwpField};
     use rhwp::model::document::{DocInfo, Document as RhwpDocument, Section as RhwpSection};
     use rhwp::model::footnote::Footnote as RhwpFootnote;
     use rhwp::model::header_footer::{
@@ -1546,6 +1588,39 @@ mod tests {
             }
             other => panic!("expected paragraph block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn warns_when_known_controls_are_not_semantically_mapped() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "body".to_string(),
+                    controls: vec![
+                        Control::Bookmark(RhwpBookmark {
+                            name: "target".to_string(),
+                        }),
+                        Control::Field(RhwpField {
+                            field_type: RhwpFieldType::Date,
+                            command: "date".to_string(),
+                            ..Default::default()
+                        }),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.code == WarningCode::Unknown && warning.message.contains("`bookmark`")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.code == WarningCode::Unknown && warning.message.contains("`field:date`")
+        }));
     }
 
     #[test]
