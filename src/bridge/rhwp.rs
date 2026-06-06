@@ -4,7 +4,8 @@ use std::io;
 use std::path::Path;
 
 use rhwp::model::control::{
-    Control, Equation as RhwpEquation, FieldType as RhwpFieldType, Hyperlink as RhwpHyperlink,
+    Control, Equation as RhwpEquation, Field as RhwpField, FieldType as RhwpFieldType,
+    Hyperlink as RhwpHyperlink,
 };
 use rhwp::model::document::{Document as RhwpDocument, Section as RhwpSection};
 use rhwp::model::header_footer::HeaderFooterApply as RhwpHeaderFooterApply;
@@ -27,7 +28,7 @@ use crate::ir::{
     ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore, Paragraph,
     ParagraphRole, ParagraphStyle, ParagraphStyleId, Resource, ResourceId, ResourceStore, Section,
     Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
-    TextRun, TextStyle, TextStyleId, WarningCode,
+    TextRun, TextStyle, TextStyleId, UnknownInline, WarningCode,
 };
 
 /// Parse a source document with `rhwp` and bridge the resulting model into the
@@ -465,6 +466,7 @@ impl<'a> BridgeContext<'a> {
     ) {
         let mut appended_note_ref = false;
         let mut appended_link_ref = false;
+        let mut appended_field_fallback = false;
 
         for (index, control) in paragraph.controls.iter().enumerate() {
             if consumed_controls.contains(&index) {
@@ -492,6 +494,12 @@ impl<'a> BridgeContext<'a> {
                 Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
                     appended_link_ref = true;
                 }
+                Control::Field(field) if field.field_type == RhwpFieldType::ClickHere => {
+                    if let Some(mapped) = self.map_click_here_field(field) {
+                        inlines.push(mapped);
+                        appended_field_fallback = true;
+                    }
+                }
                 _ => {}
             }
         }
@@ -505,6 +513,12 @@ impl<'a> BridgeContext<'a> {
         if appended_link_ref {
             self.add_warning_once(
                 "Some rhwp hyperlinks could not be placed at exact inline positions, so bridge fallback appended them after paragraph text when possible.",
+            );
+        }
+
+        if appended_field_fallback {
+            self.add_warning_once(
+                "Some rhwp click-here fields could not be placed at exact inline positions, so bridge fallback appended their visible text after paragraph text.",
             );
         }
     }
@@ -522,6 +536,25 @@ impl<'a> BridgeContext<'a> {
                 style_ref: None,
             })],
         })
+    }
+
+    fn map_click_here_field(&self, field: &RhwpField) -> Option<Inline> {
+        let fallback_text = field
+            .guide_text()
+            .or_else(|| field.field_name())
+            .or_else(|| field.memo_text())
+            .map(ToOwned::to_owned)
+            .or_else(|| non_empty_string(&field.command))?;
+
+        Some(Inline::Unknown(UnknownInline {
+            kind: "field:clickhere".to_string(),
+            fallback_text: Some(fallback_text),
+            message: Some(
+                "ClickHere field was preserved as fallback text because exact inline placement is unavailable."
+                    .to_string(),
+            ),
+            source: Some("rhwp".to_string()),
+        }))
     }
 
     fn store_note(&mut self, kind: NoteKind, number: u16, paragraphs: &[RhwpParagraph]) -> NoteId {
@@ -1601,6 +1634,48 @@ mod tests {
             }
             other => panic!("expected paragraph block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn preserves_click_here_field_text_as_unknown_inline() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "body".to_string(),
+                    controls: vec![Control::Field(RhwpField {
+                        field_type: RhwpFieldType::ClickHere,
+                        command: RhwpField::build_clickhere_command(
+                            "입력 안내",
+                            "도움말",
+                            "필드 이름",
+                        ),
+                        ..Default::default()
+                    })],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => match paragraph.inlines.last() {
+                Some(Inline::Unknown(unknown)) => {
+                    assert_eq!(unknown.kind, "field:clickhere");
+                    assert_eq!(unknown.fallback_text.as_deref(), Some("입력 안내"));
+                }
+                other => panic!("expected click-here unknown inline, got {other:?}"),
+            },
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+        assert!(
+            bridged
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("click-here fields"))
+        );
     }
 
     #[test]
