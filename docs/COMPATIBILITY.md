@@ -12,7 +12,7 @@ When rHWP parsing fails or maps a HWPX file to an empty semantic document, hwp-c
 
 ## Current unsupported control warning behavior
 
-`src/bridge/rhwp.rs` now records `ConversionWarning` entries for known rHWP controls that are exposed by the parser but not yet semantically mapped by hwp-convert. This currently covers controls such as auto number, new number, page number position, bookmark, page hide, hidden comment, non-hyperlink fields, and form objects.
+`src/bridge/rhwp.rs` now records `ConversionWarning` entries for known rHWP controls that are exposed by the parser but not yet semantically mapped by hwp-convert. This currently covers controls such as auto number, new number, page number position, bookmark, page hide, hidden comment, non-hyperlink fields, and form objects. Non-hyperlink fields with a recoverable command string are also appended as `UnknownInline` fallback text when exact inline placement is unavailable.
 
 Visible unsupported controls with recoverable text, currently ruby and character overlap, are also preserved as `UnknownBlock` fallback text so exporters leave an explicit trace instead of dropping them silently.
 

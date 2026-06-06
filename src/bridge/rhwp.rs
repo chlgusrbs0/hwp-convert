@@ -490,8 +490,8 @@ impl<'a> BridgeContext<'a> {
                 Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
                     appended_link_ref = true;
                 }
-                Control::Field(field) if field.field_type == RhwpFieldType::ClickHere => {
-                    if let Some(mapped) = self.map_click_here_field(field) {
+                Control::Field(field) => {
+                    if let Some(mapped) = self.map_field_fallback(field) {
                         inlines.push(mapped);
                         appended_field_fallback = true;
                     }
@@ -514,7 +514,7 @@ impl<'a> BridgeContext<'a> {
 
         if appended_field_fallback {
             self.add_warning_once(
-                "Some rhwp click-here fields could not be placed at exact inline positions, so bridge fallback appended their visible text after paragraph text.",
+                "Some rhwp click-here fields or other field controls could not be placed at exact inline positions, so bridge fallback appended their fallback text after paragraph text.",
             );
         }
     }
@@ -547,6 +547,25 @@ impl<'a> BridgeContext<'a> {
             fallback_text: Some(fallback_text),
             message: Some(
                 "ClickHere field was preserved as fallback text because exact inline placement is unavailable."
+                    .to_string(),
+            ),
+            source: Some("rhwp".to_string()),
+        }))
+    }
+
+    fn map_field_fallback(&self, field: &RhwpField) -> Option<Inline> {
+        if field.field_type == RhwpFieldType::ClickHere {
+            return self.map_click_here_field(field);
+        }
+
+        let kind = field_type_warning_name(field.field_type);
+        let command = non_empty_string(&field.command)?;
+
+        Some(Inline::Unknown(UnknownInline {
+            kind: kind.to_string(),
+            fallback_text: Some(format!("[{kind}: {command}]")),
+            message: Some(
+                "rHWP field command was preserved as fallback text because hwp-convert does not yet semantically map this field type."
                     .to_string(),
             ),
             source: Some("rhwp".to_string()),
@@ -1779,6 +1798,16 @@ mod tests {
         assert!(bridged.warnings.iter().any(|warning| {
             warning.code == WarningCode::Unknown && warning.message.contains("`field:date`")
         }));
+        match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => match paragraph.inlines.last() {
+                Some(Inline::Unknown(unknown)) => {
+                    assert_eq!(unknown.kind, "field:date");
+                    assert_eq!(unknown.fallback_text.as_deref(), Some("[field:date: date]"));
+                }
+                other => panic!("expected date field unknown inline, got {other:?}"),
+            },
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
     }
 
     #[test]
