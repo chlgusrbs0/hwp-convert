@@ -20,7 +20,7 @@ use rhwp::model::style::{
 };
 use rhwp::model::table::{Cell as RhwpCell, Table as RhwpTable};
 
-use crate::hwpx::{self, InputKind};
+use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
     Block, Color, ConversionWarning, Document, Equation, EquationKind, HeaderFooter,
     HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt, LengthPx, Link, ListInfo,
@@ -31,7 +31,7 @@ use crate::ir::{
 };
 
 /// Parse a source document with `rhwp` and bridge the resulting model into the
-/// local `Document` IR. For `.hwpx`, preview text fallback remains available
+/// local `Document` IR. For `.hwpx`, text-only fallback remains available
 /// when parsing fails or when the mapped body is structurally empty.
 pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
     let (input_kind, bytes) = hwpx::read_input_bytes(input_path)?;
@@ -43,7 +43,7 @@ pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
                 Ok(bridged)
             } else if input_kind == InputKind::Hwpx {
                 let empty_error = empty_document_error();
-                fallback_to_hwpx_preview(&bytes, &empty_error).map_err(Into::into)
+                fallback_to_hwpx_text(&bytes, &empty_error).map_err(Into::into)
             } else {
                 Err(empty_document_error().into())
             }
@@ -55,7 +55,7 @@ pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
             );
 
             if input_kind == InputKind::Hwpx {
-                fallback_to_hwpx_preview(&bytes, &rhwp_error).map_err(Into::into)
+                fallback_to_hwpx_text(&bytes, &rhwp_error).map_err(Into::into)
             } else {
                 Err(rhwp_error.into())
             }
@@ -63,19 +63,32 @@ pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
     }
 }
 
-fn fallback_to_hwpx_preview(bytes: &[u8], source_error: &io::Error) -> io::Result<Document> {
-    let paragraphs = hwpx::read_preview_text_from_archive(bytes)
+fn fallback_to_hwpx_text(bytes: &[u8], source_error: &io::Error) -> io::Result<Document> {
+    let fallback = hwpx::read_text_fallback_from_archive(bytes)
         .map_err(|fallback_error| hwpx::combine_hwpx_errors(source_error, &fallback_error))?;
 
-    Ok(document_from_preview_paragraphs(paragraphs))
+    Ok(document_from_hwpx_text_fallback(
+        fallback.paragraphs,
+        fallback.source,
+    ))
 }
 
-fn document_from_preview_paragraphs(paragraphs: Vec<String>) -> Document {
+fn document_from_hwpx_text_fallback(
+    paragraphs: Vec<String>,
+    source: HwpxTextFallbackSource,
+) -> Document {
     let mut document = Document::from_paragraphs(paragraphs);
-    document.warnings.push(ConversionWarning {
-        code: WarningCode::UsedHwpxPreviewFallback,
-        message: "Used HWPX preview fallback. Preview/PrvText.txt only recovers plain text, so table, image, and style data may be missing.".to_string(),
-    });
+    let warning = match source {
+        HwpxTextFallbackSource::SectionXml => ConversionWarning {
+            code: WarningCode::Unknown,
+            message: "Used HWPX section XML text fallback. This recovers paragraph text and inline line breaks/tabs, but table, image, and style data may be missing.".to_string(),
+        },
+        HwpxTextFallbackSource::PreviewText => ConversionWarning {
+            code: WarningCode::UsedHwpxPreviewFallback,
+            message: "Used HWPX preview fallback. Preview/PrvText.txt only recovers plain text, so table, image, and style data may be missing.".to_string(),
+        },
+    };
+    document.warnings.push(warning);
     document
 }
 
@@ -1805,7 +1818,10 @@ mod tests {
 
     #[test]
     fn preview_fallback_marks_warning() {
-        let document = document_from_preview_paragraphs(vec!["preview".to_string()]);
+        let document = document_from_hwpx_text_fallback(
+            vec!["preview".to_string()],
+            HwpxTextFallbackSource::PreviewText,
+        );
 
         assert_eq!(document.sections.len(), 1);
         assert_eq!(document.warnings.len(), 1);

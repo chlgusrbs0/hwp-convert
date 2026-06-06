@@ -8,6 +8,8 @@ Synthetic HWP to HWPX attempts for `table`, `style`, `equation`, `shape`, `footn
 
 This means HWP support and HWPX support must not be described as equivalent unless the specific element has a passing HWPX fixture or another explicit test.
 
+When rHWP parsing fails or maps a HWPX file to an empty semantic document, hwp-convert now tries a text-only `Contents/section*.xml` fallback before `Preview/PrvText.txt`. This can recover paragraph text plus inline line breaks/tabs, but it does not preserve table, image, style, or layout structure.
+
 ## Current unsupported control warning behavior
 
 `src/bridge/rhwp.rs` now records `ConversionWarning` entries for known rHWP controls that are exposed by the parser but not yet semantically mapped by hwp-convert. This currently covers controls such as auto number, new number, page number position, bookmark, ruby, character overlap, page hide, hidden comment, non-hyperlink fields, and form objects.
