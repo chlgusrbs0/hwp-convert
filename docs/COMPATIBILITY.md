@@ -1,5 +1,13 @@
 # HWP/HWPX Bridge Compatibility
 
+## Current HWPX fixture finding
+
+At the current pinned rHWP revision, accepted paired HWPX fixtures exist for `basic_text` and `list`.
+
+Synthetic HWP to HWPX attempts for `table`, `style`, `equation`, `shape`, `footnote`, `header_footer`, and `image` were tested locally and rejected because they lost required structure before matching the HWP fixture assertions. See `docs/HWPX_FIXTURE_FINDINGS.md` for the exact observed failures.
+
+This means HWP support and HWPX support must not be described as equivalent unless the specific element has a passing HWPX fixture or another explicit test.
+
 이 문서는 현재 `hwp-convert` 코드 기준의 bridge/exporter 지원 상태를 정리한다.
 새 Document IR 버전을 제안하는 문서가 아니며, 현재 `IR_VERSION`은 그대로 `6`이다.
 

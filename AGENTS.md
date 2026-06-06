@@ -1,5 +1,12 @@
 # hwp-convert Agent Guide
 
+## 2026-06-06 HWPX fixture addendum
+
+- Read `docs/HWPX_FIXTURE_FINDINGS.md` before adding or regenerating any `input.hwpx` fixture.
+- Current accepted HWPX paired fixtures are `basic_text/input.hwpx` and `list/input.hwpx`.
+- Do not add HWPX paired fixtures for `table`, `style`, `equation`, `shape`, `footnote`, `header_footer`, or `image` from the current synthetic rHWP HWP to HWPX path. Those attempts were tested and rejected because they lost required structure.
+- Do not weaken feature assertions to make a partial HWPX fixture pass. Either obtain a better real-authored HWPX sample or fix the parser/bridge/exporter path first.
+
 이 문서는 Codex, Claude, 또는 다른 자동화 작업자가 이 저장소에서 작업할 때 따라야 하는 기준이다.
 
 프로젝트의 목적은 HWP/HWPX 파일을 정확하게 변환하는 것이다. 새 기능을 빠르게 붙이는 것보다 실제 문서에서 데이터가 사라지지 않게 만드는 것이 중요하다.

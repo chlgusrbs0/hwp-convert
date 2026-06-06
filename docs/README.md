@@ -1,5 +1,11 @@
 # Documentation Map
 
+## Current addendum
+
+- `HWPX_FIXTURE_FINDINGS.md`
+  - Records which paired HWPX fixtures are accepted at the current rHWP pin and which synthetic HWP to HWPX attempts were rejected because they lost structure.
+  - Read this before adding `input.hwpx` to an existing fixture.
+
 이 디렉터리는 `hwp-convert`의 장기 방향, 현재 지원 상태, fixture 계획, 아키텍처 경계를 기록한다.
 
 먼저 읽을 문서:
@@ -30,4 +36,3 @@
 - 지원 완료는 bridge, IR, exporter, fixture가 함께 있을 때만 말한다.
 - 현재 기본 SVG는 semantic/plain-text exporter이며 visual fidelity 경로가 아니다.
 - 실제 fixture 없이 정확도를 주장하지 않는다.
-

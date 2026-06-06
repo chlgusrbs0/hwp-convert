@@ -1,5 +1,14 @@
 # Bridge Coverage Fixtures
 
+## Current HWPX paired fixture status
+
+Accepted HWPX paired fixtures at the current rHWP pin:
+
+- `basic_text/input.hwpx`
+- `list/input.hwpx`
+
+Rejected local synthetic HWPX attempts are recorded in `docs/HWPX_FIXTURE_FINDINGS.md`. Do not add `input.hwpx` for another fixture unless it passes the same feature-level assertions as its HWP counterpart.
+
 이 디렉터리는 HWP/HWPX bridge coverage를 검증하기 위한 공식 fixture 위치다.
 공식 fixture는 `tests/fixtures` 아래에서만 관리한다.
 

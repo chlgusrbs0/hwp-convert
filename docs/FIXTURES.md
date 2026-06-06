@@ -1,5 +1,13 @@
 # Fixture Test Plan
 
+## Current HWPX paired fixture rule
+
+Before adding `input.hwpx` to an existing fixture, read `docs/HWPX_FIXTURE_FINDINGS.md`.
+
+At the current rHWP pin, `basic_text` and `list` have accepted HWPX paired fixtures. Synthetic HWP to HWPX attempts for `table`, `style`, `equation`, `shape`, `footnote`, `header_footer`, and `image` were rejected because they did not preserve the same structure as the matching HWP fixture.
+
+Do not weaken fixture assertions to accept partial HWPX output. Add a HWPX paired fixture only when the same feature-level assertions pass, or document it as a known limitation outside the official fixture inputs.
+
 이 문서는 HWP/HWPX bridge coverage를 올리기 위한 실제 fixture 테스트 계획이다.
 목표는 새 기능을 먼저 만드는 것이 아니라, 현재 동작과 현재 한계를 문서화하고 회귀 테스트 기반을 만드는 것이다.
 
