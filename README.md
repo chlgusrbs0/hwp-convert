@@ -79,7 +79,7 @@ cargo run -- docs --to txt --recursive --output-dir out --manifest manifest.json
 
 Successful manifest entries include `warning_count` and `warnings` when conversion completed with recoverable data-loss warnings, such as HWPX preview fallback or unsupported controls.
 
-The CLI also prints a total warning count when recoverable conversion warnings were produced. Use `--manifest` when you need the per-file warning messages.
+The CLI also prints a total warning count and the first few warning messages when recoverable conversion warnings were produced. Use `--manifest` when you need all per-file warning messages.
 
 ### Resume
 

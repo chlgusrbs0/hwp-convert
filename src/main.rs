@@ -61,7 +61,25 @@ fn run() -> Result<(), Box<dyn Error>> {
     let warning_count = report.warning_count();
     if warning_count > 0 {
         println!("변환 경고 수: {warning_count}");
-        println!("자세한 경고는 --manifest 결과의 warnings 필드에서 확인할 수 있습니다.");
+        let mut printed_warning_count = 0usize;
+        for file in report.converted_files() {
+            for warning in &file.warnings {
+                if printed_warning_count >= 5 {
+                    break;
+                }
+                println!("경고: {}: {warning}", file.input_path.display());
+                printed_warning_count += 1;
+            }
+            if printed_warning_count >= 5 {
+                break;
+            }
+        }
+        if warning_count > printed_warning_count {
+            let remaining = warning_count - printed_warning_count;
+            println!(
+                "추가 경고 {remaining}개는 --manifest 결과의 warnings 필드에서 확인할 수 있습니다."
+            );
+        }
     }
 
     println!("변환 완료");
