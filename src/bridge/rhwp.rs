@@ -670,8 +670,21 @@ impl<'a> BridgeContext<'a> {
             Control::NewNumber(_) => self.warn_unsupported_control("new_number"),
             Control::PageNumberPos(_) => self.warn_unsupported_control("page_number_position"),
             Control::Bookmark(_) => self.warn_unsupported_control("bookmark"),
-            Control::Ruby(_) => self.warn_unsupported_control("ruby"),
-            Control::CharOverlap(_) => self.warn_unsupported_control("char_overlap"),
+            Control::Ruby(ruby) => self.warn_unsupported_visible_control(
+                "ruby",
+                non_empty_string(&ruby.ruby_text)
+                    .map(|text| format!("[ruby: {text}]"))
+                    .unwrap_or_else(|| "[ruby]".to_string()),
+            ),
+            Control::CharOverlap(overlap) => {
+                let chars = overlap.chars.iter().collect::<String>();
+                self.warn_unsupported_visible_control(
+                    "char_overlap",
+                    non_empty_string(&chars)
+                        .map(|text| format!("[char overlap: {text}]"))
+                        .unwrap_or_else(|| "[char overlap]".to_string()),
+                )
+            }
             Control::PageHide(_) => self.warn_unsupported_control("page_hide"),
             Control::HiddenComment(_) => self.warn_unsupported_control("hidden_comment"),
             Control::Field(field) => {
@@ -690,6 +703,25 @@ impl<'a> BridgeContext<'a> {
             "rhwp exposed unsupported control `{kind}`; hwp-convert recorded this warning to avoid silent data loss."
         ));
         None
+    }
+
+    fn warn_unsupported_visible_control(
+        &mut self,
+        kind: &str,
+        fallback_text: String,
+    ) -> Option<Block> {
+        self.add_warning_once(&format!(
+            "rhwp exposed unsupported visible control `{kind}`; hwp-convert preserved fallback text as an unknown block."
+        ));
+
+        Some(Block::Unknown(crate::ir::UnknownBlock {
+            kind: kind.to_string(),
+            fallback_text: Some(fallback_text),
+            message: Some(
+                "Unsupported visible rHWP control preserved as fallback text.".to_string(),
+            ),
+            source: Some("rhwp".to_string()),
+        }))
     }
 
     fn map_table(&mut self, table: &RhwpTable) -> Table {
@@ -1234,7 +1266,10 @@ mod tests {
     use rhwp::model::bin_data::{
         BinData, BinDataCompression, BinDataContent, BinDataStatus, BinDataType,
     };
-    use rhwp::model::control::{Bookmark as RhwpBookmark, Field as RhwpField};
+    use rhwp::model::control::{
+        Bookmark as RhwpBookmark, CharOverlap as RhwpCharOverlap, Field as RhwpField,
+        Ruby as RhwpRuby,
+    };
     use rhwp::model::document::{DocInfo, Document as RhwpDocument, Section as RhwpSection};
     use rhwp::model::footnote::Footnote as RhwpFootnote;
     use rhwp::model::header_footer::{
@@ -1676,6 +1711,45 @@ mod tests {
                 .iter()
                 .any(|warning| warning.message.contains("click-here fields"))
         );
+    }
+
+    #[test]
+    fn preserves_visible_unsupported_controls_as_unknown_blocks() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "body".to_string(),
+                    controls: vec![
+                        Control::Ruby(RhwpRuby {
+                            ruby_text: "덧말".to_string(),
+                            ..Default::default()
+                        }),
+                        Control::CharOverlap(RhwpCharOverlap {
+                            chars: vec!['겹', '침'],
+                            ..Default::default()
+                        }),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let blocks = &bridged.sections[0].blocks;
+
+        assert!(
+            matches!(&blocks[1], Block::Unknown(unknown) if unknown.kind == "ruby" && unknown.fallback_text.as_deref() == Some("[ruby: 덧말]"))
+        );
+        assert!(
+            matches!(&blocks[2], Block::Unknown(unknown) if unknown.kind == "char_overlap" && unknown.fallback_text.as_deref() == Some("[char overlap: 겹침]"))
+        );
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported visible control `ruby`")
+        }));
     }
 
     #[test]
