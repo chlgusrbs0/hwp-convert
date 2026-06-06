@@ -58,6 +58,13 @@ impl ExportReport {
     pub fn failed_files(&self) -> &[FailedFile] {
         &self.failed_files
     }
+
+    pub fn warning_count(&self) -> usize {
+        self.converted_files
+            .iter()
+            .map(|file| file.warnings.len())
+            .sum()
+    }
 }
 
 enum ExportOutcome {
@@ -2218,6 +2225,7 @@ mod tests {
         let report = export(&args)?;
 
         assert_eq!(report.converted_files().len(), 1);
+        assert_eq!(report.warning_count(), 1);
         assert_eq!(report.converted_files()[0].warnings.len(), 1);
         assert!(
             report.converted_files()[0].warnings[0].contains("Used HWPX preview fallback"),

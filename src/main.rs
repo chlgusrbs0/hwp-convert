@@ -58,6 +58,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         println!("manifest 파일: {}", manifest_path.display());
     }
 
+    let warning_count = report.warning_count();
+    if warning_count > 0 {
+        println!("변환 경고 수: {warning_count}");
+        println!("자세한 경고는 --manifest 결과의 warnings 필드에서 확인할 수 있습니다.");
+    }
+
     println!("변환 완료");
 
     Ok(())

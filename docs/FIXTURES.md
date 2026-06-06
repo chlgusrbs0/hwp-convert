@@ -51,11 +51,15 @@ tests/fixtures/<fixture_name>/
 4. `export golden`
    - 결정적인 fixture만 golden file 비교
 
+현재 `tests/fixture_smoke.rs`는 full golden 비교 대신 feature-level exporter assertion을 우선한다.
+`basic_text`, `table`, `merged_table`, `style`, `image`, `list`, `footnote`, `header_footer`, `equation`, `shape` fixture는 현재 CLI 출력 형식의 핵심 문자열, 구조, asset 존재 여부를 부분 검증한다.
+이 검증은 "완벽한 출력 동일성"이 아니라 "중요 정보가 조용히 사라지지 않는다"는 최소 보장이다.
+
 ## Fixture별 계획
 
 | Fixture | 우선순위 | 포함 요소 | 문서 내용 | bridge 핵심 assert | exporter 핵심 assert | 비고 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `basic_text` | P0 | text, paragraph | 3~5개 문단, 빈 문단 1개, 문단 내부 줄바꿈, 탭, 한글/영문/숫자 혼합 | section 1개, 비어 있지 않은 문단만 block으로 남는 현재 동작, `Inline::Text/LineBreak/Tab`, warning 없음 | TXT/Markdown/HTML/SVG에 텍스트가 모두 보이는지 확인 | 가장 먼저 만들 fixture. 테스트 harness 기준점 역할 |
+| `basic_text` | P0 | text, paragraph | 3~5개 문단, 빈 문단 1개, 문단 내부 줄바꿈, 탭, 한글/영문/숫자 혼합 | section 1개, 비어 있지 않은 문단만 block으로 남는 현재 동작, `Inline::Text/LineBreak/Tab`, warning 없음 | TXT/JSON/Markdown/HTML/SVG에 텍스트가 모두 보이는지 확인 | 가장 먼저 만들 fixture. 테스트 harness 기준점 역할 |
 | `style` | P0 | style | bold, italic, underline, strike, font family, font size, text color, background color, 정렬, before/after spacing, indent | `TextStyle`, `ParagraphStyle`, `style_ref`, `StyleSheet.text_styles`, `StyleSheet.paragraph_styles` | JSON/HTML golden, Markdown에는 bold/italic/strike만 유지되는 현재 동작 확인 | table/cell 배경색은 table fixture와 중복되지 않게 최소만 포함 |
 | `table` | P0 | table | 2x2 또는 3x2 단순 표, 각 셀은 단일 문단 텍스트 | `Block::Table`, row/cell count, 각 cell의 nested paragraph | HTML `<table>` 구조, Markdown simple table 유지, TXT/SVG fallback 텍스트 확인 | Markdown 표 경로를 살리려면 병합/복합 block 없이 단순 셀 유지 |
 | `merged_table` | P0 | merged table cell | row span 1개, col span 1개가 모두 있는 표 | 해당 cell의 `row_span`/`col_span` 값 고정 | HTML `rowspan`/`colspan` 확인, Markdown은 plain text fallback으로 내려가는 현재 동작 확인 | 표 병합 지원이 깨지면 바로 잡을 수 있는 fixture |

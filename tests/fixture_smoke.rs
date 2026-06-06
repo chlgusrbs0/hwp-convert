@@ -129,12 +129,41 @@ fn official_fixtures_export_all_current_formats() {
 
 fn assert_fixture_export_artifacts(input: &FixtureInput, format: OutputFormat, output_path: &Path) {
     match input.fixture_name.as_str() {
+        "basic_text" => assert_basic_text_export_artifacts(input, format, output_path),
+        "equation" => assert_equation_export_artifacts(input, format, output_path),
+        "footnote" => assert_footnote_export_artifacts(input, format, output_path),
+        "header_footer" => assert_header_footer_export_artifacts(input, format, output_path),
         "image" => assert_image_export_artifacts(input, format, output_path),
         "list" => assert_list_export_artifacts(input, format, output_path),
         "merged_table" => assert_merged_table_export_artifacts(input, format, output_path),
+        "shape" => assert_shape_export_artifacts(input, format, output_path),
         "style" => assert_style_export_artifacts(input, format, output_path),
         "table" => assert_table_export_artifacts(input, format, output_path),
         _ => {}
+    }
+}
+
+fn assert_basic_text_export_artifacts(
+    input: &FixtureInput,
+    format: OutputFormat,
+    output_path: &Path,
+) {
+    let output = read_export_output(input, format, output_path);
+
+    for expected in [
+        BASIC_TEXT_KOREAN_PARAGRAPH,
+        BASIC_TEXT_MIXED_PARAGRAPH,
+        BASIC_TEXT_LINE_BREAK_BEFORE,
+        BASIC_TEXT_LINE_BREAK_AFTER,
+        BASIC_TEXT_TAB_BEFORE,
+        BASIC_TEXT_TAB_AFTER,
+    ] {
+        assert!(
+            output.contains(expected),
+            "fixture {} should preserve basic text fragment {expected:?} in {}",
+            input.label,
+            format
+        );
     }
 }
 
@@ -229,6 +258,135 @@ fn read_export_output(input: &FixtureInput, format: OutputFormat, output_path: &
             output_path.display()
         )
     })
+}
+
+fn assert_equation_export_artifacts(
+    input: &FixtureInput,
+    format: OutputFormat,
+    output_path: &Path,
+) {
+    let output = read_export_output(input, format, output_path);
+    assert!(
+        output.contains(EQUATION_CONTENT),
+        "fixture {} should preserve equation fallback text in {}",
+        input.label,
+        format
+    );
+
+    match format {
+        OutputFormat::Html => assert!(
+            output.contains("class=\"equation\""),
+            "fixture {} should render equation fallback with semantic HTML class",
+            input.label
+        ),
+        OutputFormat::Json => assert!(
+            output.contains("\"plain_text\""),
+            "fixture {} should preserve equation kind in JSON",
+            input.label
+        ),
+        _ => {}
+    }
+}
+
+fn assert_footnote_export_artifacts(
+    input: &FixtureInput,
+    format: OutputFormat,
+    output_path: &Path,
+) {
+    let output = read_export_output(input, format, output_path);
+
+    for expected in [FOOTNOTE_BODY_TEXT, FOOTNOTE_ID, FOOTNOTE_NOTE_TEXT] {
+        assert!(
+            output.contains(expected),
+            "fixture {} should preserve footnote export text {expected:?} in {}",
+            input.label,
+            format
+        );
+    }
+
+    match format {
+        OutputFormat::Html => {
+            assert!(
+                output.contains("<section class=\"notes\">")
+                    && output.contains("href=\"#note-footnote-3\"")
+                    && output.contains("id=\"note-footnote-3\"")
+                    && output.contains("data-kind=\"footnote\""),
+                "fixture {} should render semantic HTML footnote refs and note body",
+                input.label
+            );
+        }
+        OutputFormat::Markdown => {
+            assert!(
+                output.contains("body text[^footnote-3]")
+                    && output.contains("[^footnote-3]: note body"),
+                "fixture {} should render Markdown footnote ref and definition",
+                input.label
+            );
+        }
+        _ => {}
+    }
+}
+
+fn assert_header_footer_export_artifacts(
+    input: &FixtureInput,
+    format: OutputFormat,
+    output_path: &Path,
+) {
+    let output = read_export_output(input, format, output_path);
+
+    for expected in [HEADER_TEXT, FOOTER_TEXT] {
+        assert!(
+            output.contains(expected),
+            "fixture {} should preserve header/footer export text {expected:?} in {}",
+            input.label,
+            format
+        );
+    }
+
+    match format {
+        OutputFormat::Html => {
+            assert!(
+                output.contains("<header data-placement=\"default\">")
+                    && output.contains("<footer data-placement=\"even_page\">"),
+                "fixture {} should render semantic HTML header/footer placement",
+                input.label
+            );
+        }
+        OutputFormat::Json => {
+            assert!(
+                output.contains("\"headers\"")
+                    && output.contains("\"footers\"")
+                    && output.contains("\"even_page\""),
+                "fixture {} should preserve header/footer structure in JSON",
+                input.label
+            );
+        }
+        _ => {}
+    }
+}
+
+fn assert_shape_export_artifacts(input: &FixtureInput, format: OutputFormat, output_path: &Path) {
+    let output = read_export_output(input, format, output_path);
+    assert!(
+        output.contains(SHAPE_DESCRIPTION),
+        "fixture {} should preserve shape fallback text in {}",
+        input.label,
+        format
+    );
+
+    match format {
+        OutputFormat::Html => assert!(
+            output.contains("class=\"shape-placeholder\""),
+            "fixture {} should render shape fallback with semantic HTML class",
+            input.label
+        ),
+        OutputFormat::Json => assert!(
+            output.contains("\"rectangle\""),
+            "fixture {} should preserve shape kind in JSON",
+            input.label
+        ),
+        _ => {}
+    }
 }
 
 fn assert_table_export_artifacts(input: &FixtureInput, format: OutputFormat, output_path: &Path) {
