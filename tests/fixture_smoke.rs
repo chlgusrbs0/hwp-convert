@@ -131,6 +131,8 @@ fn assert_fixture_export_artifacts(input: &FixtureInput, format: OutputFormat, o
     match input.fixture_name.as_str() {
         "image" => assert_image_export_artifacts(input, format, output_path),
         "list" => assert_list_export_artifacts(input, format, output_path),
+        "merged_table" => assert_merged_table_export_artifacts(input, format, output_path),
+        "table" => assert_table_export_artifacts(input, format, output_path),
         _ => {}
     }
 }
@@ -226,6 +228,65 @@ fn read_export_output(input: &FixtureInput, format: OutputFormat, output_path: &
             output_path.display()
         )
     })
+}
+
+fn assert_table_export_artifacts(input: &FixtureInput, format: OutputFormat, output_path: &Path) {
+    let output = match format {
+        OutputFormat::Html | OutputFormat::Markdown => {
+            read_export_output(input, format, output_path)
+        }
+        _ => return,
+    };
+
+    match format {
+        OutputFormat::Html => {
+            assert!(
+                output.contains("<table>") && output.contains("<td><p"),
+                "fixture {} should render a semantic HTML table",
+                input.label
+            );
+            for cell_text in TABLE_CELL_TEXTS {
+                assert!(
+                    output.contains(cell_text),
+                    "fixture {} should preserve table cell text {cell_text:?} in HTML",
+                    input.label
+                );
+            }
+        }
+        OutputFormat::Markdown => {
+            assert!(
+                output.contains("| cell 1-1 | cell 1-2 |")
+                    && output.contains("| cell 2-1 | cell 2-2 |"),
+                "fixture {} should render a simple Markdown table",
+                input.label
+            );
+        }
+        _ => {}
+    }
+}
+
+fn assert_merged_table_export_artifacts(
+    input: &FixtureInput,
+    format: OutputFormat,
+    output_path: &Path,
+) {
+    if format != OutputFormat::Html {
+        return;
+    }
+
+    let output = read_export_output(input, format, output_path);
+    assert!(
+        output.contains("rowspan=\"2\"") && output.contains("colspan=\"2\""),
+        "fixture {} should render merged table spans in HTML",
+        input.label
+    );
+    for cell_text in MERGED_TABLE_CELL_TEXTS {
+        assert!(
+            output.contains(cell_text),
+            "fixture {} should preserve merged table cell text {cell_text:?} in HTML",
+            input.label
+        );
+    }
 }
 
 #[test]
