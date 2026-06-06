@@ -7,8 +7,9 @@ use hwp_convert::bridge;
 use hwp_convert::cli::{CliArgs, OutputFormat};
 use hwp_convert::exporter;
 use hwp_convert::ir::{
-    Alignment, Block, Color, Document, HeaderFooterPlacement, Image, Inline, LengthPt, LengthPx,
-    ListKind, NoteKind, Paragraph, ParagraphStyle, Resource, Table, TableCell, TextStyle,
+    Alignment, Block, Color, Document, Equation, EquationKind, HeaderFooterPlacement, Image,
+    Inline, LengthPt, LengthPx, ListKind, NoteKind, Paragraph, ParagraphStyle, Resource, Table,
+    TableCell, TextStyle,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +21,7 @@ const BASIC_TEXT_LINE_BREAK_BEFORE: &str = "줄바꿈 앞";
 const BASIC_TEXT_LINE_BREAK_AFTER: &str = "줄바꿈 뒤";
 const BASIC_TEXT_TAB_BEFORE: &str = "탭 앞";
 const BASIC_TEXT_TAB_AFTER: &str = "탭 뒤";
+const EQUATION_CONTENT: &str = "x over y";
 const FOOTNOTE_BODY_TEXT: &str = "body text";
 const FOOTNOTE_ID: &str = "footnote-3";
 const FOOTNOTE_NOTE_TEXT: &str = "note body";
@@ -192,6 +194,7 @@ fn official_fixtures_match_feature_expectations() {
 
         match input.fixture_name.as_str() {
             "basic_text" => assert_basic_text_fixture(&input, &document),
+            "equation" => assert_equation_fixture(&input, &document),
             "footnote" => assert_footnote_fixture(&input, &document),
             "header_footer" => assert_header_footer_fixture(&input, &document),
             "image" => assert_image_fixture(&input, &document),
@@ -428,6 +431,18 @@ fn collect_images(document: &Document) -> Vec<&Image> {
         .collect()
 }
 
+fn collect_equations(document: &Document) -> Vec<&Equation> {
+    document
+        .sections
+        .iter()
+        .flat_map(|section| &section.blocks)
+        .filter_map(|block| match block {
+            Block::Equation(equation) => Some(equation),
+            _ => None,
+        })
+        .collect()
+}
+
 fn paragraph_has_line_break_case(paragraph: &Paragraph) -> bool {
     let text = paragraph_plain_text(paragraph);
 
@@ -625,6 +640,36 @@ fn assert_image_fixture(input: &FixtureInput, document: &Document) {
     assert!(
         resource.bytes.starts_with(IMAGE_PNG_SIGNATURE),
         "fixture {} should preserve PNG resource bytes",
+        input.label
+    );
+}
+
+fn assert_equation_fixture(input: &FixtureInput, document: &Document) {
+    let equations = collect_equations(document);
+    assert_eq!(
+        equations.len(),
+        1,
+        "fixture {} should preserve exactly one equation block",
+        input.label
+    );
+
+    let equation = equations[0];
+    assert_eq!(
+        equation.kind,
+        EquationKind::PlainText,
+        "fixture {} should preserve equation kind",
+        input.label
+    );
+    assert_eq!(
+        equation.content.as_deref(),
+        Some(EQUATION_CONTENT),
+        "fixture {} should preserve equation script content",
+        input.label
+    );
+    assert_eq!(
+        equation.fallback_text.as_deref(),
+        Some(EQUATION_CONTENT),
+        "fixture {} should preserve equation fallback text",
         input.label
     );
 }
