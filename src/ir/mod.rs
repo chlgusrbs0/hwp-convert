@@ -48,11 +48,7 @@ impl Document {
             .map(|text| {
                 Block::Paragraph(Paragraph {
                     role: ParagraphRole::Body,
-                    inlines: vec![Inline::Text(TextRun {
-                        text,
-                        style: TextStyle::default(),
-                        style_ref: None,
-                    })],
+                    inlines: inlines_from_plain_text(text),
                     style: ParagraphStyle::default(),
                     style_ref: None,
                     list: None,
@@ -73,6 +69,40 @@ impl Document {
             warnings: Vec::new(),
         }
     }
+}
+
+fn inlines_from_plain_text(text: String) -> Vec<Inline> {
+    let mut inlines = Vec::new();
+    let mut text_buffer = String::new();
+
+    for ch in text.chars() {
+        match ch {
+            '\n' => {
+                push_plain_text_run(&mut inlines, &mut text_buffer);
+                inlines.push(Inline::LineBreak);
+            }
+            '\t' => {
+                push_plain_text_run(&mut inlines, &mut text_buffer);
+                inlines.push(Inline::Tab);
+            }
+            _ => text_buffer.push(ch),
+        }
+    }
+
+    push_plain_text_run(&mut inlines, &mut text_buffer);
+    inlines
+}
+
+fn push_plain_text_run(inlines: &mut Vec<Inline>, text_buffer: &mut String) {
+    if text_buffer.is_empty() {
+        return;
+    }
+
+    inlines.push(Inline::Text(TextRun {
+        text: std::mem::take(text_buffer),
+        style: TextStyle::default(),
+        style_ref: None,
+    }));
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -641,6 +671,39 @@ mod tests {
                         style: TextStyle::default(),
                         style_ref: None,
                     })
+                );
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn paragraph_fallback_preserves_line_breaks_and_tabs_as_inlines() {
+        let document = Document::from_paragraphs(vec!["a\nb\tc".to_string()]);
+
+        match &document.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => {
+                assert_eq!(
+                    paragraph.inlines,
+                    vec![
+                        Inline::Text(TextRun {
+                            text: "a".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        }),
+                        Inline::LineBreak,
+                        Inline::Text(TextRun {
+                            text: "b".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        }),
+                        Inline::Tab,
+                        Inline::Text(TextRun {
+                            text: "c".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        }),
+                    ]
                 );
             }
             other => panic!("expected paragraph block, got {other:?}"),
