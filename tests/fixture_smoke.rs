@@ -132,6 +132,7 @@ fn assert_fixture_export_artifacts(input: &FixtureInput, format: OutputFormat, o
         "image" => assert_image_export_artifacts(input, format, output_path),
         "list" => assert_list_export_artifacts(input, format, output_path),
         "merged_table" => assert_merged_table_export_artifacts(input, format, output_path),
+        "style" => assert_style_export_artifacts(input, format, output_path),
         "table" => assert_table_export_artifacts(input, format, output_path),
         _ => {}
     }
@@ -284,6 +285,34 @@ fn assert_merged_table_export_artifacts(
         assert!(
             output.contains(cell_text),
             "fixture {} should preserve merged table cell text {cell_text:?} in HTML",
+            input.label
+        );
+    }
+}
+
+fn assert_style_export_artifacts(input: &FixtureInput, format: OutputFormat, output_path: &Path) {
+    if format != OutputFormat::Html {
+        return;
+    }
+
+    let output = read_export_output(input, format, output_path);
+    for expected in [
+        "styled text",
+        "font-weight: bold",
+        "font-style: italic",
+        "text-decoration: underline line-through",
+        "font-family: Noto Sans KR",
+        "font-size: 12pt",
+        "color: #030201",
+        "background-color: #060504",
+        "text-align: center",
+        "margin-top: 4pt",
+        "margin-bottom: 5pt",
+        "margin-left: 3pt",
+    ] {
+        assert!(
+            output.contains(expected),
+            "fixture {} should preserve style export fragment {expected:?}",
             input.label
         );
     }
