@@ -924,7 +924,7 @@ impl<'a> BridgeContext<'a> {
         }
     }
 
-    fn map_shape(&self, shape: &ShapeObject) -> Shape {
+    fn map_shape(&mut self, shape: &ShapeObject) -> Shape {
         let kind = match shape {
             ShapeObject::Line(_) => ShapeKind::Line,
             ShapeObject::Rectangle(_) => ShapeKind::Rectangle,
@@ -933,12 +933,42 @@ impl<'a> BridgeContext<'a> {
             ShapeObject::Group(_) | ShapeObject::Picture(_) => ShapeKind::Unknown,
         };
         let description = non_empty_string(&shape.common().description);
+        let text_box_text = self.shape_text_box_text(shape);
+        let caption_text = shape.drawing().and_then(|drawing| {
+            self.caption_text(drawing.caption.as_ref().map(|caption| &caption.paragraphs))
+        });
+        let mut fallback_parts = Vec::new();
+        if let Some(description) = &description {
+            fallback_parts.push(description.clone());
+        }
+        if let Some(text) = &text_box_text {
+            fallback_parts.push(text.clone());
+        }
+        if let Some(caption) = caption_text {
+            fallback_parts.push(caption);
+        }
+        if text_box_text.is_some() {
+            self.add_warning_once(
+                "rhwp exposed shape text box paragraphs; hwp-convert folded them into shape fallback text.",
+            );
+        }
 
         Shape {
             kind,
-            fallback_text: description.clone().or_else(|| Some("[shape]".to_string())),
+            fallback_text: if fallback_parts.is_empty() {
+                Some("[shape]".to_string())
+            } else {
+                Some(fallback_parts.join("\n"))
+            },
             description,
         }
+    }
+
+    fn shape_text_box_text(&mut self, shape: &ShapeObject) -> Option<String> {
+        let text_box = shape.drawing()?.text_box.as_ref()?;
+        let blocks = self.map_blocks_from_paragraphs(&text_box.paragraphs, 0);
+        let text = crate::util::plain_text::blocks_to_plain_text(&blocks);
+        non_empty_string(&text)
     }
 
     fn ensure_image_resource(&mut self, bin_data_id: u16) -> Option<ResourceId> {
@@ -1478,6 +1508,10 @@ mod tests {
         CharShapeRef, FieldRange, NumberingRestart as RhwpNumberingRestart,
         Paragraph as RhwpParagraph,
     };
+    use rhwp::model::shape::{
+        DrawingObjAttr as RhwpDrawingObjAttr, RectangleShape as RhwpRectangleShape,
+        TextBox as RhwpTextBox,
+    };
     use rhwp::model::style::{
         Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, Bullet as RhwpBullet,
         CharShape as RhwpCharShape, Fill, FillType, Font, HeadType as RhwpHeadType,
@@ -1585,6 +1619,54 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| { warning.message.contains("table cell field names") })
+        );
+    }
+
+    #[test]
+    fn preserves_shape_text_box_in_fallback_text() {
+        let shape = ShapeObject::Rectangle(RhwpRectangleShape {
+            common: rhwp::model::shape::CommonObjAttr {
+                description: "callout".to_string(),
+                ..Default::default()
+            },
+            drawing: RhwpDrawingObjAttr {
+                text_box: Some(RhwpTextBox {
+                    paragraphs: vec![RhwpParagraph {
+                        text: "shape text".to_string(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Shape(Box::new(shape))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Shape(shape) => {
+                assert_eq!(shape.kind, ShapeKind::Rectangle);
+                assert_eq!(shape.description.as_deref(), Some("callout"));
+                assert_eq!(shape.fallback_text.as_deref(), Some("callout\nshape text"));
+            }
+            other => panic!("expected shape block, got {other:?}"),
+        }
+        assert!(
+            bridged
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("shape text box paragraphs") })
         );
     }
 
