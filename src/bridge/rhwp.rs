@@ -6,7 +6,8 @@ use std::path::Path;
 use rhwp::model::control::{
     AutoNumberType as RhwpAutoNumberType, Bookmark as RhwpBookmark, Control,
     Equation as RhwpEquation, Field as RhwpField, FieldType as RhwpFieldType,
-    HiddenComment as RhwpHiddenComment, Hyperlink as RhwpHyperlink,
+    FormObject as RhwpFormObject, FormType as RhwpFormType, HiddenComment as RhwpHiddenComment,
+    Hyperlink as RhwpHyperlink, PageHide as RhwpPageHide,
 };
 use rhwp::model::document::{Document as RhwpDocument, Section as RhwpSection};
 use rhwp::model::header_footer::HeaderFooterApply as RhwpHeaderFooterApply;
@@ -749,7 +750,10 @@ impl<'a> BridgeContext<'a> {
                         .unwrap_or_else(|| "[char overlap]".to_string()),
                 )
             }
-            Control::PageHide(_) => self.warn_unsupported_control("page_hide"),
+            Control::PageHide(page_hide) => self.warn_unsupported_control_with_fallback(
+                "page_hide",
+                page_hide_fallback_text(page_hide),
+            ),
             Control::HiddenComment(comment) => self.map_hidden_comment_block(comment),
             Control::Field(field) => {
                 if field.field_type != RhwpFieldType::Hyperlink {
@@ -757,7 +761,9 @@ impl<'a> BridgeContext<'a> {
                 }
                 None
             }
-            Control::Form(_) => self.warn_unsupported_control("form"),
+            Control::Form(form) => {
+                self.warn_unsupported_control_with_fallback("form", form_fallback_text(form))
+            }
             _ => None,
         }
     }
@@ -1320,6 +1326,62 @@ fn auto_number_type_name(number_type: RhwpAutoNumberType) -> &'static str {
     }
 }
 
+fn page_hide_fallback_text(page_hide: &RhwpPageHide) -> String {
+    let mut flags = Vec::new();
+    if page_hide.hide_header {
+        flags.push("header");
+    }
+    if page_hide.hide_footer {
+        flags.push("footer");
+    }
+    if page_hide.hide_master_page {
+        flags.push("master_page");
+    }
+    if page_hide.hide_border {
+        flags.push("border");
+    }
+    if page_hide.hide_fill {
+        flags.push("fill");
+    }
+    if page_hide.hide_page_num {
+        flags.push("page_num");
+    }
+
+    if flags.is_empty() {
+        "[page hide: none]".to_string()
+    } else {
+        format!("[page hide: {}]", flags.join(","))
+    }
+}
+
+fn form_fallback_text(form: &RhwpFormObject) -> String {
+    let label = non_empty_string(&form.caption)
+        .or_else(|| non_empty_string(&form.text))
+        .or_else(|| non_empty_string(&form.name))
+        .unwrap_or_else(|| form_type_name(form.form_type).to_string());
+
+    format!(
+        "[form: type={}, name={}, text={}, value={}, enabled={}, size={}x{}]",
+        form_type_name(form.form_type),
+        non_empty_string(&form.name).unwrap_or_else(|| "-".to_string()),
+        label,
+        form.value,
+        form.enabled,
+        form.width,
+        form.height
+    )
+}
+
+fn form_type_name(form_type: RhwpFormType) -> &'static str {
+    match form_type {
+        RhwpFormType::PushButton => "push_button",
+        RhwpFormType::CheckBox => "check_box",
+        RhwpFormType::ComboBox => "combo_box",
+        RhwpFormType::RadioButton => "radio_button",
+        RhwpFormType::Edit => "edit",
+    }
+}
+
 fn bullet_marker(source: &RhwpDocument, bullet_id: u16) -> Option<String> {
     if bullet_id == 0 {
         return None;
@@ -1385,8 +1447,9 @@ mod tests {
     use rhwp::model::control::{
         AutoNumber as RhwpAutoNumber, AutoNumberType as RhwpAutoNumberType,
         Bookmark as RhwpBookmark, CharOverlap as RhwpCharOverlap, Field as RhwpField,
-        HiddenComment as RhwpHiddenComment, NewNumber as RhwpNewNumber,
-        PageNumberPos as RhwpPageNumberPos, Ruby as RhwpRuby,
+        FormObject as RhwpFormObject, FormType as RhwpFormType, HiddenComment as RhwpHiddenComment,
+        NewNumber as RhwpNewNumber, PageHide as RhwpPageHide, PageNumberPos as RhwpPageNumberPos,
+        Ruby as RhwpRuby,
     };
     use rhwp::model::document::{DocInfo, Document as RhwpDocument, Section as RhwpSection};
     use rhwp::model::footnote::Footnote as RhwpFootnote;
@@ -1944,6 +2007,47 @@ mod tests {
         );
         assert!(
             matches!(&blocks[3], Block::Unknown(unknown) if unknown.kind == "page_number_position" && unknown.fallback_text.as_deref() == Some("[page number position: format=4, position=5]"))
+        );
+    }
+
+    #[test]
+    fn preserves_page_hide_and_form_controls_as_unknown_blocks() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "body".to_string(),
+                    controls: vec![
+                        Control::PageHide(RhwpPageHide {
+                            hide_header: true,
+                            hide_page_num: true,
+                            ..Default::default()
+                        }),
+                        Control::Form(Box::new(RhwpFormObject {
+                            form_type: RhwpFormType::Edit,
+                            name: "field1".to_string(),
+                            text: "value".to_string(),
+                            width: 100,
+                            height: 200,
+                            value: 1,
+                            enabled: true,
+                            ..Default::default()
+                        })),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let blocks = &bridged.sections[0].blocks;
+
+        assert!(
+            matches!(&blocks[1], Block::Unknown(unknown) if unknown.kind == "page_hide" && unknown.fallback_text.as_deref() == Some("[page hide: header,page_num]"))
+        );
+        assert!(
+            matches!(&blocks[2], Block::Unknown(unknown) if unknown.kind == "form" && unknown.fallback_text.as_deref() == Some("[form: type=edit, name=field1, text=value, value=1, enabled=true, size=100x200]"))
         );
     }
 
