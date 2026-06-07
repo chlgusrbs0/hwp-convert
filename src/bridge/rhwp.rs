@@ -5,7 +5,7 @@ use std::path::Path;
 
 use rhwp::model::control::{
     Control, Equation as RhwpEquation, Field as RhwpField, FieldType as RhwpFieldType,
-    Hyperlink as RhwpHyperlink,
+    HiddenComment as RhwpHiddenComment, Hyperlink as RhwpHyperlink,
 };
 use rhwp::model::document::{Document as RhwpDocument, Section as RhwpSection};
 use rhwp::model::header_footer::HeaderFooterApply as RhwpHeaderFooterApply;
@@ -701,7 +701,7 @@ impl<'a> BridgeContext<'a> {
                 )
             }
             Control::PageHide(_) => self.warn_unsupported_control("page_hide"),
-            Control::HiddenComment(_) => self.warn_unsupported_control("hidden_comment"),
+            Control::HiddenComment(comment) => self.map_hidden_comment_block(comment),
             Control::Field(field) => {
                 if field.field_type != RhwpFieldType::Hyperlink {
                     self.warn_unsupported_control(field_type_warning_name(field.field_type));
@@ -734,6 +734,30 @@ impl<'a> BridgeContext<'a> {
             fallback_text: Some(fallback_text),
             message: Some(
                 "Unsupported visible rHWP control preserved as fallback text.".to_string(),
+            ),
+            source: Some("rhwp".to_string()),
+        }))
+    }
+
+    fn map_hidden_comment_block(&mut self, comment: &RhwpHiddenComment) -> Option<Block> {
+        let blocks = self.map_blocks_from_paragraphs(&comment.paragraphs, 0);
+        let content = crate::util::plain_text::blocks_to_plain_text(&blocks);
+        let fallback_text = if content.is_empty() {
+            "[hidden comment]".to_string()
+        } else {
+            format!("[hidden comment]\n{content}")
+        };
+
+        self.add_warning_once(
+            "rhwp exposed hidden comment paragraphs; hwp-convert preserved them as unknown block fallback text.",
+        );
+
+        Some(Block::Unknown(crate::ir::UnknownBlock {
+            kind: "hidden_comment".to_string(),
+            fallback_text: Some(fallback_text),
+            message: Some(
+                "Hidden comment preserved as fallback text because Document IR does not yet model comments."
+                    .to_string(),
             ),
             source: Some("rhwp".to_string()),
         }))
@@ -1283,7 +1307,7 @@ mod tests {
     };
     use rhwp::model::control::{
         Bookmark as RhwpBookmark, CharOverlap as RhwpCharOverlap, Field as RhwpField,
-        Ruby as RhwpRuby,
+        HiddenComment as RhwpHiddenComment, Ruby as RhwpRuby,
     };
     use rhwp::model::document::{DocInfo, Document as RhwpDocument, Section as RhwpSection};
     use rhwp::model::footnote::Footnote as RhwpFootnote;
@@ -1765,6 +1789,39 @@ mod tests {
                 .message
                 .contains("unsupported visible control `ruby`")
         }));
+    }
+
+    #[test]
+    fn preserves_hidden_comment_text_as_unknown_block() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "body".to_string(),
+                    controls: vec![Control::HiddenComment(Box::new(RhwpHiddenComment {
+                        paragraphs: vec![RhwpParagraph {
+                            text: "hidden note".to_string(),
+                            ..Default::default()
+                        }],
+                    }))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let blocks = &bridged.sections[0].blocks;
+
+        assert!(
+            matches!(&blocks[1], Block::Unknown(unknown) if unknown.kind == "hidden_comment" && unknown.fallback_text.as_deref() == Some("[hidden comment]\nhidden note"))
+        );
+        assert!(
+            bridged
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("hidden comment paragraphs") })
+        );
     }
 
     #[test]

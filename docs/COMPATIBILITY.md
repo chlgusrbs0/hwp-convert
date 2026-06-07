@@ -16,6 +16,8 @@ When rHWP parsing fails or maps a HWPX file to an empty semantic document, hwp-c
 
 Visible unsupported controls with recoverable text, currently ruby and character overlap, are also preserved as `UnknownBlock` fallback text so exporters leave an explicit trace instead of dropping them silently.
 
+Hidden comments with paragraph content are preserved as `UnknownBlock` fallback text. This is not a full comment model; it is a data-loss guard until `Document IR` has explicit comment structure.
+
 Section/column definition controls and controls already handled through another path, such as table, image, equation, shape, header/footer, footnote/endnote, and hyperlink, are not covered by this generic warning path.
 
 ## Current HTML list rendering behavior
