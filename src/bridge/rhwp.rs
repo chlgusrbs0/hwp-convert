@@ -863,7 +863,24 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn map_table_cell(&mut self, cell: &RhwpCell) -> TableCell {
-        let blocks = self.map_blocks_from_paragraphs(&cell.paragraphs, 0);
+        let mut blocks = self.map_blocks_from_paragraphs(&cell.paragraphs, 0);
+        if let Some(field_name) = cell.field_name.as_deref().and_then(non_empty_string) {
+            blocks.insert(
+                0,
+                Block::Unknown(crate::ir::UnknownBlock {
+                    kind: "table_cell_field".to_string(),
+                    fallback_text: Some(format!("[cell field: {field_name}]")),
+                    message: Some(
+                        "Table cell field name preserved as fallback text because Document IR does not yet model cell fields."
+                            .to_string(),
+                    ),
+                    source: Some("rhwp".to_string()),
+                }),
+            );
+            self.add_warning_once(
+                "rhwp exposed table cell field names; hwp-convert preserved them as unknown block fallback text.",
+            );
+        }
 
         TableCell {
             row_span: cell.row_span as u32,
@@ -1518,6 +1535,57 @@ mod tests {
             }
             other => panic!("expected table block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn preserves_table_cell_field_name_as_unknown_block() {
+        let cell = RhwpCell {
+            row: 0,
+            col: 0,
+            row_span: 1,
+            col_span: 1,
+            field_name: Some("amount".to_string()),
+            paragraphs: vec![RhwpParagraph {
+                text: "1000".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let table = RhwpTable {
+            row_count: 1,
+            col_count: 1,
+            cells: vec![cell],
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Table(Box::new(table))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Table(table) => {
+                let cell = &table.rows[0].cells[0];
+                assert!(
+                    matches!(&cell.blocks[0], Block::Unknown(unknown) if unknown.kind == "table_cell_field" && unknown.fallback_text.as_deref() == Some("[cell field: amount]"))
+                );
+                assert!(matches!(&cell.blocks[1], Block::Paragraph(_)));
+            }
+            other => panic!("expected table block, got {other:?}"),
+        }
+        assert!(
+            bridged
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("table cell field names") })
+        );
     }
 
     #[test]
