@@ -703,7 +703,7 @@ impl<'a> BridgeContext<'a> {
             Control::Table(table) => Some(Block::Table(self.map_table(table))),
             Control::Picture(picture) => Some(self.map_picture_block(picture)),
             Control::Equation(equation) => Some(Block::Equation(self.map_equation(equation))),
-            Control::Shape(shape) => Some(Block::Shape(self.map_shape(shape))),
+            Control::Shape(shape) => Some(self.map_shape_block(shape)),
             Control::Unknown(control) => Some(Block::Unknown(crate::ir::UnknownBlock {
                 kind: format!("control:{:#010x}", control.ctrl_id),
                 fallback_text: None,
@@ -961,6 +961,13 @@ impl<'a> BridgeContext<'a> {
                 Some(fallback_parts.join("\n"))
             },
             description,
+        }
+    }
+
+    fn map_shape_block(&mut self, shape: &ShapeObject) -> Block {
+        match shape {
+            ShapeObject::Picture(picture) => self.map_picture_block(picture),
+            _ => Block::Shape(self.map_shape(shape)),
         }
     }
 
@@ -1720,6 +1727,52 @@ mod tests {
                 assert_eq!(resource.media_type.as_deref(), Some("image/png"));
             }
             other => panic!("expected image resource, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_shape_picture_into_image_block_and_resource_store() {
+        let picture = Picture {
+            image_attr: ImageAttr {
+                bin_data_id: 9,
+                ..Default::default()
+            },
+            common: rhwp::model::shape::CommonObjAttr {
+                width: 15000,
+                height: 7500,
+                description: "nested logo".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Shape(Box::new(ShapeObject::Picture(Box::new(
+                        picture,
+                    ))))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            bin_data_content: vec![BinDataContent {
+                id: 9,
+                data: vec![137, 80, 78, 71],
+                extension: "png".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Image(image) => {
+                assert_eq!(image.resource_id.as_str(), "image-9");
+                assert_eq!(image.alt.as_deref(), Some("nested logo"));
+                assert_eq!(image.width, Some(LengthPx(200.0)));
+                assert_eq!(image.height, Some(LengthPx(100.0)));
+            }
+            other => panic!("expected image block, got {other:?}"),
         }
     }
 
