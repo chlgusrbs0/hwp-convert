@@ -13,7 +13,7 @@ use rhwp::model::document::{
     Document as RhwpDocument, Section as RhwpSection, SectionDef as RhwpSectionDef,
 };
 use rhwp::model::header_footer::HeaderFooterApply as RhwpHeaderFooterApply;
-use rhwp::model::image::Picture;
+use rhwp::model::image::{ImageEffect as RhwpImageEffect, Picture};
 use rhwp::model::page::{
     ColumnDef as RhwpColumnDef, ColumnDirection as RhwpColumnDirection,
     ColumnType as RhwpColumnType,
@@ -979,6 +979,8 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn map_picture_block(&mut self, picture: &Picture) -> Block {
+        self.warn_unsupported_picture_transform(picture);
+
         match self.ensure_image_resource(picture.image_attr.bin_data_id) {
             Some(resource_id) => Block::Image(Image {
                 resource_id,
@@ -999,6 +1001,56 @@ impl<'a> BridgeContext<'a> {
                 source: Some("rhwp".to_string()),
             }),
         }
+    }
+
+    fn warn_unsupported_picture_transform(&mut self, picture: &Picture) {
+        let mut details = Vec::new();
+
+        if !picture_crop_is_empty(picture) {
+            details.push(format!(
+                "crop={}/{}/{}/{}",
+                picture.crop.left, picture.crop.top, picture.crop.right, picture.crop.bottom
+            ));
+        }
+        if picture.image_attr.effect != RhwpImageEffect::RealPic
+            || picture.image_attr.brightness != 0
+            || picture.image_attr.contrast != 0
+        {
+            details.push(format!(
+                "image_attr=effect:{},brightness:{},contrast:{}",
+                image_effect_name(picture.image_attr.effect),
+                picture.image_attr.brightness,
+                picture.image_attr.contrast
+            ));
+        }
+        if picture.border_width != 0
+            || picture.border_color != 0
+            || picture.border_opacity != 0
+            || picture.padding.left != 0
+            || picture.padding.right != 0
+            || picture.padding.top != 0
+            || picture.padding.bottom != 0
+        {
+            details.push(format!(
+                "border_width={},border_color={:#08x},border_opacity={},padding={}/{}/{}/{}",
+                picture.border_width,
+                picture.border_color,
+                picture.border_opacity,
+                picture.padding.left,
+                picture.padding.right,
+                picture.padding.top,
+                picture.padding.bottom
+            ));
+        }
+
+        if details.is_empty() {
+            return;
+        }
+
+        self.add_warning_once(&format!(
+            "rhwp exposed picture visual transforms that Image IR does not yet model; hwp-convert preserved the original image bytes without applying {}.",
+            details.join(", ")
+        ));
     }
 
     fn map_equation(&self, equation: &RhwpEquation) -> Equation {
@@ -1582,6 +1634,22 @@ fn column_direction_name(direction: RhwpColumnDirection) -> &'static str {
     }
 }
 
+fn picture_crop_is_empty(picture: &Picture) -> bool {
+    picture.crop.left == 0
+        && picture.crop.top == 0
+        && picture.crop.right == 0
+        && picture.crop.bottom == 0
+}
+
+fn image_effect_name(effect: RhwpImageEffect) -> &'static str {
+    match effect {
+        RhwpImageEffect::RealPic => "real_pic",
+        RhwpImageEffect::GrayScale => "gray_scale",
+        RhwpImageEffect::BlackWhite => "black_white",
+        RhwpImageEffect::Pattern8x8 => "pattern_8x8",
+    }
+}
+
 fn page_hide_fallback_text(page_hide: &RhwpPageHide) -> String {
     let mut flags = Vec::new();
     if page_hide.hide_header {
@@ -1714,7 +1782,9 @@ mod tests {
     use rhwp::model::header_footer::{
         Footer as RhwpFooter, Header as RhwpHeader, HeaderFooterApply as RhwpHeaderFooterApply,
     };
-    use rhwp::model::image::{ImageAttr, Picture};
+    use rhwp::model::image::{
+        CropInfo as RhwpCropInfo, ImageAttr, ImageEffect as RhwpImageEffect, Picture,
+    };
     use rhwp::model::page::{
         ColumnDef as RhwpColumnDef, ColumnDirection as RhwpColumnDirection,
         ColumnType as RhwpColumnType,
@@ -2043,6 +2113,59 @@ mod tests {
             }
             other => panic!("expected image block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn warns_when_picture_visual_transforms_are_not_modeled() {
+        let picture = Picture {
+            image_attr: ImageAttr {
+                bin_data_id: 7,
+                brightness: 10,
+                contrast: -5,
+                effect: RhwpImageEffect::GrayScale,
+            },
+            crop: RhwpCropInfo {
+                left: 1,
+                top: 2,
+                right: 3,
+                bottom: 4,
+            },
+            border_width: 5,
+            border_color: 0x00112233,
+            border_opacity: 128,
+            padding: rhwp::model::Padding {
+                left: 10,
+                right: 20,
+                top: 30,
+                bottom: 40,
+            },
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Picture(Box::new(picture))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            bin_data_content: vec![BinDataContent {
+                id: 7,
+                data: vec![137, 80, 78, 71],
+                extension: "png".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert!(matches!(&bridged.sections[0].blocks[0], Block::Image(_)));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("picture visual transforms")
+                && warning.message.contains("crop=1/2/3/4")
+                && warning.message.contains("effect:gray_scale")
+                && warning.message.contains("padding=10/20/30/40")
+        }));
     }
 
     #[test]
