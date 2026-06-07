@@ -4,8 +4,8 @@ use std::io;
 use std::path::Path;
 
 use rhwp::model::control::{
-    Control, Equation as RhwpEquation, Field as RhwpField, FieldType as RhwpFieldType,
-    HiddenComment as RhwpHiddenComment, Hyperlink as RhwpHyperlink,
+    Bookmark as RhwpBookmark, Control, Equation as RhwpEquation, Field as RhwpField,
+    FieldType as RhwpFieldType, HiddenComment as RhwpHiddenComment, Hyperlink as RhwpHyperlink,
 };
 use rhwp::model::document::{Document as RhwpDocument, Section as RhwpSection};
 use rhwp::model::header_footer::HeaderFooterApply as RhwpHeaderFooterApply;
@@ -463,6 +463,7 @@ impl<'a> BridgeContext<'a> {
         let mut appended_note_ref = false;
         let mut appended_link_ref = false;
         let mut appended_field_fallback = false;
+        let mut encountered_bookmark = false;
 
         for (index, control) in paragraph.controls.iter().enumerate() {
             if consumed_controls.contains(&index) {
@@ -496,6 +497,12 @@ impl<'a> BridgeContext<'a> {
                         appended_field_fallback = true;
                     }
                 }
+                Control::Bookmark(bookmark) => {
+                    encountered_bookmark = true;
+                    if let Some(mapped) = self.map_bookmark_fallback(bookmark) {
+                        inlines.push(mapped);
+                    }
+                }
                 _ => {}
             }
         }
@@ -515,6 +522,12 @@ impl<'a> BridgeContext<'a> {
         if appended_field_fallback {
             self.add_warning_once(
                 "Some rhwp click-here fields or other field controls could not be placed at exact inline positions, so bridge fallback appended their fallback text after paragraph text.",
+            );
+        }
+
+        if encountered_bookmark {
+            self.add_warning_once(
+                "rhwp exposed unsupported control `bookmark`; hwp-convert preserved bookmark names as unknown inline fallback text when available.",
             );
         }
     }
@@ -566,6 +579,20 @@ impl<'a> BridgeContext<'a> {
             fallback_text: Some(format!("[{kind}: {command}]")),
             message: Some(
                 "rHWP field command was preserved as fallback text because hwp-convert does not yet semantically map this field type."
+                    .to_string(),
+            ),
+            source: Some("rhwp".to_string()),
+        }))
+    }
+
+    fn map_bookmark_fallback(&self, bookmark: &RhwpBookmark) -> Option<Inline> {
+        let name = non_empty_string(&bookmark.name)?;
+
+        Some(Inline::Unknown(UnknownInline {
+            kind: "bookmark".to_string(),
+            fallback_text: Some(format!("[bookmark: {name}]")),
+            message: Some(
+                "Bookmark name was preserved as fallback text because Document IR does not yet model anchors."
                     .to_string(),
             ),
             source: Some("rhwp".to_string()),
@@ -684,7 +711,7 @@ impl<'a> BridgeContext<'a> {
             Control::AutoNumber(_) => self.warn_unsupported_control("auto_number"),
             Control::NewNumber(_) => self.warn_unsupported_control("new_number"),
             Control::PageNumberPos(_) => self.warn_unsupported_control("page_number_position"),
-            Control::Bookmark(_) => self.warn_unsupported_control("bookmark"),
+            Control::Bookmark(_) => None,
             Control::Ruby(ruby) => self.warn_unsupported_visible_control(
                 "ruby",
                 non_empty_string(&ruby.ruby_text)
@@ -1856,13 +1883,24 @@ mod tests {
             warning.code == WarningCode::Unknown && warning.message.contains("`field:date`")
         }));
         match &bridged.sections[0].blocks[0] {
-            Block::Paragraph(paragraph) => match paragraph.inlines.last() {
-                Some(Inline::Unknown(unknown)) => {
-                    assert_eq!(unknown.kind, "field:date");
-                    assert_eq!(unknown.fallback_text.as_deref(), Some("[field:date: date]"));
+            Block::Paragraph(paragraph) => {
+                assert!(paragraph.inlines.iter().any(|inline| {
+                    matches!(
+                        inline,
+                        Inline::Unknown(unknown)
+                            if unknown.kind == "bookmark"
+                                && unknown.fallback_text.as_deref() == Some("[bookmark: target]")
+                    )
+                }));
+
+                match paragraph.inlines.last() {
+                    Some(Inline::Unknown(unknown)) => {
+                        assert_eq!(unknown.kind, "field:date");
+                        assert_eq!(unknown.fallback_text.as_deref(), Some("[field:date: date]"));
+                    }
+                    other => panic!("expected date field unknown inline, got {other:?}"),
                 }
-                other => panic!("expected date field unknown inline, got {other:?}"),
-            },
+            }
             other => panic!("expected paragraph block, got {other:?}"),
         }
     }
