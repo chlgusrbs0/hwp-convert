@@ -4,8 +4,9 @@ use std::io;
 use std::path::Path;
 
 use rhwp::model::control::{
-    Bookmark as RhwpBookmark, Control, Equation as RhwpEquation, Field as RhwpField,
-    FieldType as RhwpFieldType, HiddenComment as RhwpHiddenComment, Hyperlink as RhwpHyperlink,
+    AutoNumberType as RhwpAutoNumberType, Bookmark as RhwpBookmark, Control,
+    Equation as RhwpEquation, Field as RhwpField, FieldType as RhwpFieldType,
+    HiddenComment as RhwpHiddenComment, Hyperlink as RhwpHyperlink,
 };
 use rhwp::model::document::{Document as RhwpDocument, Section as RhwpSection};
 use rhwp::model::header_footer::HeaderFooterApply as RhwpHeaderFooterApply;
@@ -708,9 +709,30 @@ impl<'a> BridgeContext<'a> {
                 message: Some("rhwp exposed this control as Unknown".to_string()),
                 source: Some("rhwp".to_string()),
             })),
-            Control::AutoNumber(_) => self.warn_unsupported_control("auto_number"),
-            Control::NewNumber(_) => self.warn_unsupported_control("new_number"),
-            Control::PageNumberPos(_) => self.warn_unsupported_control("page_number_position"),
+            Control::AutoNumber(number) => self.warn_unsupported_control_with_fallback(
+                "auto_number",
+                format!(
+                    "[auto number: type={}, number={}, assigned={}]",
+                    auto_number_type_name(number.number_type),
+                    number.number,
+                    number.assigned_number
+                ),
+            ),
+            Control::NewNumber(number) => self.warn_unsupported_control_with_fallback(
+                "new_number",
+                format!(
+                    "[new number: type={}, number={}]",
+                    auto_number_type_name(number.number_type),
+                    number.number
+                ),
+            ),
+            Control::PageNumberPos(position) => self.warn_unsupported_control_with_fallback(
+                "page_number_position",
+                format!(
+                    "[page number position: format={}, position={}]",
+                    position.format, position.position
+                ),
+            ),
             Control::Bookmark(_) => None,
             Control::Ruby(ruby) => self.warn_unsupported_visible_control(
                 "ruby",
@@ -762,6 +784,23 @@ impl<'a> BridgeContext<'a> {
             message: Some(
                 "Unsupported visible rHWP control preserved as fallback text.".to_string(),
             ),
+            source: Some("rhwp".to_string()),
+        }))
+    }
+
+    fn warn_unsupported_control_with_fallback(
+        &mut self,
+        kind: &str,
+        fallback_text: String,
+    ) -> Option<Block> {
+        self.add_warning_once(&format!(
+            "rhwp exposed unsupported control `{kind}`; hwp-convert preserved fallback text as an unknown block."
+        ));
+
+        Some(Block::Unknown(crate::ir::UnknownBlock {
+            kind: kind.to_string(),
+            fallback_text: Some(fallback_text),
+            message: Some("Unsupported rHWP control preserved as fallback text.".to_string()),
             source: Some("rhwp".to_string()),
         }))
     }
@@ -1270,6 +1309,17 @@ fn field_type_warning_name(field_type: RhwpFieldType) -> &'static str {
     }
 }
 
+fn auto_number_type_name(number_type: RhwpAutoNumberType) -> &'static str {
+    match number_type {
+        RhwpAutoNumberType::Page => "page",
+        RhwpAutoNumberType::Footnote => "footnote",
+        RhwpAutoNumberType::Endnote => "endnote",
+        RhwpAutoNumberType::Picture => "picture",
+        RhwpAutoNumberType::Table => "table",
+        RhwpAutoNumberType::Equation => "equation",
+    }
+}
+
 fn bullet_marker(source: &RhwpDocument, bullet_id: u16) -> Option<String> {
     if bullet_id == 0 {
         return None;
@@ -1333,8 +1383,10 @@ mod tests {
         BinData, BinDataCompression, BinDataContent, BinDataStatus, BinDataType,
     };
     use rhwp::model::control::{
+        AutoNumber as RhwpAutoNumber, AutoNumberType as RhwpAutoNumberType,
         Bookmark as RhwpBookmark, CharOverlap as RhwpCharOverlap, Field as RhwpField,
-        HiddenComment as RhwpHiddenComment, Ruby as RhwpRuby,
+        HiddenComment as RhwpHiddenComment, NewNumber as RhwpNewNumber,
+        PageNumberPos as RhwpPageNumberPos, Ruby as RhwpRuby,
     };
     use rhwp::model::document::{DocInfo, Document as RhwpDocument, Section as RhwpSection};
     use rhwp::model::footnote::Footnote as RhwpFootnote;
@@ -1848,6 +1900,50 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| { warning.message.contains("hidden comment paragraphs") })
+        );
+    }
+
+    #[test]
+    fn preserves_numbering_controls_as_unknown_blocks() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "body".to_string(),
+                    controls: vec![
+                        Control::AutoNumber(RhwpAutoNumber {
+                            number_type: RhwpAutoNumberType::Table,
+                            number: 2,
+                            assigned_number: 7,
+                            ..Default::default()
+                        }),
+                        Control::NewNumber(RhwpNewNumber {
+                            number_type: RhwpAutoNumberType::Picture,
+                            number: 3,
+                        }),
+                        Control::PageNumberPos(RhwpPageNumberPos {
+                            format: 4,
+                            position: 5,
+                            ..Default::default()
+                        }),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let blocks = &bridged.sections[0].blocks;
+
+        assert!(
+            matches!(&blocks[1], Block::Unknown(unknown) if unknown.kind == "auto_number" && unknown.fallback_text.as_deref() == Some("[auto number: type=table, number=2, assigned=7]"))
+        );
+        assert!(
+            matches!(&blocks[2], Block::Unknown(unknown) if unknown.kind == "new_number" && unknown.fallback_text.as_deref() == Some("[new number: type=picture, number=3]"))
+        );
+        assert!(
+            matches!(&blocks[3], Block::Unknown(unknown) if unknown.kind == "page_number_position" && unknown.fallback_text.as_deref() == Some("[page number position: format=4, position=5]"))
         );
     }
 
