@@ -11,8 +11,8 @@ use crate::cli::{CliArgs, OutputFormat};
 use crate::ir::{
     Alignment, Block, Chart, Color, Document, Equation, EquationKind, HeaderFooter,
     HeaderFooterPlacement, Image, Inline, Link, ListInfo, ListKind, Note, NoteId, NoteKind,
-    Paragraph, ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, Table,
-    TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
+    Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape,
+    Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
     UnknownInline,
 };
 use crate::util::plain_text;
@@ -595,6 +595,10 @@ fn render_html_document_with_asset_prefix(
         color: #4b5563;\n\
         font-size: 14px;\n\
       }}\n\
+      .caption {{\n\
+        color: #4b5563;\n\
+        font-size: 14px;\n\
+      }}\n\
       table {{\n\
         width: 100%;\n\
         border-collapse: collapse;\n\
@@ -854,8 +858,21 @@ fn render_html_paragraph(paragraph: &Paragraph) -> String {
     }
     content.push_str(&render_html_inlines(&paragraph.inlines));
     let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
+    let class = paragraph_role_html_class(&paragraph.role)
+        .map(|class| format!(" class=\"{class}\""))
+        .unwrap_or_default();
 
-    format!("<p{style}>{content}</p>\n")
+    format!("<p{class}{style}>{content}</p>\n")
+}
+
+fn paragraph_role_html_class(role: &ParagraphRole) -> Option<&'static str> {
+    match role {
+        ParagraphRole::Caption => Some("caption"),
+        ParagraphRole::Title => Some("title"),
+        ParagraphRole::Heading { .. } => Some("heading"),
+        ParagraphRole::Unknown => Some("unknown-paragraph"),
+        ParagraphRole::Body => None,
+    }
 }
 
 fn render_html_inlines(inlines: &[Inline]) -> String {
@@ -2446,6 +2463,25 @@ mod tests {
         assert!(html.contains("<title>sample.hwpx text export</title>"));
         assert!(html.contains("<p>&amp; &lt; &gt; &quot; &apos;<br />second line + extra</p>"));
         assert!(html.contains("<p>fallback block</p>"));
+    }
+
+    #[test]
+    fn renders_html_caption_paragraph_role_with_class() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Caption,
+            inlines: vec![Inline::Text(TextRun {
+                text: "Table caption".to_string(),
+                style: TextStyle::default(),
+                style_ref: None,
+            })],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: None,
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("<p class=\"caption\">Table caption</p>"));
     }
 
     #[test]
