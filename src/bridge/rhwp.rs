@@ -181,9 +181,7 @@ impl<'a> BridgeContext<'a> {
         }
 
         for control in &paragraph.controls {
-            if let Some(block) = self.map_control_block(control) {
-                blocks.push(block);
-            }
+            blocks.extend(self.map_control_blocks(control));
         }
     }
 
@@ -698,49 +696,61 @@ impl<'a> BridgeContext<'a> {
         }
     }
 
-    fn map_control_block(&mut self, control: &Control) -> Option<Block> {
+    fn map_control_blocks(&mut self, control: &Control) -> Vec<Block> {
         match control {
-            Control::Table(table) => Some(Block::Table(self.map_table(table))),
-            Control::Picture(picture) => Some(self.map_picture_block(picture)),
-            Control::Equation(equation) => Some(Block::Equation(self.map_equation(equation))),
-            Control::Shape(shape) => Some(self.map_shape_block(shape)),
-            Control::Unknown(control) => Some(Block::Unknown(crate::ir::UnknownBlock {
+            Control::Table(table) => vec![Block::Table(self.map_table(table))],
+            Control::Picture(picture) => vec![self.map_picture_block(picture)],
+            Control::Equation(equation) => vec![Block::Equation(self.map_equation(equation))],
+            Control::Shape(shape) => self.map_shape_blocks(shape),
+            Control::Unknown(control) => vec![Block::Unknown(crate::ir::UnknownBlock {
                 kind: format!("control:{:#010x}", control.ctrl_id),
                 fallback_text: None,
                 message: Some("rhwp exposed this control as Unknown".to_string()),
                 source: Some("rhwp".to_string()),
-            })),
-            Control::AutoNumber(number) => self.warn_unsupported_control_with_fallback(
-                "auto_number",
-                format!(
-                    "[auto number: type={}, number={}, assigned={}]",
-                    auto_number_type_name(number.number_type),
-                    number.number,
-                    number.assigned_number
-                ),
-            ),
-            Control::NewNumber(number) => self.warn_unsupported_control_with_fallback(
-                "new_number",
-                format!(
-                    "[new number: type={}, number={}]",
-                    auto_number_type_name(number.number_type),
-                    number.number
-                ),
-            ),
-            Control::PageNumberPos(position) => self.warn_unsupported_control_with_fallback(
-                "page_number_position",
-                format!(
-                    "[page number position: format={}, position={}]",
-                    position.format, position.position
-                ),
-            ),
-            Control::Bookmark(_) => None,
-            Control::Ruby(ruby) => self.warn_unsupported_visible_control(
-                "ruby",
-                non_empty_string(&ruby.ruby_text)
-                    .map(|text| format!("[ruby: {text}]"))
-                    .unwrap_or_else(|| "[ruby]".to_string()),
-            ),
+            })],
+            Control::AutoNumber(number) => self
+                .warn_unsupported_control_with_fallback(
+                    "auto_number",
+                    format!(
+                        "[auto number: type={}, number={}, assigned={}]",
+                        auto_number_type_name(number.number_type),
+                        number.number,
+                        number.assigned_number
+                    ),
+                )
+                .into_iter()
+                .collect(),
+            Control::NewNumber(number) => self
+                .warn_unsupported_control_with_fallback(
+                    "new_number",
+                    format!(
+                        "[new number: type={}, number={}]",
+                        auto_number_type_name(number.number_type),
+                        number.number
+                    ),
+                )
+                .into_iter()
+                .collect(),
+            Control::PageNumberPos(position) => self
+                .warn_unsupported_control_with_fallback(
+                    "page_number_position",
+                    format!(
+                        "[page number position: format={}, position={}]",
+                        position.format, position.position
+                    ),
+                )
+                .into_iter()
+                .collect(),
+            Control::Bookmark(_) => Vec::new(),
+            Control::Ruby(ruby) => self
+                .warn_unsupported_visible_control(
+                    "ruby",
+                    non_empty_string(&ruby.ruby_text)
+                        .map(|text| format!("[ruby: {text}]"))
+                        .unwrap_or_else(|| "[ruby]".to_string()),
+                )
+                .into_iter()
+                .collect(),
             Control::CharOverlap(overlap) => {
                 let chars = overlap.chars.iter().collect::<String>();
                 self.warn_unsupported_visible_control(
@@ -749,22 +759,30 @@ impl<'a> BridgeContext<'a> {
                         .map(|text| format!("[char overlap: {text}]"))
                         .unwrap_or_else(|| "[char overlap]".to_string()),
                 )
+                .into_iter()
+                .collect()
             }
-            Control::PageHide(page_hide) => self.warn_unsupported_control_with_fallback(
-                "page_hide",
-                page_hide_fallback_text(page_hide),
-            ),
-            Control::HiddenComment(comment) => self.map_hidden_comment_block(comment),
+            Control::PageHide(page_hide) => self
+                .warn_unsupported_control_with_fallback(
+                    "page_hide",
+                    page_hide_fallback_text(page_hide),
+                )
+                .into_iter()
+                .collect(),
+            Control::HiddenComment(comment) => {
+                self.map_hidden_comment_block(comment).into_iter().collect()
+            }
             Control::Field(field) => {
                 if field.field_type != RhwpFieldType::Hyperlink {
                     self.warn_unsupported_control(field_type_warning_name(field.field_type));
                 }
-                None
+                Vec::new()
             }
-            Control::Form(form) => {
-                self.warn_unsupported_control_with_fallback("form", form_fallback_text(form))
-            }
-            _ => None,
+            Control::Form(form) => self
+                .warn_unsupported_control_with_fallback("form", form_fallback_text(form))
+                .into_iter()
+                .collect(),
+            _ => Vec::new(),
         }
     }
 
@@ -964,10 +982,34 @@ impl<'a> BridgeContext<'a> {
         }
     }
 
-    fn map_shape_block(&mut self, shape: &ShapeObject) -> Block {
+    fn map_shape_blocks(&mut self, shape: &ShapeObject) -> Vec<Block> {
         match shape {
-            ShapeObject::Picture(picture) => self.map_picture_block(picture),
-            _ => Block::Shape(self.map_shape(shape)),
+            ShapeObject::Picture(picture) => vec![self.map_picture_block(picture)],
+            ShapeObject::Group(group) => {
+                self.add_warning_once(
+                    "rhwp exposed grouped shape children; hwp-convert expanded them into sequential blocks without preserving group layout.",
+                );
+
+                let mut blocks = Vec::new();
+                if let Some(description) = non_empty_string(&group.common.description) {
+                    blocks.push(Block::Shape(Shape {
+                        kind: ShapeKind::Unknown,
+                        fallback_text: Some(description.clone()),
+                        description: Some(description),
+                    }));
+                }
+
+                for child in &group.children {
+                    blocks.extend(self.map_shape_blocks(child));
+                }
+
+                if blocks.is_empty() {
+                    blocks.push(Block::Shape(self.map_shape(shape)));
+                }
+
+                blocks
+            }
+            _ => vec![Block::Shape(self.map_shape(shape))],
         }
     }
 
@@ -1516,8 +1558,8 @@ mod tests {
         Paragraph as RhwpParagraph,
     };
     use rhwp::model::shape::{
-        DrawingObjAttr as RhwpDrawingObjAttr, RectangleShape as RhwpRectangleShape,
-        TextBox as RhwpTextBox,
+        DrawingObjAttr as RhwpDrawingObjAttr, GroupShape as RhwpGroupShape,
+        RectangleShape as RhwpRectangleShape, TextBox as RhwpTextBox,
     };
     use rhwp::model::style::{
         Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, Bullet as RhwpBullet,
@@ -1774,6 +1816,64 @@ mod tests {
             }
             other => panic!("expected image block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn expands_group_shape_children_into_sequential_blocks() {
+        let rectangle = ShapeObject::Rectangle(RhwpRectangleShape {
+            common: rhwp::model::shape::CommonObjAttr {
+                description: "group rect".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let picture = ShapeObject::Picture(Box::new(Picture {
+            image_attr: ImageAttr {
+                bin_data_id: 11,
+                ..Default::default()
+            },
+            common: rhwp::model::shape::CommonObjAttr {
+                description: "group image".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        let group = ShapeObject::Group(RhwpGroupShape {
+            children: vec![rectangle, picture],
+            ..Default::default()
+        });
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Shape(Box::new(group))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            bin_data_content: vec![BinDataContent {
+                id: 11,
+                data: vec![137, 80, 78, 71],
+                extension: "png".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let blocks = &bridged.sections[0].blocks;
+
+        assert_eq!(blocks.len(), 2);
+        assert!(
+            matches!(&blocks[0], Block::Shape(shape) if shape.kind == ShapeKind::Rectangle && shape.fallback_text.as_deref() == Some("group rect"))
+        );
+        assert!(
+            matches!(&blocks[1], Block::Image(image) if image.resource_id.as_str() == "image-11" && image.alt.as_deref() == Some("group image"))
+        );
+        assert!(
+            bridged
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("grouped shape children") })
+        );
     }
 
     #[test]
