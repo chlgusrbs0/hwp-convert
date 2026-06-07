@@ -9,13 +9,21 @@ use rhwp::model::control::{
     FormObject as RhwpFormObject, FormType as RhwpFormType, HiddenComment as RhwpHiddenComment,
     Hyperlink as RhwpHyperlink, PageHide as RhwpPageHide,
 };
-use rhwp::model::document::{Document as RhwpDocument, Section as RhwpSection};
+use rhwp::model::document::{
+    Document as RhwpDocument, Section as RhwpSection, SectionDef as RhwpSectionDef,
+};
 use rhwp::model::header_footer::HeaderFooterApply as RhwpHeaderFooterApply;
 use rhwp::model::image::Picture;
+use rhwp::model::page::{
+    ColumnDef as RhwpColumnDef, ColumnDirection as RhwpColumnDirection,
+    ColumnType as RhwpColumnType,
+};
 use rhwp::model::paragraph::{
     CharShapeRef, FieldRange, NumberingRestart as RhwpNumberingRestart, Paragraph as RhwpParagraph,
 };
-use rhwp::model::shape::ShapeObject;
+use rhwp::model::shape::{
+    Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection, ShapeObject,
+};
 use rhwp::model::style::{
     Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, CharShape as RhwpCharShape,
     FillType as RhwpFillType, HeadType as RhwpHeadType, Numbering as RhwpNumbering,
@@ -698,7 +706,23 @@ impl<'a> BridgeContext<'a> {
 
     fn map_control_blocks(&mut self, control: &Control) -> Vec<Block> {
         match control {
-            Control::Table(table) => vec![Block::Table(self.map_table(table))],
+            Control::SectionDef(section_def) => {
+                self.warn_unsupported_layout_control(
+                    "section_def",
+                    section_def_fallback_text(section_def),
+                );
+                Vec::new()
+            }
+            Control::ColumnDef(column_def) => {
+                if column_def_has_layout_effect(column_def) {
+                    self.warn_unsupported_layout_control(
+                        "column_def",
+                        column_def_fallback_text(column_def),
+                    );
+                }
+                Vec::new()
+            }
+            Control::Table(table) => self.map_table_blocks(table),
             Control::Picture(picture) => vec![self.map_picture_block(picture)],
             Control::Equation(equation) => vec![Block::Equation(self.map_equation(equation))],
             Control::Shape(shape) => self.map_shape_blocks(shape),
@@ -784,6 +808,12 @@ impl<'a> BridgeContext<'a> {
                 .collect(),
             _ => Vec::new(),
         }
+    }
+
+    fn warn_unsupported_layout_control(&mut self, kind: &str, summary: String) {
+        self.add_warning_once(&format!(
+            "rhwp exposed layout control `{kind}`; hwp-convert does not yet model it in Document IR. Preserved summary: {summary}"
+        ));
     }
 
     fn warn_unsupported_control(&mut self, kind: &str) -> Option<Block> {
@@ -880,6 +910,44 @@ impl<'a> BridgeContext<'a> {
         }
     }
 
+    fn map_table_blocks(&mut self, table: &RhwpTable) -> Vec<Block> {
+        let table_block = Block::Table(self.map_table(table));
+        let Some(caption) = table.caption.as_ref() else {
+            return vec![table_block];
+        };
+
+        let mut caption_blocks = self.map_caption_blocks(caption);
+        if caption_blocks.is_empty() {
+            return vec![table_block];
+        }
+
+        self.add_warning_once(
+            "rhwp exposed table captions; hwp-convert preserved them as adjacent caption blocks because Table IR does not yet model table captions.",
+        );
+
+        match caption.direction {
+            RhwpCaptionDirection::Left | RhwpCaptionDirection::Top => {
+                caption_blocks.push(table_block);
+                caption_blocks
+            }
+            RhwpCaptionDirection::Right | RhwpCaptionDirection::Bottom => {
+                let mut blocks = vec![table_block];
+                blocks.extend(caption_blocks);
+                blocks
+            }
+        }
+    }
+
+    fn map_caption_blocks(&mut self, caption: &RhwpCaption) -> Vec<Block> {
+        let mut blocks = self.map_blocks_from_paragraphs(&caption.paragraphs, 0);
+        for block in &mut blocks {
+            if let Block::Paragraph(paragraph) = block {
+                paragraph.role = ParagraphRole::Caption;
+            }
+        }
+        blocks
+    }
+
     fn map_table_cell(&mut self, cell: &RhwpCell) -> TableCell {
         let mut blocks = self.map_blocks_from_paragraphs(&cell.paragraphs, 0);
         if let Some(field_name) = cell.field_name.as_deref().and_then(non_empty_string) {
@@ -915,8 +983,9 @@ impl<'a> BridgeContext<'a> {
             Some(resource_id) => Block::Image(Image {
                 resource_id,
                 alt: non_empty_string(&picture.common.description),
-                caption: self
-                    .caption_text(picture.caption.as_ref().map(|caption| &caption.paragraphs)),
+                caption: self.caption_plain_text(
+                    picture.caption.as_ref().map(|caption| &caption.paragraphs),
+                ),
                 width: hwp_units_to_px_option(picture.common.width),
                 height: hwp_units_to_px_option(picture.common.height),
             }),
@@ -952,9 +1021,10 @@ impl<'a> BridgeContext<'a> {
         };
         let description = non_empty_string(&shape.common().description);
         let text_box_text = self.shape_text_box_text(shape);
-        let caption_text = shape.drawing().and_then(|drawing| {
-            self.caption_text(drawing.caption.as_ref().map(|caption| &caption.paragraphs))
-        });
+        let caption_text = match shape.drawing().and_then(|drawing| drawing.caption.as_ref()) {
+            Some(caption) => self.caption_plain_text(Some(&caption.paragraphs)),
+            None => None,
+        };
         let mut fallback_parts = Vec::new();
         if let Some(description) = &description {
             fallback_parts.push(description.clone());
@@ -1187,19 +1257,12 @@ impl<'a> BridgeContext<'a> {
             .get(border_fill_id as usize)
     }
 
-    fn caption_text(&self, paragraphs: Option<&Vec<RhwpParagraph>>) -> Option<String> {
+    fn caption_plain_text(&mut self, paragraphs: Option<&Vec<RhwpParagraph>>) -> Option<String> {
         let paragraphs = paragraphs?;
-        let lines = paragraphs
-            .iter()
-            .map(|paragraph| paragraph.text.trim())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>();
+        let blocks = self.map_blocks_from_paragraphs(paragraphs, 0);
+        let text = crate::util::plain_text::blocks_to_plain_text(&blocks);
 
-        if lines.is_empty() {
-            None
-        } else {
-            Some(lines.join("\n"))
-        }
+        non_empty_string(&text)
     }
 }
 
@@ -1422,6 +1485,103 @@ fn auto_number_type_name(number_type: RhwpAutoNumberType) -> &'static str {
     }
 }
 
+fn section_def_fallback_text(section_def: &RhwpSectionDef) -> String {
+    let hidden = section_def_hidden_flags(section_def);
+    let hidden = if hidden.is_empty() {
+        "none".to_string()
+    } else {
+        hidden.join(",")
+    };
+
+    format!(
+        "page_num={}, page_num_type={}, picture_num={}, table_num={}, equation_num={}, outline_numbering_id={}, text_direction={}, page_size={}x{}, landscape={}, margins={}/{}/{}/{}, hidden={}",
+        section_def.page_num,
+        section_def.page_num_type,
+        section_def.picture_num,
+        section_def.table_num,
+        section_def.equation_num,
+        section_def.outline_numbering_id,
+        section_def.text_direction,
+        section_def.page_def.width,
+        section_def.page_def.height,
+        section_def.page_def.landscape,
+        section_def.page_def.margin_left,
+        section_def.page_def.margin_right,
+        section_def.page_def.margin_top,
+        section_def.page_def.margin_bottom,
+        hidden
+    )
+}
+
+fn section_def_hidden_flags(section_def: &RhwpSectionDef) -> Vec<&'static str> {
+    let mut flags = Vec::new();
+    if section_def.hide_header {
+        flags.push("header");
+    }
+    if section_def.hide_footer {
+        flags.push("footer");
+    }
+    if section_def.hide_master_page {
+        flags.push("master_page");
+    }
+    if section_def.hide_border {
+        flags.push("border");
+    }
+    if section_def.hide_fill {
+        flags.push("fill");
+    }
+    if section_def.hide_empty_line {
+        flags.push("empty_line");
+    }
+    flags
+}
+
+fn column_def_fallback_text(column_def: &RhwpColumnDef) -> String {
+    format!(
+        "column_type={}, column_count={}, direction={}, same_width={}, spacing={}, widths={:?}, gaps={:?}, separator_type={}, separator_width={}, separator_color={:#08x}",
+        column_type_name(column_def.column_type),
+        column_def.column_count,
+        column_direction_name(column_def.direction),
+        column_def.same_width,
+        column_def.spacing,
+        column_def.widths,
+        column_def.gaps,
+        column_def.separator_type,
+        column_def.separator_width,
+        column_def.separator_color
+    )
+}
+
+fn column_def_has_layout_effect(column_def: &RhwpColumnDef) -> bool {
+    let multi_column = column_def.column_count > 1;
+
+    multi_column
+        || !column_def.widths.is_empty()
+        || !column_def.gaps.is_empty()
+        || column_def.separator_type != 0
+        || column_def.separator_width != 0
+        || column_def.separator_color != 0
+        || (multi_column && !column_def.same_width)
+        || (multi_column && column_def.spacing != 0)
+        || (multi_column && column_def.direction != RhwpColumnDirection::LeftToRight)
+        || (multi_column && column_def.column_type != RhwpColumnType::Normal)
+}
+
+fn column_type_name(column_type: RhwpColumnType) -> &'static str {
+    match column_type {
+        RhwpColumnType::Normal => "normal",
+        RhwpColumnType::Distribute => "distribute",
+        RhwpColumnType::Parallel => "parallel",
+    }
+}
+
+fn column_direction_name(direction: RhwpColumnDirection) -> &'static str {
+    match direction {
+        RhwpColumnDirection::LeftToRight => "left_to_right",
+        RhwpColumnDirection::RightToLeft => "right_to_left",
+    }
+}
+
 fn page_hide_fallback_text(page_hide: &RhwpPageHide) -> String {
     let mut flags = Vec::new();
     if page_hide.hide_header {
@@ -1547,17 +1707,24 @@ mod tests {
         NewNumber as RhwpNewNumber, PageHide as RhwpPageHide, PageNumberPos as RhwpPageNumberPos,
         Ruby as RhwpRuby,
     };
-    use rhwp::model::document::{DocInfo, Document as RhwpDocument, Section as RhwpSection};
+    use rhwp::model::document::{
+        DocInfo, Document as RhwpDocument, Section as RhwpSection, SectionDef as RhwpSectionDef,
+    };
     use rhwp::model::footnote::Footnote as RhwpFootnote;
     use rhwp::model::header_footer::{
         Footer as RhwpFooter, Header as RhwpHeader, HeaderFooterApply as RhwpHeaderFooterApply,
     };
     use rhwp::model::image::{ImageAttr, Picture};
+    use rhwp::model::page::{
+        ColumnDef as RhwpColumnDef, ColumnDirection as RhwpColumnDirection,
+        ColumnType as RhwpColumnType,
+    };
     use rhwp::model::paragraph::{
         CharShapeRef, FieldRange, NumberingRestart as RhwpNumberingRestart,
         Paragraph as RhwpParagraph,
     };
     use rhwp::model::shape::{
+        Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection,
         DrawingObjAttr as RhwpDrawingObjAttr, GroupShape as RhwpGroupShape,
         RectangleShape as RhwpRectangleShape, TextBox as RhwpTextBox,
     };
@@ -1672,6 +1839,66 @@ mod tests {
     }
 
     #[test]
+    fn preserves_table_caption_as_adjacent_caption_block() {
+        let cell = RhwpCell {
+            row: 0,
+            col: 0,
+            row_span: 1,
+            col_span: 1,
+            paragraphs: vec![RhwpParagraph {
+                text: "cell".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let table = RhwpTable {
+            row_count: 1,
+            col_count: 1,
+            cells: vec![cell],
+            caption: Some(RhwpCaption {
+                direction: RhwpCaptionDirection::Bottom,
+                paragraphs: vec![RhwpParagraph {
+                    text: "Table caption".to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Table(Box::new(table))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let blocks = &bridged.sections[0].blocks;
+
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(&blocks[0], Block::Table(_)));
+        match &blocks[1] {
+            Block::Paragraph(paragraph) => {
+                assert_eq!(paragraph.role, ParagraphRole::Caption);
+                assert!(
+                    matches!(&paragraph.inlines[0], Inline::Text(run) if run.text == "Table caption")
+                );
+            }
+            other => panic!("expected caption paragraph block, got {other:?}"),
+        }
+        assert!(
+            bridged
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("table captions") })
+        );
+    }
+
+    #[test]
     fn preserves_shape_text_box_in_fallback_text() {
         let shape = ShapeObject::Rectangle(RhwpRectangleShape {
             common: rhwp::model::shape::CommonObjAttr {
@@ -1769,6 +1996,52 @@ mod tests {
                 assert_eq!(resource.media_type.as_deref(), Some("image/png"));
             }
             other => panic!("expected image resource, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn preserves_picture_caption_field_fallback_text() {
+        let picture = Picture {
+            image_attr: ImageAttr {
+                bin_data_id: 7,
+                ..Default::default()
+            },
+            caption: Some(RhwpCaption {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Field(RhwpField {
+                        field_type: RhwpFieldType::ClickHere,
+                        command: RhwpField::build_clickhere_command("caption field", "", ""),
+                        ..Default::default()
+                    })],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Picture(Box::new(picture))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            bin_data_content: vec![BinDataContent {
+                id: 7,
+                data: vec![137, 80, 78, 71],
+                extension: "png".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Image(image) => {
+                assert_eq!(image.caption.as_deref(), Some("caption field"));
+            }
+            other => panic!("expected image block, got {other:?}"),
         }
     }
 
@@ -2351,6 +2624,79 @@ mod tests {
         );
         assert!(
             matches!(&blocks[2], Block::Unknown(unknown) if unknown.kind == "form" && unknown.fallback_text.as_deref() == Some("[form: type=edit, name=field1, text=value, value=1, enabled=true, size=100x200]"))
+        );
+    }
+
+    #[test]
+    fn warns_for_layout_controls_without_visible_fallback_blocks() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "body".to_string(),
+                    controls: vec![
+                        Control::SectionDef(Box::new(RhwpSectionDef {
+                            page_num: 3,
+                            page_num_type: 1,
+                            table_num: 4,
+                            outline_numbering_id: 2,
+                            hide_header: true,
+                            page_def: rhwp::model::page::PageDef {
+                                width: 59528,
+                                height: 84188,
+                                margin_left: 100,
+                                margin_right: 200,
+                                margin_top: 300,
+                                margin_bottom: 400,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        })),
+                        Control::ColumnDef(RhwpColumnDef {
+                            column_count: 1,
+                            same_width: true,
+                            ..Default::default()
+                        }),
+                        Control::ColumnDef(RhwpColumnDef {
+                            column_type: RhwpColumnType::Parallel,
+                            column_count: 2,
+                            direction: RhwpColumnDirection::RightToLeft,
+                            same_width: true,
+                            spacing: 500,
+                            widths: vec![1000, 2000],
+                            gaps: vec![300],
+                            separator_type: 1,
+                            separator_width: 2,
+                            separator_color: 0x00FF00,
+                            ..Default::default()
+                        }),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let blocks = &bridged.sections[0].blocks;
+
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(&blocks[0], Block::Paragraph(_)));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("layout control `section_def`")
+                && warning.message.contains("page_num=3")
+                && warning.message.contains("hidden=header")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("layout control `column_def`")
+                && warning.message.contains("column_count=2")
+                && warning.message.contains("direction=right_to_left")
+        }));
+        assert!(
+            !bridged
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("column_count=1"))
         );
     }
 
