@@ -229,19 +229,248 @@ impl<'a> BridgeContext<'a> {
     fn map_paragraph_inlines(&mut self, paragraph: &RhwpParagraph) -> Vec<Inline> {
         let chars: Vec<char> = paragraph.text.chars().collect();
         let segments = self.build_text_segments(paragraph, chars.len());
-        let mut consumed_controls = Vec::new();
-        let mut inlines = Vec::new();
-        self.push_text_and_link_inlines(
-            paragraph,
-            &chars,
-            &segments,
-            &mut consumed_controls,
-            &mut inlines,
-        );
-        self.append_control_reference_inlines(paragraph, &consumed_controls, &mut inlines);
 
-        inlines
+        // Build final inlines with best-effort placement of control inlines.
+        self.build_inlines_with_control_placement(paragraph, &chars, &segments)
     }
+
+    fn find_substring_char_index(&self, text: &str, substring: &str) -> Option<usize> {
+        let byte_idx = text.find(substring)?;
+        Some(text[..byte_idx].chars().count())
+    }
+
+    fn sanitize_anchor_id(name: &str) -> String {
+        let mut id = String::new();
+        for ch in name.chars() {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == ':' || ch == '.' {
+                id.push(ch);
+            } else if ch.is_whitespace() {
+                id.push('-');
+            }
+        }
+        if id.is_empty() {
+            "bookmark".to_string()
+        } else {
+            id
+        }
+    }
+
+    fn build_inlines_with_control_placement(
+        &mut self,
+        paragraph: &RhwpParagraph,
+        chars: &[char],
+        segments: &[TextSegment],
+    ) -> Vec<Inline> {
+        // Determine which controls are already consumed by field ranges
+        let mut consumed_control_idxs = paragraph
+            .field_ranges
+            .iter()
+            .map(|r| r.control_idx)
+            .collect::<std::collections::BTreeSet<usize>>();
+
+        // Build insertion candidates: (optional char_pos, order, Inline, appended_if_no_pos)
+        #[allow(clippy::type_complexity)]
+        let mut insertions: Vec<(Option<usize>, usize, Inline, bool)> = Vec::new();
+
+        for (index, control) in paragraph.controls.iter().enumerate() {
+            if consumed_control_idxs.contains(&index) {
+                continue;
+            }
+
+            match control {
+                Control::Footnote(note) => {
+                    let note_id = self.store_note(NoteKind::Footnote, note.number, &note.paragraphs);
+                    let inline = Inline::FootnoteRef { note_id };
+                    // try to match the footnote number in paragraph text
+                    let preferred = if note.number > 0 {
+                        let token = note.number.to_string();
+                        self.find_substring_char_index(&paragraph.text, &token)
+                    } else {
+                        None
+                    };
+                    insertions.push((preferred, index, inline, true));
+                }
+                Control::Endnote(note) => {
+                    let note_id = self.store_note(NoteKind::Endnote, note.number, &note.paragraphs);
+                    let inline = Inline::EndnoteRef { note_id };
+                    let preferred = if note.number > 0 {
+                        let token = note.number.to_string();
+                        self.find_substring_char_index(&paragraph.text, &token)
+                    } else {
+                        None
+                    };
+                    insertions.push((preferred, index, inline, true));
+                }
+                Control::Hyperlink(link) => {
+                    if let Some(mapped) = self.map_trailing_hyperlink(link) {
+                        let preferred = non_empty_string(&link.text)
+                            .and_then(|t| self.find_substring_char_index(&paragraph.text, &t));
+                        insertions.push((preferred, index, Inline::Link(mapped), true));
+                    }
+                }
+                Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
+                    if let Some(mapped) = self.map_field_hyperlink(field) {
+                        let label = field
+                            .guide_text()
+                            .or_else(|| field.field_name())
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+                        let preferred = if !label.is_empty() {
+                            self.find_substring_char_index(&paragraph.text, &label)
+                        } else {
+                            None
+                        };
+                        insertions.push((preferred, index, Inline::Link(mapped), true));
+                    }
+                }
+                Control::Field(field) => {
+                    if field.field_type == RhwpFieldType::ClickHere {
+                        if let Some(inline) = self.map_click_here_field(field) {
+                            // click-here fallback text may be present verbatim
+                            let fallback_text = match &inline {
+                                Inline::Unknown(u) => u.fallback_text.clone().unwrap_or_default(),
+                                _ => String::new(),
+                            };
+                            let preferred = if !fallback_text.is_empty() {
+                                self.find_substring_char_index(&paragraph.text, &fallback_text)
+                            } else {
+                                None
+                            };
+                            insertions.push((preferred, index, inline, true));
+                        }
+                    } else {
+                        if let Some(inline) = self.map_field_fallback(field) {
+                            let fallback_text = match &inline {
+                                Inline::Unknown(u) => u.fallback_text.clone().unwrap_or_default(),
+                                _ => String::new(),
+                            };
+                            let preferred = if !fallback_text.is_empty() {
+                                self.find_substring_char_index(&paragraph.text, &fallback_text)
+                            } else {
+                                None
+                            };
+                            insertions.push((preferred, index, inline, true));
+                        }
+                    }
+                }
+                Control::Bookmark(bookmark) => {
+                    if let Some(mapped) = self.map_bookmark_fallback(bookmark) {
+                        // Prefer matching the explicit bookmark name when available
+                        let preferred = non_empty_string(&bookmark.name)
+                            .and_then(|name| self.find_substring_char_index(&paragraph.text, &name));
+                        let fallback_text = match &mapped {
+                            Inline::Unknown(u) => u.fallback_text.clone().unwrap_or_default(),
+                            _ => String::new(),
+                        };
+                        let preferred = preferred.or_else(|| {
+                            if !fallback_text.is_empty() {
+                                self.find_substring_char_index(&paragraph.text, &fallback_text)
+                            } else {
+                                None
+                            }
+                        });
+                        insertions.push((preferred, index, mapped, true));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Sort insertions by position (None go last), then by original order
+        insertions.sort_by(|a, b| match (a.0, b.0) {
+            (Some(pa), Some(pb)) => pa.cmp(&pb).then(a.1.cmp(&b.1)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.1.cmp(&b.1),
+        });
+
+        // Build final inlines by walking paragraph text and field ranges, inserting candidates.
+        let mut final_inlines = Vec::new();
+
+        let mut ranges = paragraph.field_ranges.clone();
+        ranges.sort_by_key(|r| (r.start_char_idx, r.end_char_idx));
+        let mut range_iter = ranges.into_iter().peekable();
+
+        let mut insertion_iter = insertions.into_iter().peekable();
+
+        let mut cursor = 0usize;
+        let text_len = chars.len();
+
+        while cursor < text_len {
+            // If next insertion is at or before cursor, emit it now
+            if let Some((Some(pos), _order, inline, _appended)) = insertion_iter.peek() {
+                if *pos <= cursor {
+                    let (_pos, _order, inline, _appended) = insertion_iter.next().unwrap();
+                    final_inlines.push(inline);
+                    continue;
+                }
+            }
+
+            // If next range starts at or before cursor, emit the link block
+            if let Some(next_range) = range_iter.peek() {
+                if next_range.start_char_idx <= cursor && next_range.end_char_idx > cursor {
+                    // emit link for this range
+                    let range = range_iter.next().unwrap();
+                    if let Some(link) = self.map_link_from_field_range(paragraph, &range, chars, segments) {
+                        final_inlines.push(Inline::Link(link));
+                    }
+                    cursor = range.end_char_idx.min(text_len);
+                    continue;
+                }
+            }
+
+            // Determine next boundary: next insertion pos or next range start or text end
+            let next_insertion_pos = insertion_iter
+                .peek()
+                .and_then(|(pos, _order, _inline, _)| *pos)
+                .unwrap_or(text_len);
+            let next_range_start = range_iter.peek().map(|r| r.start_char_idx).unwrap_or(text_len);
+            let next_boundary = next_insertion_pos.min(next_range_start).min(text_len);
+
+            if cursor < next_boundary {
+                self.push_text_range_as_inlines(&mut final_inlines, chars, segments, cursor, next_boundary);
+                cursor = next_boundary;
+                continue;
+            }
+
+            // Fallback: neither insertion nor range advanced; break to avoid infinite loop
+            break;
+        }
+
+        // After walking text, append any remaining insertions (those with None pos)
+        while let Some((_pos, _order, inline, _appended)) = insertion_iter.next() {
+            final_inlines.push(inline);
+        }
+
+        // Emit warnings for appended kinds when they had no preferred position
+        if final_inlines.iter().any(|i| matches!(i, Inline::FootnoteRef { .. } | Inline::EndnoteRef { .. })) {
+            self.add_warning_once(
+                "rhwp footnote/endnote controls do not expose exact inline positions, so note references were appended after paragraph text.",
+            );
+        }
+
+        if final_inlines.iter().any(|i| matches!(i, Inline::Link(_))) {
+            self.add_warning_once(
+                "Some rhwp hyperlinks could not be placed at exact inline positions, so bridge fallback appended them after paragraph text when possible.",
+            );
+        }
+
+        if final_inlines.iter().any(|i| matches!(i, Inline::Unknown(_))) {
+            self.add_warning_once(
+                "Some rhwp click-here fields or other field controls could not be placed at exact inline positions, so bridge fallback appended their fallback text after paragraph text.",
+            );
+        }
+
+        if final_inlines.iter().any(|i| matches!(i, Inline::Anchor { .. } | Inline::Unknown(_))) {
+            self.add_warning_once(
+                "rhwp exposed unsupported control `bookmark`; hwp-convert preserved bookmark names as unknown inline fallback text when available.",
+            );
+        }
+
+        final_inlines
+    }
+
+    
 
     fn build_text_segments(&self, paragraph: &RhwpParagraph, text_len: usize) -> Vec<TextSegment> {
         if text_len == 0 {
