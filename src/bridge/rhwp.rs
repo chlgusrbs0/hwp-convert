@@ -510,7 +510,10 @@ impl<'a> BridgeContext<'a> {
                     }
                 }
                 Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
-                    appended_link_ref = true;
+                    if let Some(mapped) = self.map_field_hyperlink(field) {
+                        inlines.push(Inline::Link(mapped));
+                        appended_link_ref = true;
+                    }
                 }
                 Control::Field(field) => {
                     if let Some(mapped) = self.map_field_fallback(field) {
@@ -585,6 +588,25 @@ impl<'a> BridgeContext<'a> {
             ),
             source: Some("rhwp".to_string()),
         }))
+    }
+
+    fn map_field_hyperlink(&self, field: &RhwpField) -> Option<Link> {
+        let url = non_empty_string(&field.command)?;
+        let label = field
+            .guide_text()
+            .or_else(|| field.field_name())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| url.clone());
+
+        Some(Link {
+            url,
+            title: None,
+            inlines: vec![Inline::Text(TextRun {
+                text: label,
+                style: TextStyle::default(),
+                style_ref: None,
+            })],
+        })
     }
 
     fn map_field_fallback(&self, field: &RhwpField) -> Option<Inline> {
