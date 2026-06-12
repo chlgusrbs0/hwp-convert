@@ -7,9 +7,10 @@ use std::path::Path;
 use zip::ZipArchive;
 
 use crate::ir::{
-    Alignment, Block, Color, Document, Inline, LengthPt, Link, ListInfo, ListKind, Metadata,
-    NoteStore, Paragraph, ParagraphStyle, ResourceStore, Section, StyleSheet, Table, TableCell,
-    TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock, UnknownInline,
+    Alignment, Block, Color, Document, HeaderFooter, HeaderFooterPlacement, Inline, LengthPt, Link,
+    ListInfo, ListKind, Metadata, NoteStore, Paragraph, ParagraphStyle, ResourceStore, Section,
+    StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
+    UnknownBlock, UnknownInline,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -271,12 +272,10 @@ pub(crate) fn read_section_document_from_archive(bytes: &[u8]) -> io::Result<Doc
     let mut sections = Vec::new();
     for section_path in section_paths {
         let section_xml = read_zip_text_entry(&mut archive, &section_path)?;
-        let blocks = extract_section_xml_blocks(&section_xml, &mut context);
-        if !blocks.is_empty() {
-            sections.push(Section {
-                blocks,
-                ..Default::default()
-            });
+        let section = extract_section_xml_section(&section_xml, &mut context);
+        if !section.blocks.is_empty() || !section.headers.is_empty() || !section.footers.is_empty()
+        {
+            sections.push(section);
         }
     }
 
@@ -670,6 +669,29 @@ fn document_from_sections(sections: Vec<Section>) -> Document {
 }
 
 fn extract_section_xml_blocks(xml: &str, context: &mut HwpxFallbackContext) -> Vec<Block> {
+    let mut headers = Vec::new();
+    let mut footers = Vec::new();
+    extract_section_xml_blocks_with_metadata(xml, context, &mut headers, &mut footers)
+}
+
+fn extract_section_xml_section(xml: &str, context: &mut HwpxFallbackContext) -> Section {
+    let mut headers = Vec::new();
+    let mut footers = Vec::new();
+    let blocks = extract_section_xml_blocks_with_metadata(xml, context, &mut headers, &mut footers);
+
+    Section {
+        blocks,
+        headers,
+        footers,
+    }
+}
+
+fn extract_section_xml_blocks_with_metadata(
+    xml: &str,
+    context: &mut HwpxFallbackContext,
+    headers: &mut Vec<HeaderFooter>,
+    footers: &mut Vec<HeaderFooter>,
+) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut cursor = 0usize;
 
@@ -697,7 +719,12 @@ fn extract_section_xml_blocks(xml: &str, context: &mut HwpxFallbackContext) -> V
                     continue;
                 };
                 let paragraph_xml = &xml[tag.start..paragraph_end];
-                blocks.extend(extract_blocks_from_paragraph_xml(paragraph_xml, context));
+                blocks.extend(extract_blocks_from_paragraph_xml_with_metadata(
+                    paragraph_xml,
+                    context,
+                    headers,
+                    footers,
+                ));
                 cursor = paragraph_end;
             }
             _ => {
@@ -781,9 +808,11 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
     }
 }
 
-fn extract_blocks_from_paragraph_xml(
+fn extract_blocks_from_paragraph_xml_with_metadata(
     paragraph_xml: &str,
     context: &mut HwpxFallbackContext,
+    headers: &mut Vec<HeaderFooter>,
+    footers: &mut Vec<HeaderFooter>,
 ) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut fragment_start = 0usize;
@@ -797,7 +826,9 @@ fn extract_blocks_from_paragraph_xml(
             continue;
         }
 
-        let Some(object_kind) = hwpx_fallback_object_kind(tag.name) else {
+        let object_kind = hwpx_fallback_object_kind(tag.name);
+        let structural_kind = hwpx_fallback_structural_control_kind(tag.name);
+        if object_kind.is_none() && structural_kind.is_none() {
             cursor = tag.end;
             continue;
         };
@@ -820,18 +851,21 @@ fn extract_blocks_from_paragraph_xml(
             context,
         );
 
-        if object_kind == "table" {
+        if object_kind == Some("table") {
             let table_xml = &paragraph_xml[tag.start..object_end];
             if let Some(table) = extract_table_from_xml(table_xml, context) {
                 blocks.push(Block::Table(table));
             }
-        } else {
+        } else if let Some(object_kind) = object_kind {
             let object_xml = &paragraph_xml[tag.start..object_end];
             blocks.push(Block::Unknown(unknown_hwpx_object_block(
                 object_kind,
                 object_xml,
                 context,
             )));
+        } else if let Some(structural_kind) = structural_kind {
+            let control_xml = &paragraph_xml[tag.start..object_end];
+            push_hwpx_structural_control(structural_kind, control_xml, context, headers, footers);
         }
 
         fragment_start = object_end;
@@ -858,6 +892,47 @@ fn hwpx_fallback_object_kind(tag_name: &str) -> Option<&'static str> {
         }
         "chart" => Some("chart"),
         _ => None,
+    }
+}
+
+fn hwpx_fallback_structural_control_kind(tag_name: &str) -> Option<&'static str> {
+    match tag_name {
+        "header" => Some("header"),
+        "footer" => Some("footer"),
+        _ => None,
+    }
+}
+
+fn push_hwpx_structural_control(
+    control_kind: &str,
+    control_xml: &str,
+    context: &mut HwpxFallbackContext,
+    headers: &mut Vec<HeaderFooter>,
+    footers: &mut Vec<HeaderFooter>,
+) {
+    let blocks = extract_section_xml_blocks(control_xml, context);
+    if blocks.is_empty() {
+        return;
+    }
+
+    let header_footer = HeaderFooter {
+        placement: hwpx_header_footer_placement(control_xml),
+        blocks,
+    };
+
+    match control_kind {
+        "header" => headers.push(header_footer),
+        "footer" => footers.push(header_footer),
+        _ => {}
+    }
+}
+
+fn hwpx_header_footer_placement(control_xml: &str) -> HeaderFooterPlacement {
+    match first_xml_attribute_value(control_xml, "applyPageType") {
+        Some("EVEN") => HeaderFooterPlacement::EvenPage,
+        Some("ODD") => HeaderFooterPlacement::OddPage,
+        Some("FIRST" | "FIRST_PAGE") => HeaderFooterPlacement::FirstPage,
+        _ => HeaderFooterPlacement::Default,
     }
 }
 
@@ -1319,6 +1394,21 @@ fn first_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> O
             && let Some(value) = xml_attribute_value(tag.raw, attribute_name)
         {
             return value.parse().ok();
+        }
+        cursor = tag.end;
+    }
+
+    None
+}
+
+fn first_xml_attribute_value<'a>(xml: &'a str, attribute_name: &str) -> Option<&'a str> {
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(xml, cursor) {
+        if !tag.is_closing
+            && let Some(value) = xml_attribute_value(tag.raw, attribute_name)
+        {
+            return Some(value);
         }
         cursor = tag.end;
     }
@@ -2319,6 +2409,66 @@ mod tests {
         assert_eq!(
             section_first_paragraph_text(&document.sections[1]),
             Some("second section".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_header_footer_controls_from_hwpx_section_fallback() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[(
+            "Contents/section0.xml",
+            r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p>
+                    <hp:run><hp:t>body text</hp:t></hp:run>
+                    <hp:ctrl>
+                      <hp:header applyPageType="ODD">
+                        <hp:subList>
+                          <hp:p><hp:run><hp:t>header text</hp:t></hp:run></hp:p>
+                        </hp:subList>
+                      </hp:header>
+                    </hp:ctrl>
+                    <hp:ctrl>
+                      <hp:footer applyPageType="EVEN">
+                        <hp:subList>
+                          <hp:p><hp:run><hp:t>footer text</hp:t></hp:run></hp:p>
+                        </hp:subList>
+                      </hp:footer>
+                    </hp:ctrl>
+                  </hp:p>
+                </hs:sec>
+                "#,
+        )])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+        let section = &document.sections[0];
+
+        assert_eq!(section.blocks.len(), 1);
+        assert_eq!(section.headers.len(), 1);
+        assert_eq!(section.footers.len(), 1);
+        assert_eq!(section.headers[0].placement, HeaderFooterPlacement::OddPage);
+        assert_eq!(
+            section.footers[0].placement,
+            HeaderFooterPlacement::EvenPage
+        );
+        assert_eq!(
+            section_first_paragraph_text(&crate::ir::Section {
+                blocks: section.headers[0].blocks.clone(),
+                ..Default::default()
+            }),
+            Some("header text".to_string())
+        );
+        assert_eq!(
+            section_first_paragraph_text(&crate::ir::Section {
+                blocks: section.footers[0].blocks.clone(),
+                ..Default::default()
+            }),
+            Some("footer text".to_string())
+        );
+        assert_eq!(
+            section_first_paragraph_text(section),
+            Some("body text".to_string())
         );
 
         Ok(())
