@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
 use std::io::{self, Cursor, Read};
@@ -6,11 +7,13 @@ use std::path::Path;
 use zip::ZipArchive;
 
 use crate::ir::{
-    Block, Document, Metadata, NoteStore, Paragraph, ResourceStore, Section, StyleSheet, Table,
-    TableCell, TableCellStyle, TableRow, TableStyle, UnknownBlock,
+    Alignment, Block, Color, Document, Inline, LengthPt, ListInfo, ListKind, Metadata, NoteStore,
+    Paragraph, ParagraphStyle, ResourceStore, Section, StyleSheet, Table, TableCell,
+    TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
+const HEADER_XML_PATH: &str = "Contents/header.xml";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InputKind {
@@ -264,20 +267,27 @@ pub(crate) fn read_section_document_from_archive(bytes: &[u8]) -> io::Result<Doc
         ));
     }
 
-    let mut blocks = Vec::new();
+    let mut context = read_hwpx_fallback_context(&mut archive).unwrap_or_default();
+    let mut sections = Vec::new();
     for section_path in section_paths {
         let section_xml = read_zip_text_entry(&mut archive, &section_path)?;
-        blocks.extend(extract_section_xml_blocks(&section_xml));
+        let blocks = extract_section_xml_blocks(&section_xml, &mut context);
+        if !blocks.is_empty() {
+            sections.push(Section {
+                blocks,
+                ..Default::default()
+            });
+        }
     }
 
-    if blocks.is_empty() {
+    if sections.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "HWPX section XML did not contain recoverable document blocks",
         ));
     }
 
-    Ok(document_from_blocks(blocks))
+    Ok(document_from_sections(sections))
 }
 
 fn collect_section_xml_paths<R: Read + io::Seek>(
@@ -301,14 +311,357 @@ fn collect_section_xml_paths<R: Read + io::Seek>(
     Ok(section_paths)
 }
 
-fn document_from_blocks(blocks: Vec<Block>) -> Document {
+#[derive(Clone, Debug, Default, PartialEq)]
+struct HwpxFallbackContext {
+    paragraph_styles: Vec<HwpxParagraphStyle>,
+    text_styles: Vec<TextStyle>,
+    font_faces: Vec<Vec<String>>,
+    border_fill_backgrounds: Vec<Option<Color>>,
+    ordered_counts: BTreeMap<(u32, u8), u32>,
+}
+
+impl HwpxFallbackContext {
+    fn border_fill_background_color(&self, border_fill_id: u32) -> Option<Color> {
+        self.border_fill_backgrounds
+            .get(border_fill_id as usize)
+            .copied()
+            .flatten()
+            .or_else(|| {
+                border_fill_id
+                    .checked_sub(1)
+                    .and_then(|index| self.border_fill_backgrounds.get(index as usize))
+                    .copied()
+                    .flatten()
+            })
+    }
+
+    fn text_style_for_run(&self, run_tag: &str) -> TextStyle {
+        let Some(char_pr_id) = xml_attribute_value(run_tag, "charPrIDRef")
+            .and_then(|value| value.parse::<usize>().ok())
+        else {
+            return TextStyle::default();
+        };
+
+        self.text_styles
+            .get(char_pr_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn paragraph_style_for_paragraph(&self, paragraph_xml: &str) -> ParagraphStyle {
+        let Some(para_pr_id) =
+            first_xml_attribute_u32(paragraph_xml, "p", "paraPrIDRef").map(|id| id as usize)
+        else {
+            return ParagraphStyle::default();
+        };
+
+        self.paragraph_styles
+            .get(para_pr_id)
+            .map(|style| style.style.clone())
+            .unwrap_or_default()
+    }
+
+    fn list_info_for_paragraph(&mut self, paragraph_xml: &str) -> Option<ListInfo> {
+        let para_pr_id = first_xml_attribute_u32(paragraph_xml, "p", "paraPrIDRef")? as usize;
+        let style = self.paragraph_styles.get(para_pr_id)?.clone();
+
+        match style.kind {
+            Some(ListKind::Ordered) => {
+                let key = (style.list_id.unwrap_or(0), style.level);
+                let number = self.ordered_counts.entry(key).or_insert(0);
+                *number += 1;
+
+                Some(ListInfo {
+                    kind: ListKind::Ordered,
+                    level: style.level,
+                    marker: None,
+                    number: Some(*number),
+                })
+            }
+            Some(ListKind::Unordered) => Some(ListInfo {
+                kind: ListKind::Unordered,
+                level: style.level,
+                marker: Some("•".to_string()),
+                number: None,
+            }),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct HwpxParagraphStyle {
+    kind: Option<ListKind>,
+    level: u8,
+    list_id: Option<u32>,
+    style: ParagraphStyle,
+}
+
+fn read_hwpx_fallback_context<R: Read + io::Seek>(
+    archive: &mut ZipArchive<R>,
+) -> io::Result<HwpxFallbackContext> {
+    let header_xml = read_zip_text_entry(archive, HEADER_XML_PATH)?;
+    Ok(extract_hwpx_fallback_context(&header_xml))
+}
+
+fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
+    let mut context = HwpxFallbackContext::default();
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(header_xml, cursor) {
+        if tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+
+        match tag.name {
+            "fontface" => {
+                let Some(fontface_end) = find_matching_element_end(header_xml, &tag) else {
+                    cursor = tag.end;
+                    continue;
+                };
+                let fontface_xml = &header_xml[tag.start..fontface_end];
+                context
+                    .font_faces
+                    .push(extract_hwpx_font_face(fontface_xml));
+                cursor = fontface_end;
+            }
+            "charPr" => {
+                let Some(id) = xml_attribute_value(tag.raw, "id")
+                    .and_then(|value| value.parse::<usize>().ok())
+                else {
+                    cursor = tag.end;
+                    continue;
+                };
+                let Some(char_end) = find_matching_element_end(header_xml, &tag) else {
+                    cursor = tag.end;
+                    continue;
+                };
+
+                if context.text_styles.len() <= id {
+                    context.text_styles.resize_with(id + 1, TextStyle::default);
+                }
+
+                let char_xml = &header_xml[tag.start..char_end];
+                context.text_styles[id] =
+                    extract_hwpx_text_style(tag.raw, char_xml, &context.font_faces);
+                cursor = char_end;
+            }
+            "borderFill" => {
+                let Some(id) = xml_attribute_value(tag.raw, "id")
+                    .and_then(|value| value.parse::<usize>().ok())
+                else {
+                    cursor = tag.end;
+                    continue;
+                };
+                let Some(border_end) = find_matching_element_end(header_xml, &tag) else {
+                    cursor = tag.end;
+                    continue;
+                };
+
+                if context.border_fill_backgrounds.len() <= id {
+                    context.border_fill_backgrounds.resize(id + 1, None);
+                }
+
+                let border_xml = &header_xml[tag.start..border_end];
+                context.border_fill_backgrounds[id] =
+                    extract_hwpx_border_fill_background_color(border_xml);
+                cursor = border_end;
+            }
+            "paraPr" => {
+                let Some(id) = xml_attribute_value(tag.raw, "id")
+                    .and_then(|value| value.parse::<usize>().ok())
+                else {
+                    cursor = tag.end;
+                    continue;
+                };
+                let Some(para_end) = find_matching_element_end(header_xml, &tag) else {
+                    cursor = tag.end;
+                    continue;
+                };
+
+                if context.paragraph_styles.len() <= id {
+                    context
+                        .paragraph_styles
+                        .resize_with(id + 1, HwpxParagraphStyle::default);
+                }
+
+                let para_xml = &header_xml[tag.start..para_end];
+                context.paragraph_styles[id] = extract_hwpx_paragraph_style(para_xml);
+                cursor = para_end;
+            }
+            _ => {
+                cursor = tag.end;
+            }
+        }
+    }
+
+    context
+}
+
+fn extract_hwpx_font_face(fontface_xml: &str) -> Vec<String> {
+    let mut fonts = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(fontface_xml, cursor) {
+        if tag.name == "font"
+            && !tag.is_closing
+            && let Some(id) =
+                xml_attribute_value(tag.raw, "id").and_then(|value| value.parse::<usize>().ok())
+            && let Some(face) = xml_attribute_value(tag.raw, "face")
+        {
+            if fonts.len() <= id {
+                fonts.resize(id + 1, String::new());
+            }
+            fonts[id] = face.to_string();
+        }
+        cursor = tag.end;
+    }
+
+    fonts
+}
+
+fn extract_hwpx_text_style(
+    char_pr_tag: &str,
+    char_pr_xml: &str,
+    font_faces: &[Vec<String>],
+) -> TextStyle {
+    let mut style = TextStyle {
+        font_size_pt: xml_attribute_hwp_units_to_pt(char_pr_tag, "height"),
+        color: xml_attribute_value(char_pr_tag, "textColor").and_then(parse_hwpx_hex_color),
+        background_color: xml_attribute_value(char_pr_tag, "shadeColor")
+            .and_then(parse_hwpx_hex_color),
+        ..Default::default()
+    };
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(char_pr_xml, cursor) {
+        if !tag.is_closing {
+            match tag.name {
+                "bold" => style.bold = true,
+                "italic" => style.italic = true,
+                "underline" => style.underline = true,
+                "strikeout" | "strikeOut" => style.strike = true,
+                "fontRef" => {
+                    style.font_family = font_ref_family(tag.raw, font_faces);
+                }
+                _ => {}
+            }
+        }
+        cursor = tag.end;
+    }
+
+    style
+}
+
+fn extract_hwpx_border_fill_background_color(border_fill_xml: &str) -> Option<Color> {
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(border_fill_xml, cursor) {
+        if !tag.is_closing
+            && let Some(color) =
+                ["faceColor", "backgroundColor", "color"]
+                    .iter()
+                    .find_map(|attribute| {
+                        xml_attribute_value(tag.raw, attribute).and_then(parse_hwpx_hex_color)
+                    })
+        {
+            return Some(color);
+        }
+        cursor = tag.end;
+    }
+
+    None
+}
+
+fn font_ref_family(font_ref_tag: &str, font_faces: &[Vec<String>]) -> Option<String> {
+    for (group_index, attribute) in [
+        "hangul", "latin", "hanja", "japanese", "other", "symbol", "user",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let Some(font_id) = xml_attribute_value(font_ref_tag, attribute)
+            .and_then(|value| value.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        let Some(group) = font_faces.get(group_index) else {
+            continue;
+        };
+        let Some(face) = group.get(font_id).filter(|face| !face.is_empty()) else {
+            continue;
+        };
+        return Some(face.clone());
+    }
+
+    None
+}
+
+fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
+    let mut cursor = 0usize;
+    let mut paragraph_style = HwpxParagraphStyle::default();
+
+    while let Some(tag) = next_xml_tag(para_xml, cursor) {
+        if !tag.is_closing {
+            match tag.name {
+                "heading" => {
+                    paragraph_style.kind = match xml_attribute_value(tag.raw, "type") {
+                        Some("NUMBER") => Some(ListKind::Ordered),
+                        Some("BULLET") => Some(ListKind::Unordered),
+                        _ => None,
+                    };
+                    paragraph_style.list_id =
+                        xml_attribute_value(tag.raw, "idRef").and_then(|value| value.parse().ok());
+                    paragraph_style.level = xml_attribute_value(tag.raw, "level")
+                        .and_then(|value| value.parse::<u8>().ok())
+                        .unwrap_or(0);
+                }
+                "align" => {
+                    paragraph_style.style.alignment =
+                        xml_attribute_value(tag.raw, "horizontal").and_then(map_hwpx_alignment);
+                }
+                "intent" => {
+                    paragraph_style.style.indent.first_line_pt =
+                        xml_attribute_hwp_units_to_pt(tag.raw, "value");
+                }
+                "left" => {
+                    paragraph_style.style.indent.left_pt =
+                        xml_attribute_hwp_units_to_pt(tag.raw, "value");
+                }
+                "right" => {
+                    paragraph_style.style.indent.right_pt =
+                        xml_attribute_hwp_units_to_pt(tag.raw, "value");
+                }
+                "prev" => {
+                    paragraph_style.style.spacing.before_pt =
+                        xml_attribute_hwp_units_to_pt(tag.raw, "value");
+                }
+                "next" => {
+                    paragraph_style.style.spacing.after_pt =
+                        xml_attribute_hwp_units_to_pt(tag.raw, "value");
+                }
+                "lineSpacing"
+                    if !matches!(xml_attribute_value(tag.raw, "type"), Some("PERCENT")) =>
+                {
+                    paragraph_style.style.spacing.line_pt =
+                        xml_attribute_hwp_units_to_pt(tag.raw, "value");
+                }
+                _ => {}
+            }
+        }
+
+        cursor = tag.end;
+    }
+
+    paragraph_style
+}
+
+fn document_from_sections(sections: Vec<Section>) -> Document {
     Document {
         ir_version: crate::ir::IR_VERSION,
         metadata: Metadata::default(),
-        sections: vec![Section {
-            blocks,
-            ..Default::default()
-        }],
+        sections,
         resources: ResourceStore::default(),
         styles: StyleSheet::default(),
         notes: NoteStore::default(),
@@ -316,7 +669,7 @@ fn document_from_blocks(blocks: Vec<Block>) -> Document {
     }
 }
 
-fn extract_section_xml_blocks(xml: &str) -> Vec<Block> {
+fn extract_section_xml_blocks(xml: &str, context: &mut HwpxFallbackContext) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut cursor = 0usize;
 
@@ -333,7 +686,7 @@ fn extract_section_xml_blocks(xml: &str) -> Vec<Block> {
                     continue;
                 };
                 let table_xml = &xml[tag.start..table_end];
-                if let Some(table) = extract_table_from_xml(table_xml) {
+                if let Some(table) = extract_table_from_xml(table_xml, context) {
                     blocks.push(Block::Table(table));
                 }
                 cursor = table_end;
@@ -344,7 +697,7 @@ fn extract_section_xml_blocks(xml: &str) -> Vec<Block> {
                     continue;
                 };
                 let paragraph_xml = &xml[tag.start..paragraph_end];
-                blocks.extend(extract_blocks_from_paragraph_xml(paragraph_xml));
+                blocks.extend(extract_blocks_from_paragraph_xml(paragraph_xml, context));
                 cursor = paragraph_end;
             }
             _ => {
@@ -356,7 +709,7 @@ fn extract_section_xml_blocks(xml: &str) -> Vec<Block> {
     blocks
 }
 
-fn extract_table_from_xml(table_xml: &str) -> Option<Table> {
+fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) -> Option<Table> {
     let mut rows = Vec::new();
     let mut cursor = 0usize;
 
@@ -371,7 +724,7 @@ fn extract_table_from_xml(table_xml: &str) -> Option<Table> {
             continue;
         };
         let row_xml = &table_xml[tag.start..row_end];
-        let cells = extract_table_cells_from_row_xml(row_xml);
+        let cells = extract_table_cells_from_row_xml(row_xml, context);
         if !cells.is_empty() {
             rows.push(TableRow { cells });
         }
@@ -382,13 +735,19 @@ fn extract_table_from_xml(table_xml: &str) -> Option<Table> {
         return None;
     }
 
+    let background_color = first_xml_attribute_u32(table_xml, "tbl", "borderFillIDRef")
+        .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
+
     Some(Table {
         rows,
-        style: TableStyle::default(),
+        style: TableStyle { background_color },
     })
 }
 
-fn extract_table_cells_from_row_xml(row_xml: &str) -> Vec<TableCell> {
+fn extract_table_cells_from_row_xml(
+    row_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> Vec<TableCell> {
     let mut cells = Vec::new();
     let mut cursor = 0usize;
 
@@ -403,26 +762,34 @@ fn extract_table_cells_from_row_xml(row_xml: &str) -> Vec<TableCell> {
             continue;
         };
         let cell_xml = &row_xml[tag.start..cell_end];
-        cells.push(extract_table_cell_from_xml(cell_xml));
+        cells.push(extract_table_cell_from_xml(cell_xml, context));
         cursor = cell_end;
     }
 
     cells
 }
 
-fn extract_table_cell_from_xml(cell_xml: &str) -> TableCell {
+fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext) -> TableCell {
+    let background_color = first_xml_attribute_u32(cell_xml, "tc", "borderFillIDRef")
+        .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
+
     TableCell {
         row_span: first_xml_attribute_u32(cell_xml, "cellSpan", "rowSpan").unwrap_or(1),
         col_span: first_xml_attribute_u32(cell_xml, "cellSpan", "colSpan").unwrap_or(1),
-        blocks: extract_section_xml_blocks(cell_xml),
-        style: TableCellStyle::default(),
+        blocks: extract_section_xml_blocks(cell_xml, context),
+        style: TableCellStyle { background_color },
     }
 }
 
-fn extract_blocks_from_paragraph_xml(paragraph_xml: &str) -> Vec<Block> {
+fn extract_blocks_from_paragraph_xml(
+    paragraph_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut fragment_start = 0usize;
     let mut cursor = 0usize;
+    let paragraph_style = context.paragraph_style_for_paragraph(paragraph_xml);
+    let mut pending_list = context.list_info_for_paragraph(paragraph_xml);
 
     while let Some(tag) = next_xml_tag(paragraph_xml, cursor) {
         if tag.is_closing {
@@ -448,30 +815,36 @@ fn extract_blocks_from_paragraph_xml(paragraph_xml: &str) -> Vec<Block> {
         push_paragraph_text_fragment_as_block(
             &mut blocks,
             &paragraph_xml[fragment_start..tag.start],
+            pending_list.take(),
+            paragraph_style.clone(),
+            context,
         );
 
         if object_kind == "table" {
             let table_xml = &paragraph_xml[tag.start..object_end];
-            if let Some(table) = extract_table_from_xml(table_xml) {
+            if let Some(table) = extract_table_from_xml(table_xml, context) {
                 blocks.push(Block::Table(table));
             }
         } else {
-            blocks.push(Block::Unknown(UnknownBlock {
-                kind: format!("hwpx:{object_kind}"),
-                fallback_text: Some(format!("[{object_kind}]")),
-                message: Some(
-                    "HWPX section XML fallback preserved an unsupported object placeholder."
-                        .to_string(),
-                ),
-                source: Some("Contents/section*.xml".to_string()),
-            }));
+            let object_xml = &paragraph_xml[tag.start..object_end];
+            blocks.push(Block::Unknown(unknown_hwpx_object_block(
+                object_kind,
+                object_xml,
+                context,
+            )));
         }
 
         fragment_start = object_end;
         cursor = object_end;
     }
 
-    push_paragraph_text_fragment_as_block(&mut blocks, &paragraph_xml[fragment_start..]);
+    push_paragraph_text_fragment_as_block(
+        &mut blocks,
+        &paragraph_xml[fragment_start..],
+        pending_list.take(),
+        paragraph_style,
+        context,
+    );
     blocks
 }
 
@@ -488,22 +861,61 @@ fn hwpx_fallback_object_kind(tag_name: &str) -> Option<&'static str> {
     }
 }
 
-fn push_paragraph_text_fragment_as_block(blocks: &mut Vec<Block>, xml: &str) {
-    let text = extract_text_from_xml_fragment(xml);
-    if !text.is_empty() {
-        blocks.push(Block::Paragraph(Paragraph::from_plain_text(text)));
+fn unknown_hwpx_object_block(
+    object_kind: &str,
+    object_xml: &str,
+    context: &HwpxFallbackContext,
+) -> UnknownBlock {
+    let object_text =
+        inlines_to_plain_text(&extract_inlines_from_xml_fragment(object_xml, context));
+    let fallback_text = if object_text.is_empty() {
+        format!("[{object_kind}]")
+    } else {
+        format!("[{object_kind}]\n{object_text}")
+    };
+
+    UnknownBlock {
+        kind: format!("hwpx:{object_kind}"),
+        fallback_text: Some(fallback_text),
+        message: Some(
+            "HWPX section XML fallback preserved an unsupported object placeholder.".to_string(),
+        ),
+        source: Some("Contents/section*.xml".to_string()),
     }
 }
 
-fn extract_text_from_xml_fragment(xml: &str) -> String {
-    let mut current = String::new();
+fn push_paragraph_text_fragment_as_block(
+    blocks: &mut Vec<Block>,
+    xml: &str,
+    list: Option<ListInfo>,
+    style: ParagraphStyle,
+    context: &HwpxFallbackContext,
+) {
+    let inlines = extract_inlines_from_xml_fragment(xml, context);
+    if inlines.is_empty() {
+        return;
+    }
+
+    blocks.push(Block::Paragraph(Paragraph {
+        role: Default::default(),
+        inlines,
+        style,
+        style_ref: None,
+        list,
+    }));
+}
+
+fn extract_inlines_from_xml_fragment(xml: &str, context: &HwpxFallbackContext) -> Vec<Inline> {
+    let mut inlines = Vec::new();
+    let mut text_buffer = String::new();
     let mut cursor = 0usize;
     let mut text_depth = 0usize;
+    let mut current_style = TextStyle::default();
 
     while let Some(relative_tag_start) = xml[cursor..].find('<') {
         let tag_start = cursor + relative_tag_start;
         if text_depth > 0 && tag_start > cursor {
-            current.push_str(&decode_xml_text(&xml[cursor..tag_start]));
+            text_buffer.push_str(&decode_xml_text(&xml[cursor..tag_start]));
         }
 
         let Some(relative_tag_end) = xml[tag_start..].find('>') else {
@@ -516,14 +928,28 @@ fn extract_text_from_xml_fragment(xml: &str) -> String {
         let is_self_closing = is_xml_self_closing_tag(tag);
 
         match tag_name {
+            Some("run") if !is_closing => {
+                push_text_buffer_as_inline(&mut inlines, &mut text_buffer, &current_style);
+                current_style = context.text_style_for_run(tag);
+            }
+            Some("run") if is_closing => {
+                push_text_buffer_as_inline(&mut inlines, &mut text_buffer, &current_style);
+                current_style = TextStyle::default();
+            }
             Some("t") if is_closing => {
                 text_depth = text_depth.saturating_sub(1);
             }
             Some("t") if !is_closing && !is_self_closing => {
                 text_depth += 1;
             }
-            Some("lineBreak") => current.push('\n'),
-            Some("tab") => current.push('\t'),
+            Some("lineBreak") => {
+                push_text_buffer_as_inline(&mut inlines, &mut text_buffer, &current_style);
+                inlines.push(Inline::LineBreak);
+            }
+            Some("tab") => {
+                push_text_buffer_as_inline(&mut inlines, &mut text_buffer, &current_style);
+                inlines.push(Inline::Tab);
+            }
             _ => {}
         }
 
@@ -531,10 +957,58 @@ fn extract_text_from_xml_fragment(xml: &str) -> String {
     }
 
     if text_depth > 0 && cursor < xml.len() {
-        current.push_str(&decode_xml_text(&xml[cursor..]));
+        text_buffer.push_str(&decode_xml_text(&xml[cursor..]));
     }
 
-    current.trim_end().to_string()
+    push_text_buffer_as_inline(&mut inlines, &mut text_buffer, &current_style);
+    trim_trailing_empty_break_inlines(&mut inlines);
+    inlines
+}
+
+fn inlines_to_plain_text(inlines: &[Inline]) -> String {
+    let mut text = String::new();
+
+    for inline in inlines {
+        match inline {
+            Inline::Text(run) => text.push_str(&run.text),
+            Inline::LineBreak => text.push('\n'),
+            Inline::Tab => text.push('\t'),
+            Inline::Link(link) => text.push_str(&inlines_to_plain_text(&link.inlines)),
+            Inline::FootnoteRef { note_id } | Inline::EndnoteRef { note_id } => {
+                text.push_str(note_id.as_str());
+            }
+            Inline::Unknown(unknown) => {
+                if let Some(fallback_text) = &unknown.fallback_text {
+                    text.push_str(fallback_text);
+                }
+            }
+            Inline::Anchor { .. } => {}
+        }
+    }
+
+    text.trim_end().to_string()
+}
+
+fn push_text_buffer_as_inline(
+    inlines: &mut Vec<Inline>,
+    text_buffer: &mut String,
+    style: &TextStyle,
+) {
+    if text_buffer.is_empty() {
+        return;
+    }
+
+    inlines.push(Inline::Text(TextRun {
+        text: std::mem::take(text_buffer),
+        style: style.clone(),
+        style_ref: None,
+    }));
+}
+
+fn trim_trailing_empty_break_inlines(inlines: &mut Vec<Inline>) {
+    while matches!(inlines.last(), Some(Inline::LineBreak | Inline::Tab)) {
+        inlines.pop();
+    }
 }
 
 fn first_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> Option<u32> {
@@ -551,6 +1025,44 @@ fn first_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> O
     }
 
     None
+}
+
+fn map_hwpx_alignment(value: &str) -> Option<Alignment> {
+    Some(match value {
+        "LEFT" => Alignment::Left,
+        "CENTER" => Alignment::Center,
+        "RIGHT" => Alignment::Right,
+        "JUSTIFY" | "DISTRIBUTE" | "DISTRIBUTE_SPACE" => Alignment::Justify,
+        _ => return None,
+    })
+}
+
+fn xml_attribute_hwp_units_to_pt(tag: &str, attribute_name: &str) -> Option<LengthPt> {
+    xml_attribute_value(tag, attribute_name)
+        .and_then(|value| value.parse::<i32>().ok())
+        .and_then(hwp_units_to_pt_option)
+}
+
+fn hwp_units_to_pt_option(value: i32) -> Option<LengthPt> {
+    if value == 0 {
+        None
+    } else {
+        Some(LengthPt(value as f32 / 100.0))
+    }
+}
+
+fn parse_hwpx_hex_color(value: &str) -> Option<Color> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+
+    Some(Color {
+        r: u8::from_str_radix(&hex[0..2], 16).ok()?,
+        g: u8::from_str_radix(&hex[2..4], 16).ok()?,
+        b: u8::from_str_radix(&hex[4..6], 16).ok()?,
+        a: 255,
+    })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1025,7 +1537,8 @@ mod tests {
             </hs:sec>
         "#;
 
-        let blocks = extract_section_xml_blocks(xml);
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
 
         assert_eq!(blocks.len(), 4);
         match &blocks[0] {
@@ -1080,7 +1593,8 @@ mod tests {
             </hs:sec>
         "#;
 
-        let blocks = extract_section_xml_blocks(xml);
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
 
         assert_eq!(blocks.len(), 4);
         match &blocks[0] {
@@ -1109,6 +1623,332 @@ mod tests {
                 if unknown.kind == "hwpx:equation"
                     && unknown.fallback_text.as_deref() == Some("[equation]")
         ));
+    }
+
+    #[test]
+    fn preserves_text_inside_hwpx_unsupported_object_placeholders() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p>
+                <hp:ctrl>
+                  <hp:rect>
+                    <hp:run><hp:t>shape text</hp:t></hp:run>
+                  </hp:rect>
+                </hp:ctrl>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+
+        assert!(matches!(
+            &blocks[0],
+            Block::Unknown(unknown)
+                if unknown.kind == "hwpx:shape"
+                    && unknown.fallback_text.as_deref() == Some("[shape]\nshape text")
+        ));
+    }
+
+    #[test]
+    fn recovers_list_info_from_hwpx_header_paragraph_properties() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                HEADER_XML_PATH,
+                r#"
+                <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+                  <hh:refList>
+                    <hh:paraProperties>
+                      <hh:paraPr id="0"><hh:heading type="BULLET" idRef="1" level="0"/></hh:paraPr>
+                      <hh:paraPr id="1"><hh:heading type="NUMBER" idRef="1" level="0"/></hh:paraPr>
+                      <hh:paraPr id="2"><hh:heading type="NUMBER" idRef="2" level="0"/></hh:paraPr>
+                    </hh:paraProperties>
+                  </hh:refList>
+                </hh:head>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p paraPrIDRef="0"><hp:run><hp:t>bullet item</hp:t></hp:run></hp:p>
+                  <hp:p paraPrIDRef="1"><hp:run><hp:t>first item</hp:t></hp:run></hp:p>
+                  <hp:p paraPrIDRef="1"><hp:run><hp:t>second item</hp:t></hp:run></hp:p>
+                  <hp:p paraPrIDRef="2"><hp:run><hp:t>new list first item</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+        let paragraphs = document.sections[0]
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Paragraph(paragraph) => Some(paragraph),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(paragraphs.len(), 4);
+        assert_eq!(
+            paragraphs[0].list.as_ref().map(|list| &list.kind),
+            Some(&ListKind::Unordered)
+        );
+        assert_eq!(
+            paragraphs[0]
+                .list
+                .as_ref()
+                .and_then(|list| list.marker.as_deref()),
+            Some("•")
+        );
+        assert_eq!(
+            paragraphs[1]
+                .list
+                .as_ref()
+                .map(|list| (&list.kind, list.number)),
+            Some((&ListKind::Ordered, Some(1)))
+        );
+        assert_eq!(
+            paragraphs[2]
+                .list
+                .as_ref()
+                .map(|list| (&list.kind, list.number)),
+            Some((&ListKind::Ordered, Some(2)))
+        );
+        assert_eq!(
+            paragraphs[3]
+                .list
+                .as_ref()
+                .map(|list| (&list.kind, list.number)),
+            Some((&ListKind::Ordered, Some(1)))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_paragraph_style_from_hwpx_header_paragraph_properties() -> Result<(), Box<dyn Error>>
+    {
+        let bytes = create_archive_bytes(&[
+            (
+                HEADER_XML_PATH,
+                r#"
+                <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+                  <hh:refList>
+                    <hh:paraProperties>
+                      <hh:paraPr id="0">
+                        <hh:align horizontal="CENTER"/>
+                        <hh:margin>
+                          <hh:intent unit="HWPUNIT" value="100"/>
+                          <hh:left unit="HWPUNIT" value="200"/>
+                          <hh:right unit="HWPUNIT" value="300"/>
+                          <hh:prev unit="HWPUNIT" value="400"/>
+                          <hh:next unit="HWPUNIT" value="500"/>
+                        </hh:margin>
+                        <hh:lineSpacing type="FIXED" value="600" unit="HWPUNIT"/>
+                      </hh:paraPr>
+                    </hh:paraProperties>
+                  </hh:refList>
+                </hh:head>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p paraPrIDRef="0"><hp:run><hp:t>styled paragraph</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+        let paragraph = match &document.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => paragraph,
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(paragraph.style.alignment, Some(Alignment::Center));
+        assert_eq!(paragraph.style.indent.first_line_pt, Some(LengthPt(1.0)));
+        assert_eq!(paragraph.style.indent.left_pt, Some(LengthPt(2.0)));
+        assert_eq!(paragraph.style.indent.right_pt, Some(LengthPt(3.0)));
+        assert_eq!(paragraph.style.spacing.before_pt, Some(LengthPt(4.0)));
+        assert_eq!(paragraph.style.spacing.after_pt, Some(LengthPt(5.0)));
+        assert_eq!(paragraph.style.spacing.line_pt, Some(LengthPt(6.0)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_text_style_from_hwpx_header_char_properties() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                HEADER_XML_PATH,
+                r##"
+                <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+                  <hh:refList>
+                    <hh:fontfaces>
+                      <hh:fontface lang="HANGUL"><hh:font id="0" face="Noto Sans KR"/></hh:fontface>
+                    </hh:fontfaces>
+                    <hh:charProperties>
+                      <hh:charPr id="7" height="1200" textColor="#010203" shadeColor="#040506">
+                        <hh:fontRef hangul="0"/>
+                        <hh:bold/>
+                        <hh:italic/>
+                        <hh:underline/>
+                        <hh:strikeout/>
+                      </hh:charPr>
+                    </hh:charProperties>
+                  </hh:refList>
+                </hh:head>
+                "##,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run charPrIDRef="7"><hp:t>styled text</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+        let text_run = match &document.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => match &paragraph.inlines[0] {
+                Inline::Text(run) => run,
+                other => panic!("expected text run, got {other:?}"),
+            },
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(text_run.text, "styled text");
+        assert_eq!(text_run.style.font_family.as_deref(), Some("Noto Sans KR"));
+        assert_eq!(text_run.style.font_size_pt, Some(LengthPt(12.0)));
+        assert_eq!(
+            text_run.style.color,
+            Some(Color {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 255,
+            })
+        );
+        assert_eq!(
+            text_run.style.background_color,
+            Some(Color {
+                r: 4,
+                g: 5,
+                b: 6,
+                a: 255,
+            })
+        );
+        assert!(text_run.style.bold);
+        assert!(text_run.style.italic);
+        assert!(text_run.style.underline);
+        assert!(text_run.style.strike);
+
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_table_and_cell_background_from_hwpx_border_fill() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                HEADER_XML_PATH,
+                r##"
+                <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"
+                         xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+                  <hh:refList>
+                    <hh:borderFills>
+                      <hh:borderFill id="3"><hc:fillBrush><hc:winBrush faceColor="#112233"/></hc:fillBrush></hh:borderFill>
+                      <hh:borderFill id="4"><hc:fillBrush><hc:winBrush faceColor="#445566"/></hc:fillBrush></hh:borderFill>
+                    </hh:borderFills>
+                  </hh:refList>
+                </hh:head>
+                "##,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:tbl borderFillIDRef="3">
+                    <hp:tr>
+                      <hp:tc borderFillIDRef="4">
+                        <hp:subList>
+                          <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
+                        </hp:subList>
+                      </hp:tc>
+                    </hp:tr>
+                  </hp:tbl>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+        let table = match &document.sections[0].blocks[0] {
+            Block::Table(table) => table,
+            other => panic!("expected table block, got {other:?}"),
+        };
+
+        assert_eq!(
+            table.style.background_color,
+            Some(Color {
+                r: 0x11,
+                g: 0x22,
+                b: 0x33,
+                a: 255,
+            })
+        );
+        assert_eq!(
+            table.rows[0].cells[0].style.background_color,
+            Some(Color {
+                r: 0x44,
+                g: 0x55,
+                b: 0x66,
+                a: 255,
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_section_boundaries_in_hwpx_section_fallback() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run><hp:t>first section</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+            (
+                "Contents/section1.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run><hp:t>second section</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+
+        assert_eq!(document.sections.len(), 2);
+        assert_eq!(
+            section_first_paragraph_text(&document.sections[0]),
+            Some("first section".to_string())
+        );
+        assert_eq!(
+            section_first_paragraph_text(&document.sections[1]),
+            Some("second section".to_string())
+        );
+
+        Ok(())
     }
 
     #[test]
@@ -1194,6 +2034,17 @@ mod tests {
         assert!(message.contains("HWPX preview fallback 실패:"));
 
         Ok(())
+    }
+
+    fn section_first_paragraph_text(section: &crate::ir::Section) -> Option<String> {
+        let Block::Paragraph(paragraph) = section.blocks.first()? else {
+            return None;
+        };
+
+        paragraph.inlines.iter().find_map(|inline| match inline {
+            Inline::Text(run) => Some(run.text.clone()),
+            _ => None,
+        })
     }
 
     fn create_preview_archive_bytes(preview_text: &str) -> Result<Vec<u8>, Box<dyn Error>> {
