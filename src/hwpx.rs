@@ -7,9 +7,9 @@ use std::path::Path;
 use zip::ZipArchive;
 
 use crate::ir::{
-    Alignment, Block, Color, Document, Inline, LengthPt, ListInfo, ListKind, Metadata, NoteStore,
-    Paragraph, ParagraphStyle, ResourceStore, Section, StyleSheet, Table, TableCell,
-    TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
+    Alignment, Block, Color, Document, Inline, LengthPt, Link, ListInfo, ListKind, Metadata,
+    NoteStore, Paragraph, ParagraphStyle, ResourceStore, Section, StyleSheet, Table, TableCell,
+    TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock, UnknownInline,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -905,64 +905,363 @@ fn push_paragraph_text_fragment_as_block(
     }));
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct HwpxActiveField {
+    id: Option<String>,
+    field_type: String,
+    name: Option<String>,
+    url: Option<String>,
+    command: Option<String>,
+    inlines: Vec<Inline>,
+}
+
 fn extract_inlines_from_xml_fragment(xml: &str, context: &HwpxFallbackContext) -> Vec<Inline> {
     let mut inlines = Vec::new();
     let mut text_buffer = String::new();
     let mut cursor = 0usize;
     let mut text_depth = 0usize;
     let mut current_style = TextStyle::default();
+    let mut active_field: Option<HwpxActiveField> = None;
 
-    while let Some(relative_tag_start) = xml[cursor..].find('<') {
-        let tag_start = cursor + relative_tag_start;
-        if text_depth > 0 && tag_start > cursor {
-            text_buffer.push_str(&decode_xml_text(&xml[cursor..tag_start]));
+    while let Some(tag) = next_xml_tag(xml, cursor) {
+        if text_depth > 0 && tag.start > cursor {
+            text_buffer.push_str(&decode_xml_text(&xml[cursor..tag.start]));
         }
 
-        let Some(relative_tag_end) = xml[tag_start..].find('>') else {
-            break;
-        };
-        let tag_end = tag_start + relative_tag_end;
-        let tag = &xml[tag_start + 1..tag_end];
-        let tag_name = xml_tag_local_name(tag);
-        let is_closing = is_xml_closing_tag(tag);
-        let is_self_closing = is_xml_self_closing_tag(tag);
-
-        match tag_name {
-            Some("run") if !is_closing => {
-                push_text_buffer_as_inline(&mut inlines, &mut text_buffer, &current_style);
-                current_style = context.text_style_for_run(tag);
+        match tag.name {
+            "run" if !tag.is_closing => {
+                push_text_buffer_to_hwpx_inline_target(
+                    &mut inlines,
+                    &mut active_field,
+                    &mut text_buffer,
+                    &current_style,
+                );
+                current_style = context.text_style_for_run(tag.raw);
             }
-            Some("run") if is_closing => {
-                push_text_buffer_as_inline(&mut inlines, &mut text_buffer, &current_style);
+            "run" if tag.is_closing => {
+                push_text_buffer_to_hwpx_inline_target(
+                    &mut inlines,
+                    &mut active_field,
+                    &mut text_buffer,
+                    &current_style,
+                );
                 current_style = TextStyle::default();
             }
-            Some("t") if is_closing => {
+            "t" if tag.is_closing => {
                 text_depth = text_depth.saturating_sub(1);
             }
-            Some("t") if !is_closing && !is_self_closing => {
+            "t" if !tag.is_closing && !tag.is_self_closing => {
                 text_depth += 1;
             }
-            Some("lineBreak") => {
-                push_text_buffer_as_inline(&mut inlines, &mut text_buffer, &current_style);
-                inlines.push(Inline::LineBreak);
+            "lineBreak" => {
+                push_text_buffer_to_hwpx_inline_target(
+                    &mut inlines,
+                    &mut active_field,
+                    &mut text_buffer,
+                    &current_style,
+                );
+                push_hwpx_inline(&mut inlines, &mut active_field, Inline::LineBreak);
             }
-            Some("tab") => {
-                push_text_buffer_as_inline(&mut inlines, &mut text_buffer, &current_style);
-                inlines.push(Inline::Tab);
+            "tab" => {
+                push_text_buffer_to_hwpx_inline_target(
+                    &mut inlines,
+                    &mut active_field,
+                    &mut text_buffer,
+                    &current_style,
+                );
+                push_hwpx_inline(&mut inlines, &mut active_field, Inline::Tab);
+            }
+            "bookmark" if !tag.is_closing => {
+                push_text_buffer_to_hwpx_inline_target(
+                    &mut inlines,
+                    &mut active_field,
+                    &mut text_buffer,
+                    &current_style,
+                );
+                if let Some(bookmark) = hwpx_bookmark_inline(tag.raw) {
+                    push_hwpx_inline(&mut inlines, &mut active_field, bookmark);
+                }
+            }
+            "fieldBegin" if !tag.is_closing => {
+                push_text_buffer_to_hwpx_inline_target(
+                    &mut inlines,
+                    &mut active_field,
+                    &mut text_buffer,
+                    &current_style,
+                );
+                if let Some(field) = active_field.take() {
+                    inlines.push(finalize_hwpx_field(field));
+                }
+
+                let field_end = if tag.is_self_closing {
+                    tag.end
+                } else {
+                    find_matching_element_end(xml, &tag).unwrap_or(tag.end)
+                };
+                active_field = Some(extract_hwpx_field_begin(
+                    tag.raw,
+                    &xml[tag.start..field_end],
+                ));
+                cursor = field_end;
+                continue;
+            }
+            "fieldEnd" if !tag.is_closing => {
+                push_text_buffer_to_hwpx_inline_target(
+                    &mut inlines,
+                    &mut active_field,
+                    &mut text_buffer,
+                    &current_style,
+                );
+                if let Some(field) = active_field.take() {
+                    let begin_id = decoded_xml_attribute_value(tag.raw, "beginIDRef");
+                    if field.id.as_deref() == begin_id.as_deref() || begin_id.is_none() {
+                        inlines.push(finalize_hwpx_field(field));
+                    } else {
+                        inlines.push(finalize_hwpx_field(field));
+                        inlines.push(unknown_hwpx_field_end_inline(tag.raw));
+                    }
+                } else {
+                    inlines.push(unknown_hwpx_field_end_inline(tag.raw));
+                }
             }
             _ => {}
         }
 
-        cursor = tag_end + 1;
+        cursor = tag.end;
     }
 
     if text_depth > 0 && cursor < xml.len() {
         text_buffer.push_str(&decode_xml_text(&xml[cursor..]));
     }
 
-    push_text_buffer_as_inline(&mut inlines, &mut text_buffer, &current_style);
+    push_text_buffer_to_hwpx_inline_target(
+        &mut inlines,
+        &mut active_field,
+        &mut text_buffer,
+        &current_style,
+    );
+    if let Some(field) = active_field.take() {
+        inlines.push(finalize_hwpx_field(field));
+    }
     trim_trailing_empty_break_inlines(&mut inlines);
     inlines
+}
+
+fn push_text_buffer_to_hwpx_inline_target(
+    inlines: &mut Vec<Inline>,
+    active_field: &mut Option<HwpxActiveField>,
+    text_buffer: &mut String,
+    style: &TextStyle,
+) {
+    if let Some(field) = active_field {
+        push_text_buffer_as_inline(&mut field.inlines, text_buffer, style);
+    } else {
+        push_text_buffer_as_inline(inlines, text_buffer, style);
+    }
+}
+
+fn push_hwpx_inline(
+    inlines: &mut Vec<Inline>,
+    active_field: &mut Option<HwpxActiveField>,
+    inline: Inline,
+) {
+    if let Some(field) = active_field {
+        field.inlines.push(inline);
+    } else {
+        inlines.push(inline);
+    }
+}
+
+fn extract_hwpx_field_begin(tag: &str, field_xml: &str) -> HwpxActiveField {
+    let field_type =
+        decoded_xml_attribute_value(tag, "type").unwrap_or_else(|| "UNKNOWN".to_string());
+    let name = decoded_xml_attribute_value(tag, "name");
+    let command = first_non_empty_string([
+        decoded_xml_attribute_value(tag, "command"),
+        hwpx_field_parameter_value(
+            field_xml,
+            &["command", "Command", "cmd", "hyperlink", "Hyperlink"],
+        ),
+    ]);
+    let url = first_non_empty_string([
+        decoded_xml_attribute_value(tag, "href"),
+        decoded_xml_attribute_value(tag, "url"),
+        command.clone().filter(|value| is_hwpx_url_like(value)),
+        hwpx_field_parameter_value(
+            field_xml,
+            &["url", "URL", "href", "HRef", "target", "Target"],
+        ),
+        name.clone().filter(|value| is_hwpx_url_like(value)),
+    ]);
+
+    HwpxActiveField {
+        id: decoded_xml_attribute_value(tag, "id"),
+        field_type,
+        name,
+        url,
+        command,
+        inlines: Vec::new(),
+    }
+}
+
+fn finalize_hwpx_field(field: HwpxActiveField) -> Inline {
+    if field.field_type.eq_ignore_ascii_case("HYPERLINK")
+        && let Some(url) = field.url.clone()
+    {
+        let label = first_non_empty_string([
+            non_empty_string_owned(inlines_to_plain_text(&field.inlines)),
+            field.name.clone().filter(|value| !is_hwpx_url_like(value)),
+            Some(url.clone()),
+        ])
+        .unwrap_or_else(|| url.clone());
+        let inlines = if field.inlines.is_empty() {
+            vec![Inline::Text(TextRun {
+                text: label,
+                style: TextStyle::default(),
+                style_ref: None,
+            })]
+        } else {
+            field.inlines
+        };
+
+        return Inline::Link(Link {
+            url,
+            title: field.name.filter(|value| !is_hwpx_url_like(value)),
+            inlines,
+        });
+    }
+
+    let kind = hwpx_field_unknown_kind(&field.field_type);
+    let fallback_text = first_non_empty_string([
+        non_empty_string_owned(inlines_to_plain_text(&field.inlines)),
+        field.name.clone(),
+        field.command.clone(),
+        field.url.clone(),
+    ])
+    .unwrap_or_else(|| format!("[{}]", kind));
+
+    Inline::Unknown(UnknownInline {
+        kind,
+        fallback_text: Some(fallback_text),
+        message: Some("HWPX section XML fallback preserved a field as fallback text.".to_string()),
+        source: Some("Contents/section*.xml".to_string()),
+    })
+}
+
+fn hwpx_bookmark_inline(tag: &str) -> Option<Inline> {
+    let name = decoded_xml_attribute_value(tag, "name")?;
+    Some(Inline::Anchor {
+        id: crate::util::plain_text::sanitize_anchor_id(&name),
+    })
+}
+
+fn unknown_hwpx_field_end_inline(tag: &str) -> Inline {
+    let fallback_text = decoded_xml_attribute_value(tag, "beginIDRef")
+        .map(|id| format!("[field_end:{id}]"))
+        .unwrap_or_else(|| "[field_end]".to_string());
+
+    Inline::Unknown(UnknownInline {
+        kind: "hwpx:field_end".to_string(),
+        fallback_text: Some(fallback_text),
+        message: Some("HWPX fieldEnd appeared without a matching fieldBegin.".to_string()),
+        source: Some("Contents/section*.xml".to_string()),
+    })
+}
+
+fn hwpx_field_unknown_kind(field_type: &str) -> String {
+    let mut normalized = String::new();
+    for ch in field_type.chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+        } else if ch == '_' || ch == '-' || ch.is_whitespace() {
+            normalized.push('_');
+        }
+    }
+
+    if normalized.is_empty() {
+        "hwpx:field:unknown".to_string()
+    } else {
+        format!("hwpx:field:{normalized}")
+    }
+}
+
+fn hwpx_field_parameter_value(field_xml: &str, names: &[&str]) -> Option<String> {
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(field_xml, cursor) {
+        if tag.is_closing || !tag.name.ends_with("Param") || tag.name == "listParam" {
+            cursor = tag.end;
+            continue;
+        }
+
+        let Some(parameter_name) = xml_attribute_value(tag.raw, "name") else {
+            cursor = tag.end;
+            continue;
+        };
+        if !names
+            .iter()
+            .any(|name| parameter_name.eq_ignore_ascii_case(name))
+        {
+            cursor = tag.end;
+            continue;
+        }
+
+        if let Some(value) = decoded_xml_attribute_value(tag.raw, "value")
+            && !value.trim().is_empty()
+        {
+            return Some(value);
+        }
+
+        if !tag.is_self_closing
+            && let Some(parameter_end) = find_matching_element_end(field_xml, &tag)
+            && let Some(value) = simple_xml_element_text(&field_xml[tag.end..parameter_end])
+        {
+            return Some(value);
+        }
+
+        cursor = tag.end;
+    }
+
+    None
+}
+
+fn simple_xml_element_text(xml: &str) -> Option<String> {
+    let text = xml
+        .rsplit_once("</")
+        .map(|(before_close, _)| before_close)
+        .unwrap_or(xml);
+    non_empty_string_owned(decode_xml_text(text))
+}
+
+fn decoded_xml_attribute_value(tag: &str, attribute_name: &str) -> Option<String> {
+    xml_attribute_value(tag, attribute_name)
+        .map(decode_xml_text)
+        .and_then(non_empty_string_owned)
+}
+
+fn first_non_empty_string(values: impl IntoIterator<Item = Option<String>>) -> Option<String> {
+    values
+        .into_iter()
+        .flatten()
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty())
+}
+
+fn non_empty_string_owned(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn is_hwpx_url_like(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with('#')
+        || trimmed.contains("://")
+        || trimmed.starts_with("mailto:")
+        || trimmed.starts_with("tel:")
 }
 
 fn inlines_to_plain_text(inlines: &[Inline]) -> String {
@@ -1647,6 +1946,80 @@ mod tests {
             Block::Unknown(unknown)
                 if unknown.kind == "hwpx:shape"
                     && unknown.fallback_text.as_deref() == Some("[shape]\nshape text")
+        ));
+    }
+
+    #[test]
+    fn recovers_hwpx_hyperlink_field_as_link_inline() {
+        let xml = r#"
+            <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:ctrl>
+                <hp:fieldBegin id="7" type="HYPERLINK" name="Example">
+                  <hp:parameters cnt="1">
+                    <hp:stringParam name="URL">https://example.com</hp:stringParam>
+                  </hp:parameters>
+                </hp:fieldBegin>
+              </hp:ctrl>
+              <hp:run><hp:t>Example Site</hp:t></hp:run>
+              <hp:ctrl><hp:fieldEnd beginIDRef="7"/></hp:ctrl>
+            </hp:p>
+        "#;
+
+        let inlines = extract_inlines_from_xml_fragment(xml, &HwpxFallbackContext::default());
+
+        assert_eq!(inlines.len(), 1);
+        match &inlines[0] {
+            Inline::Link(link) => {
+                assert_eq!(link.url, "https://example.com");
+                assert_eq!(link.title.as_deref(), Some("Example"));
+                assert_eq!(inlines_to_plain_text(&link.inlines), "Example Site");
+            }
+            other => panic!("expected link inline, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn preserves_hwpx_bookmark_as_anchor_inline() {
+        let xml = r#"
+            <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:ctrl><hp:bookmark name="Target Bookmark"/></hp:ctrl>
+              <hp:run><hp:t>target text</hp:t></hp:run>
+            </hp:p>
+        "#;
+
+        let inlines = extract_inlines_from_xml_fragment(xml, &HwpxFallbackContext::default());
+
+        assert_eq!(inlines.len(), 2);
+        assert!(matches!(
+            &inlines[0],
+            Inline::Anchor { id } if id == "Target-Bookmark"
+        ));
+        assert!(matches!(
+            &inlines[1],
+            Inline::Text(run) if run.text == "target text"
+        ));
+    }
+
+    #[test]
+    fn preserves_hwpx_non_link_field_as_unknown_inline() {
+        let xml = r#"
+            <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:ctrl>
+                <hp:fieldBegin id="9" type="DATE" name="created date"/>
+              </hp:ctrl>
+              <hp:run><hp:t>2026-06-13</hp:t></hp:run>
+              <hp:ctrl><hp:fieldEnd beginIDRef="9"/></hp:ctrl>
+            </hp:p>
+        "#;
+
+        let inlines = extract_inlines_from_xml_fragment(xml, &HwpxFallbackContext::default());
+
+        assert_eq!(inlines.len(), 1);
+        assert!(matches!(
+            &inlines[0],
+            Inline::Unknown(unknown)
+                if unknown.kind == "hwpx:field:date"
+                    && unknown.fallback_text.as_deref() == Some("2026-06-13")
         ));
     }
 
