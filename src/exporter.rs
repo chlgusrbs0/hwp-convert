@@ -910,6 +910,9 @@ fn render_html_inlines(inlines: &[Inline]) -> String {
             Inline::EndnoteRef { note_id } => {
                 content.push_str(&render_html_note_ref(note_id, NoteKind::Endnote));
             }
+            Inline::Anchor { id } => {
+                content.push_str(&format!("<a id=\"{}\"></a>", escape_html(id)));
+            }
             Inline::Unknown(unknown) => {
                 content.push_str(&render_html_fallback_text(&unknown_inline_display_text(
                     unknown,
@@ -1423,6 +1426,10 @@ fn render_markdown_inlines(inlines: &[Inline]) -> String {
             Inline::Link(link) => content.push_str(&render_markdown_link(link)),
             Inline::FootnoteRef { note_id } => content.push_str(&render_markdown_note_ref(note_id)),
             Inline::EndnoteRef { note_id } => content.push_str(&render_markdown_note_ref(note_id)),
+            Inline::Anchor { id } => {
+                let id = crate::util::plain_text::sanitize_anchor_id(id);
+                content.push_str(&format!("<a id=\"{}\"></a>", escape_html(&id)));
+            }
             Inline::Unknown(unknown) => {
                 content.push_str(&render_markdown_text(&unknown_inline_display_text(unknown)));
             }
@@ -1622,8 +1629,18 @@ fn render_markdown_chart(chart: &Chart) -> String {
 fn render_markdown_link(link: &Link) -> String {
     let label = render_markdown_link_label(&link.inlines);
     let url = escape_markdown_link_destination(&link.url);
+    let title = link.title.as_deref().map(|t| escape_markdown_title(t)).unwrap_or_default();
 
-    format!("[{label}]({url})")
+    if title.is_empty() {
+        format!("[{label}]({url})")
+    } else {
+        format!("[{label}]({url} {title})")
+    }
+}
+
+fn escape_markdown_title(text: &str) -> String {
+    let escaped = text.replace('"', "\\\"").replace('\\', "\\\\");
+    format!("\"{}\"", escaped)
 }
 
 fn render_markdown_link_label(inlines: &[Inline]) -> String {
@@ -1642,6 +1659,10 @@ fn markdown_link_label_inline(inline: &Inline) -> String {
         Inline::Link(link) => render_markdown_link_label(&link.inlines),
         Inline::FootnoteRef { note_id } => format!("[^{}]", note_id.as_str()),
         Inline::EndnoteRef { note_id } => format!("[^{}]", note_id.as_str()),
+        Inline::Anchor { id } => {
+            let id = crate::util::plain_text::sanitize_anchor_id(id);
+            format!("<a id=\"{}\"></a>", escape_html(&id))
+        }
         Inline::Unknown(unknown) => {
             escape_markdown_image_alt(&unknown_inline_display_text(unknown))
         }

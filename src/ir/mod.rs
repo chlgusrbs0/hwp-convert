@@ -167,6 +167,7 @@ pub enum Inline {
     Text(TextRun),
     LineBreak,
     Tab,
+    Anchor { id: String },
     Link(Link),
     FootnoteRef { note_id: NoteId },
     EndnoteRef { note_id: NoteId },

@@ -697,11 +697,19 @@ impl<'a> BridgeContext<'a> {
             }
         }
 
-        Some(Link {
-            url,
-            title: None,
-            inlines: link_inlines,
-        })
+        // Determine a sensible title where available from the control
+        let title = match control {
+            Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
+                field
+                    .guide_text()
+                    .map(|s| s.to_string())
+                    .or_else(|| field.field_name().map(|s| s.to_string()))
+            }
+            Control::Hyperlink(link) => non_empty_string(&link.text),
+            _ => None,
+        };
+
+        Some(Link { url, title, inlines: link_inlines })
     }
 
     fn append_control_reference_inlines(
@@ -789,9 +797,11 @@ impl<'a> BridgeContext<'a> {
         let url = non_empty_string(&link.url)?;
         let label = non_empty_string(&link.text).unwrap_or_else(|| url.clone());
 
+        let title = non_empty_string(&link.text);
+
         Some(Link {
             url,
-            title: None,
+            title,
             inlines: vec![Inline::Text(TextRun {
                 text: label,
                 style: TextStyle::default(),
@@ -827,15 +837,16 @@ impl<'a> BridgeContext<'a> {
             .map(|s| s.to_string())
             .unwrap_or_else(|| url.clone());
 
-        Some(Link {
-            url,
-            title: None,
-            inlines: vec![Inline::Text(TextRun {
-                text: label,
-                style: TextStyle::default(),
-                style_ref: None,
-            })],
-        })
+        let title = field
+            .guide_text()
+            .or_else(|| field.field_name())
+            .map(|s| s.to_string());
+
+        Some(Link { url, title, inlines: vec![Inline::Text(TextRun {
+            text: label,
+            style: TextStyle::default(),
+            style_ref: None,
+        })] })
     }
 
     fn map_field_fallback(&self, field: &RhwpField) -> Option<Inline> {

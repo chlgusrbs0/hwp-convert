@@ -267,6 +267,9 @@ fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
             Inline::EndnoteRef { note_id } => {
                 text.push_str(&format!("{ENDNOTE_REF_LABEL}: {}]", note_id.as_str()));
             }
+            Inline::Anchor { id } => {
+                text.push_str(&format!("[bookmark: {}]", id));
+            }
             Inline::Unknown(unknown) => {
                 text.push_str(&unknown_inline_to_plain_text(unknown));
             }
@@ -274,6 +277,22 @@ fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
     }
 
     text
+}
+
+pub fn sanitize_anchor_id(name: &str) -> String {
+    let mut id = String::new();
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == ':' || ch == '.' {
+            id.push(ch);
+        } else if ch.is_whitespace() {
+            id.push('-');
+        }
+    }
+    if id.is_empty() {
+        "bookmark".to_string()
+    } else {
+        id
+    }
 }
 
 #[cfg(test)]

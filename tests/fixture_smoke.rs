@@ -789,6 +789,9 @@ fn paragraph_plain_text(paragraph: &Paragraph) -> String {
                     text.push_str(fallback_text);
                 }
             }
+            Inline::Anchor { id } => {
+                text.push_str(id);
+            }
         }
     }
 
@@ -1502,6 +1505,7 @@ impl DocumentStats {
                 Inline::FootnoteRef { .. } => self.footnote_refs += 1,
                 Inline::EndnoteRef { .. } => self.endnote_refs += 1,
                 Inline::Unknown(_) => self.unknown_inlines += 1,
+                Inline::Anchor { .. } => self.unknown_inlines += 1,
             }
         }
     }
