@@ -595,6 +595,10 @@ fn render_html_document_with_asset_prefix(
         color: #4b5563;\n\
         font-size: 14px;\n\
       }}\n\
+      .title, .heading {{\n\
+        color: #111827;\n\
+        line-height: 1.35;\n\
+      }}\n\
       .caption {{\n\
         color: #4b5563;\n\
         font-size: 14px;\n\
@@ -769,11 +773,13 @@ fn render_html_blocks(
 
     while index < blocks.len() {
         if let Block::Paragraph(paragraph) = &blocks[index] {
-            if let Some(list) = &paragraph.list {
-                let (list_html, next_index) = render_html_list(blocks, index, list);
-                html.push_str(&list_html);
-                index = next_index;
-                continue;
+            if matches!(paragraph.role, ParagraphRole::Body) {
+                if let Some(list) = &paragraph.list {
+                    let (list_html, next_index) = render_html_list(blocks, index, list);
+                    html.push_str(&list_html);
+                    index = next_index;
+                    continue;
+                }
             }
         }
 
@@ -799,6 +805,9 @@ fn render_html_list(
     let mut index = start_index;
 
     while let Some(Block::Paragraph(paragraph)) = blocks.get(index) {
+        if !matches!(paragraph.role, ParagraphRole::Body) {
+            break;
+        }
         let Some(list) = &paragraph.list else {
             break;
         };
@@ -858,11 +867,22 @@ fn render_html_paragraph(paragraph: &Paragraph) -> String {
     }
     content.push_str(&render_html_inlines(&paragraph.inlines));
     let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
-    let class = paragraph_role_html_class(&paragraph.role)
-        .map(|class| format!(" class=\"{class}\""))
-        .unwrap_or_default();
+    let class = render_html_paragraph_role_class(&paragraph.role);
 
-    format!("<p{class}{style}>{content}</p>\n")
+    match &paragraph.role {
+        ParagraphRole::Title => format!("<h1{class}{style}>{content}</h1>\n"),
+        ParagraphRole::Heading { level } => {
+            let level = (*level).clamp(1, 6);
+            format!("<h{level}{class}{style}>{content}</h{level}>\n")
+        }
+        _ => format!("<p{class}{style}>{content}</p>\n"),
+    }
+}
+
+fn render_html_paragraph_role_class(role: &ParagraphRole) -> String {
+    paragraph_role_html_class(role)
+        .map(|class| format!(" class=\"{class}\""))
+        .unwrap_or_default()
 }
 
 fn paragraph_role_html_class(role: &ParagraphRole) -> Option<&'static str> {
@@ -1377,13 +1397,19 @@ fn render_markdown_unknown_block(unknown: &UnknownBlock) -> String {
 }
 
 fn render_markdown_paragraph(paragraph: &Paragraph) -> String {
-    let content = render_markdown_inlines(&paragraph.inlines);
-
+    let mut content = render_markdown_inlines(&paragraph.inlines);
     if let Some(list) = &paragraph.list {
-        return format!("{}{}", list_prefix(list), content);
+        content = format!("{}{}", list_prefix(list), content);
     }
 
-    content
+    match &paragraph.role {
+        ParagraphRole::Title => format!("# {content}"),
+        ParagraphRole::Heading { level } => {
+            let level = (*level).clamp(1, 6);
+            format!("{} {content}", "#".repeat(level as usize))
+        }
+        _ => content,
+    }
 }
 
 fn render_markdown_inlines(inlines: &[Inline]) -> String {
@@ -1474,7 +1500,16 @@ fn render_markdown_image(
     let alt = escape_markdown_image_alt(image.alt.as_deref().unwrap_or(image.resource_id.as_str()));
     let path = resource_public_path(resources, &image.resource_id, image_asset_prefix);
 
-    format!("![{alt}]({path})")
+    let mut markdown = format!("![{alt}]({path})");
+    if let Some(caption) = image
+        .caption
+        .as_deref()
+        .filter(|caption| !caption.is_empty())
+    {
+        markdown.push_str("\n\n");
+        markdown.push_str(&render_markdown_text(caption));
+    }
+    markdown
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2485,6 +2520,39 @@ mod tests {
     }
 
     #[test]
+    fn renders_html_title_and_heading_paragraph_roles_as_headings() {
+        let document = document_with_blocks(vec![
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Title,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "Document title".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: None,
+            }),
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Heading { level: 3 },
+                inlines: vec![Inline::Text(TextRun {
+                    text: "Section heading".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: None,
+            }),
+        ]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("<h1 class=\"title\">Document title</h1>"));
+        assert!(html.contains("<h3 class=\"heading\">Section heading</h3>"));
+    }
+
+    #[test]
     fn renders_html_list_paragraphs_as_semantic_lists() {
         let document = document_with_blocks(vec![
             Block::Paragraph(Paragraph {
@@ -2527,6 +2595,65 @@ mod tests {
             html.contains("<ol>\n<li value=\"1\">first</li>\n<li value=\"2\">second</li>\n</ol>")
         );
         assert!(!html.contains("1. first"));
+    }
+
+    #[test]
+    fn renders_markdown_title_and_heading_paragraph_roles() {
+        let document = document_with_blocks(vec![
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Title,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "Document title".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: None,
+            }),
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Heading { level: 3 },
+                inlines: vec![Inline::Text(TextRun {
+                    text: "Section heading".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: None,
+            }),
+        ]);
+
+        let markdown = render_markdown_document(&document);
+
+        assert!(markdown.contains("# Document title"));
+        assert!(markdown.contains("### Section heading"));
+    }
+
+    #[test]
+    fn renders_numbered_heading_roles_as_headings() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Heading { level: 2 },
+            inlines: vec![Inline::Text(TextRun {
+                text: "Numbered heading".to_string(),
+                style: TextStyle::default(),
+                style_ref: None,
+            })],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: Some(ListInfo {
+                kind: ListKind::Ordered,
+                level: 0,
+                marker: None,
+                number: Some(3),
+            }),
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+        let markdown = render_markdown_document(&document);
+
+        assert!(html.contains("<h2 class=\"heading\">3. Numbered heading</h2>"));
+        assert!(markdown.contains("## 3. Numbered heading"));
     }
 
     #[test]
@@ -2608,6 +2735,20 @@ mod tests {
         let markdown = render_markdown_document_with_asset_prefix(&document, &asset_prefix);
 
         assert!(markdown.contains("![로고](sample_assets/images/image-1.png)"));
+    }
+
+    #[test]
+    fn renders_markdown_image_caption_from_document_ir() {
+        let mut document = document_with_image_block("image-1", Some("logo"), Some("png"));
+        if let Block::Image(image) = &mut document.sections[0].blocks[0] {
+            image.caption = Some("Image caption".to_string());
+        }
+
+        let asset_prefix = image_asset_public_prefix(Path::new("sample.md"));
+        let markdown = render_markdown_document_with_asset_prefix(&document, &asset_prefix);
+
+        assert!(markdown.contains("![logo](sample_assets/images/image-1.png)"));
+        assert!(markdown.contains("Image caption"));
     }
 
     #[test]

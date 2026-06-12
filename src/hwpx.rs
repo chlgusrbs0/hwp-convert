@@ -7,7 +7,7 @@ use zip::ZipArchive;
 
 use crate::ir::{
     Block, Document, Metadata, NoteStore, Paragraph, ResourceStore, Section, StyleSheet, Table,
-    TableCell, TableCellStyle, TableRow, TableStyle,
+    TableCell, TableCellStyle, TableRow, TableStyle, UnknownBlock,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -425,31 +425,67 @@ fn extract_blocks_from_paragraph_xml(paragraph_xml: &str) -> Vec<Block> {
     let mut cursor = 0usize;
 
     while let Some(tag) = next_xml_tag(paragraph_xml, cursor) {
-        if tag.name != "tbl" || tag.is_closing {
+        if tag.is_closing {
             cursor = tag.end;
             continue;
         }
 
-        let Some(table_end) = find_matching_element_end(paragraph_xml, &tag) else {
+        let Some(object_kind) = hwpx_fallback_object_kind(tag.name) else {
             cursor = tag.end;
             continue;
+        };
+
+        let object_end = if tag.is_self_closing {
+            tag.end
+        } else {
+            let Some(end) = find_matching_element_end(paragraph_xml, &tag) else {
+                cursor = tag.end;
+                continue;
+            };
+            end
         };
 
         push_paragraph_text_fragment_as_block(
             &mut blocks,
             &paragraph_xml[fragment_start..tag.start],
         );
-        let table_xml = &paragraph_xml[tag.start..table_end];
-        if let Some(table) = extract_table_from_xml(table_xml) {
-            blocks.push(Block::Table(table));
+
+        if object_kind == "table" {
+            let table_xml = &paragraph_xml[tag.start..object_end];
+            if let Some(table) = extract_table_from_xml(table_xml) {
+                blocks.push(Block::Table(table));
+            }
+        } else {
+            blocks.push(Block::Unknown(UnknownBlock {
+                kind: format!("hwpx:{object_kind}"),
+                fallback_text: Some(format!("[{object_kind}]")),
+                message: Some(
+                    "HWPX section XML fallback preserved an unsupported object placeholder."
+                        .to_string(),
+                ),
+                source: Some("Contents/section*.xml".to_string()),
+            }));
         }
 
-        fragment_start = table_end;
-        cursor = table_end;
+        fragment_start = object_end;
+        cursor = object_end;
     }
 
     push_paragraph_text_fragment_as_block(&mut blocks, &paragraph_xml[fragment_start..]);
     blocks
+}
+
+fn hwpx_fallback_object_kind(tag_name: &str) -> Option<&'static str> {
+    match tag_name {
+        "tbl" => Some("table"),
+        "pic" => Some("image"),
+        "equation" => Some("equation"),
+        "line" | "rect" | "ellipse" | "arc" | "polygon" | "curve" | "connectLine" | "container" => {
+            Some("shape")
+        }
+        "chart" => Some("chart"),
+        _ => None,
+    }
 }
 
 fn push_paragraph_text_fragment_as_block(blocks: &mut Vec<Block>, xml: &str) {
@@ -486,8 +522,8 @@ fn extract_text_from_xml_fragment(xml: &str) -> String {
             Some("t") if !is_closing && !is_self_closing => {
                 text_depth += 1;
             }
-            Some("lineBreak") if text_depth > 0 => current.push('\n'),
-            Some("tab") if text_depth > 0 => current.push('\t'),
+            Some("lineBreak") => current.push('\n'),
+            Some("tab") => current.push('\t'),
             _ => {}
         }
 
@@ -720,8 +756,8 @@ fn extract_section_xml_paragraphs(xml: &str) -> Vec<String> {
             Some("t") if paragraph_depth > 0 && !is_closing && !is_self_closing => {
                 text_depth += 1;
             }
-            Some("lineBreak") if paragraph_depth > 0 && text_depth > 0 => current.push('\n'),
-            Some("tab") if paragraph_depth > 0 && text_depth > 0 => current.push('\t'),
+            Some("lineBreak") if paragraph_depth > 0 => current.push('\n'),
+            Some("tab") if paragraph_depth > 0 => current.push('\t'),
             _ => {}
         }
 
@@ -943,6 +979,26 @@ mod tests {
     }
 
     #[test]
+    fn extracts_paragraph_breaks_and_tabs_outside_text_nodes() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p><hp:run><hp:t>line one</hp:t><hp:lineBreak/><hp:t>line two</hp:t></hp:run></hp:p>
+              <hp:p><hp:run><hp:t>tab one</hp:t><hp:tab width="4000"/><hp:t>tab two</hp:t></hp:run></hp:p>
+            </hs:sec>
+        "#;
+
+        let paragraphs = extract_section_xml_paragraphs(xml);
+
+        assert_eq!(
+            paragraphs,
+            vec![
+                "line one\nline two".to_string(),
+                "tab one\ttab two".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn extracts_simple_table_from_section_xml_blocks() {
         let xml = r#"
             <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
@@ -1012,6 +1068,50 @@ mod tests {
             },
             other => panic!("expected paragraph block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn preserves_hwpx_fallback_object_placeholders() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p>
+                <hp:run><hp:t>before image</hp:t></hp:run>
+                <hp:ctrl><hp:pic><hp:imgRect/></hp:pic></hp:ctrl>
+                <hp:run><hp:t>after image</hp:t></hp:run>
+                <hp:ctrl><hp:equation/></hp:ctrl>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        let blocks = extract_section_xml_blocks(xml);
+
+        assert_eq!(blocks.len(), 4);
+        match &blocks[0] {
+            Block::Paragraph(paragraph) => match &paragraph.inlines[0] {
+                crate::ir::Inline::Text(run) => assert_eq!(run.text, "before image"),
+                other => panic!("expected text inline, got {other:?}"),
+            },
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+        assert!(matches!(
+            &blocks[1],
+            Block::Unknown(unknown)
+                if unknown.kind == "hwpx:image"
+                    && unknown.fallback_text.as_deref() == Some("[image]")
+        ));
+        match &blocks[2] {
+            Block::Paragraph(paragraph) => match &paragraph.inlines[0] {
+                crate::ir::Inline::Text(run) => assert_eq!(run.text, "after image"),
+                other => panic!("expected text inline, got {other:?}"),
+            },
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+        assert!(matches!(
+            &blocks[3],
+            Block::Unknown(unknown)
+                if unknown.kind == "hwpx:equation"
+                    && unknown.fallback_text.as_deref() == Some("[equation]")
+        ));
     }
 
     #[test]

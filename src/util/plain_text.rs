@@ -103,7 +103,16 @@ pub(crate) fn image_to_plain_text(image: &Image) -> String {
         .filter(|alt| !alt.is_empty())
         .unwrap_or_else(|| image.resource_id.as_str());
 
-    format!("[\u{C774}\u{BBF8}\u{C9C0}: {label}]")
+    let mut text = format!("[\u{C774}\u{BBF8}\u{C9C0}: {label}]");
+    if let Some(caption) = image
+        .caption
+        .as_deref()
+        .filter(|caption| !caption.is_empty())
+    {
+        text.push('\n');
+        text.push_str(caption);
+    }
+    text
 }
 
 pub(crate) fn equation_to_plain_text(equation: &Equation) -> String {
@@ -318,7 +327,7 @@ mod tests {
                 blocks: vec![Block::Image(Image {
                     resource_id: ResourceId("image-1".to_string()),
                     alt: Some("logo".to_string()),
-                    caption: None,
+                    caption: Some("company mark".to_string()),
                     width: None,
                     height: None,
                 })],
@@ -327,7 +336,10 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(to_plain_text(&document), "[\u{C774}\u{BBF8}\u{C9C0}: logo]");
+        assert_eq!(
+            to_plain_text(&document),
+            "[\u{C774}\u{BBF8}\u{C9C0}: logo]\ncompany mark"
+        );
     }
 
     #[test]

@@ -205,12 +205,25 @@ impl<'a> BridgeContext<'a> {
         }
 
         Some(Paragraph {
-            role: ParagraphRole::Body,
+            role: self.map_paragraph_role(paragraph),
             inlines,
             style: self.map_paragraph_style_by_id(paragraph.para_shape_id),
             style_ref: self.paragraph_style_ref(paragraph),
             list: self.map_list_info(paragraph, outline_numbering_id, list_state),
         })
+    }
+
+    fn map_paragraph_role(&self, paragraph: &RhwpParagraph) -> ParagraphRole {
+        let Some(para_shape) = self.lookup_para_shape(paragraph.para_shape_id) else {
+            return ParagraphRole::Body;
+        };
+
+        match para_shape.head_type {
+            RhwpHeadType::Outline => ParagraphRole::Heading {
+                level: para_shape.para_level.saturating_add(1).clamp(1, 6),
+            },
+            _ => ParagraphRole::Body,
+        }
     }
 
     fn map_paragraph_inlines(&mut self, paragraph: &RhwpParagraph) -> Vec<Inline> {
@@ -726,12 +739,18 @@ impl<'a> BridgeContext<'a> {
             Control::Picture(picture) => vec![self.map_picture_block(picture)],
             Control::Equation(equation) => vec![Block::Equation(self.map_equation(equation))],
             Control::Shape(shape) => self.map_shape_blocks(shape),
-            Control::Unknown(control) => vec![Block::Unknown(crate::ir::UnknownBlock {
-                kind: format!("control:{:#010x}", control.ctrl_id),
-                fallback_text: None,
-                message: Some("rhwp exposed this control as Unknown".to_string()),
-                source: Some("rhwp".to_string()),
-            })],
+            Control::Unknown(control) => {
+                let kind = format!("control:{:#010x}", control.ctrl_id);
+                self.add_warning_once(&format!(
+                    "rhwp exposed unknown control `{kind}`; hwp-convert preserved an unknown block placeholder.",
+                ));
+                vec![Block::Unknown(crate::ir::UnknownBlock {
+                    kind,
+                    fallback_text: None,
+                    message: Some("rhwp exposed this control as Unknown".to_string()),
+                    source: Some("rhwp".to_string()),
+                })]
+            }
             Control::AutoNumber(number) => self
                 .warn_unsupported_control_with_fallback(
                     "auto_number",
@@ -885,8 +904,15 @@ impl<'a> BridgeContext<'a> {
 
     fn map_table(&mut self, table: &RhwpTable) -> Table {
         let mut rows = Vec::new();
+        let row_count = table
+            .cells
+            .iter()
+            .map(|cell| cell.row.saturating_add(1))
+            .max()
+            .unwrap_or(table.row_count)
+            .max(table.row_count);
 
-        for row_index in 0..table.row_count {
+        for row_index in 0..row_count {
             let mut row_cells = table
                 .cells
                 .iter()
@@ -1303,6 +1329,13 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn lookup_border_fill(&self, border_fill_id: u16) -> Option<&RhwpBorderFill> {
+        if let Some(border_fill) = border_fill_id
+            .checked_sub(1)
+            .and_then(|index| self.source.doc_info.border_fills.get(index as usize))
+        {
+            return Some(border_fill);
+        }
+
         self.source
             .doc_info
             .border_fills
@@ -1773,7 +1806,7 @@ mod tests {
         Bookmark as RhwpBookmark, CharOverlap as RhwpCharOverlap, Field as RhwpField,
         FormObject as RhwpFormObject, FormType as RhwpFormType, HiddenComment as RhwpHiddenComment,
         NewNumber as RhwpNewNumber, PageHide as RhwpPageHide, PageNumberPos as RhwpPageNumberPos,
-        Ruby as RhwpRuby,
+        Ruby as RhwpRuby, UnknownControl as RhwpUnknownControl,
     };
     use rhwp::model::document::{
         DocInfo, Document as RhwpDocument, Section as RhwpSection, SectionDef as RhwpSectionDef,
@@ -1852,6 +1885,47 @@ mod tests {
                     }
                     other => panic!("expected paragraph block, got {other:?}"),
                 }
+            }
+            other => panic!("expected table block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recovers_table_rows_from_cell_coordinates_when_row_count_is_missing() {
+        let table = RhwpTable {
+            row_count: 0,
+            col_count: 1,
+            cells: vec![RhwpCell {
+                row: 1,
+                col: 0,
+                row_span: 1,
+                col_span: 1,
+                paragraphs: vec![RhwpParagraph {
+                    text: "late row".to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Table(Box::new(table))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Table(table) => {
+                assert_eq!(table.rows.len(), 2);
+                assert!(table.rows[0].cells.is_empty());
+                assert_eq!(table.rows[1].cells.len(), 1);
             }
             other => panic!("expected table block, got {other:?}"),
         }
@@ -2508,6 +2582,74 @@ mod tests {
     }
 
     #[test]
+    fn maps_border_fill_ids_as_one_based_when_present() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                border_fills: vec![
+                    RhwpBorderFill {
+                        fill: Fill {
+                            fill_type: FillType::Solid,
+                            solid: Some(SolidFill {
+                                background_color: 0x000000FF,
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    RhwpBorderFill {
+                        fill: Fill {
+                            fill_type: FillType::Solid,
+                            solid: Some(SolidFill {
+                                background_color: 0x0000FF00,
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Table(Box::new(RhwpTable {
+                        row_count: 1,
+                        col_count: 1,
+                        border_fill_id: 1,
+                        cells: vec![RhwpCell {
+                            row: 0,
+                            col: 0,
+                            border_fill_id: 1,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Table(table) => {
+                let expected = Some(Color {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                });
+                assert_eq!(table.style.background_color, expected);
+                assert_eq!(table.rows[0].cells[0].style.background_color, expected);
+            }
+            other => panic!("expected table block, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn maps_hyperlink_field_ranges_into_link_inlines() {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
@@ -2878,6 +3020,34 @@ mod tests {
     }
 
     #[test]
+    fn preserves_unknown_controls_as_unknown_blocks_and_warnings() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Unknown(RhwpUnknownControl {
+                        ctrl_id: 0x1234ABCD,
+                    })],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert!(matches!(
+            &bridged.sections[0].blocks[0],
+            Block::Unknown(unknown) if unknown.kind == "control:0x1234abcd"
+        ));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unknown control `control:0x1234abcd`")
+        }));
+    }
+
+    #[test]
     fn maps_footnotes_into_note_store_and_inline_refs() {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
@@ -3052,6 +3222,51 @@ mod tests {
                     paragraph.list.as_ref().and_then(|list| list.number),
                     Some(2)
                 );
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_outline_paragraph_role_from_para_shape() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                para_shapes: vec![RhwpParaShape {
+                    head_type: RhwpHeadType::Outline,
+                    para_level: 2,
+                    numbering_id: 1,
+                    ..Default::default()
+                }],
+                numberings: vec![RhwpNumbering {
+                    level_start_numbers: [1, 1, 1, 1, 1, 1, 1],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "outline".to_string(),
+                    para_shape_id: 0,
+                    ..Default::default()
+                }],
+                section_def: RhwpSectionDef {
+                    outline_numbering_id: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => {
+                assert_eq!(paragraph.role, ParagraphRole::Heading { level: 3 });
+                assert!(matches!(
+                    paragraph.list.as_ref().map(|list| &list.kind),
+                    Some(ListKind::Ordered)
+                ));
             }
             other => panic!("expected paragraph block, got {other:?}"),
         }
