@@ -10,7 +10,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
-        uses: dtolnay/rust-toolchain-action@stable
+        # dtolnay/rust-toolchain-action appears unavailable in the runner environment;
+        # use the maintained actions-rs/toolchain action instead.
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
