@@ -995,8 +995,8 @@ impl<'a> BridgeContext<'a> {
         }
 
         TableCell {
-            row_span: cell.row_span as u32,
-            col_span: cell.col_span as u32,
+            row_span: (cell.row_span as u32).max(1),
+            col_span: (cell.col_span as u32).max(1),
             blocks,
             style: TableCellStyle {
                 background_color: self.border_fill_background_color(cell.border_fill_id),
