@@ -541,10 +541,11 @@ fn first_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> O
     let mut cursor = 0usize;
 
     while let Some(tag) = next_xml_tag(xml, cursor) {
-        if tag.name == tag_name && !tag.is_closing {
-            if let Some(value) = xml_attribute_value(tag.raw, attribute_name) {
-                return value.parse().ok();
-            }
+        if tag.name == tag_name
+            && !tag.is_closing
+            && let Some(value) = xml_attribute_value(tag.raw, attribute_name)
+        {
+            return value.parse().ok();
         }
         cursor = tag.end;
     }
@@ -693,9 +694,7 @@ fn is_section_xml_path(path: &str) -> bool {
 }
 
 fn section_xml_index(path: &str) -> Option<u32> {
-    let Some(file_name) = path.strip_prefix("Contents/section") else {
-        return None;
-    };
+    let file_name = path.strip_prefix("Contents/section")?;
 
     let index = file_name.strip_suffix(".xml")?;
     if index.is_empty() || !index.chars().all(|ch| ch.is_ascii_digit()) {
@@ -728,17 +727,15 @@ fn extract_section_xml_paragraphs(xml: &str) -> Vec<String> {
         let is_self_closing = is_xml_self_closing_tag(tag);
 
         match tag_name {
-            Some("p") if is_closing => {
-                if paragraph_depth > 0 {
-                    paragraph_depth -= 1;
-                    if paragraph_depth == 0 {
-                        let paragraph = current.trim_end().to_string();
-                        if !paragraph.is_empty() {
-                            paragraphs.push(paragraph);
-                        }
-                        current.clear();
-                        text_depth = 0;
+            Some("p") if is_closing && paragraph_depth > 0 => {
+                paragraph_depth -= 1;
+                if paragraph_depth == 0 {
+                    let paragraph = current.trim_end().to_string();
+                    if !paragraph.is_empty() {
+                        paragraphs.push(paragraph);
                     }
+                    current.clear();
+                    text_depth = 0;
                 }
             }
             Some("p") if !is_closing => {

@@ -12,7 +12,7 @@ When rHWP parsing fails or maps a HWPX file to an empty semantic document, hwp-c
 
 ## Current unsupported control warning behavior
 
-`src/bridge/rhwp.rs` now records `ConversionWarning` entries for known rHWP controls that are exposed by the parser but not yet semantically mapped by hwp-convert. This currently covers controls such as auto number, new number, page number position, bookmark, page hide, hidden comment, non-hyperlink fields, and form objects. Non-hyperlink fields with a recoverable command string are also appended as `UnknownInline` fallback text when exact inline placement is unavailable.
+`src/bridge/rhwp.rs` now records `ConversionWarning` entries for known rHWP controls that are exposed by the parser but not yet fully semantically mapped by hwp-convert. This currently covers controls such as auto number, new number, page number position, page hide, hidden comment, non-hyperlink fields, and form objects. Bookmark controls with names are preserved as `Anchor` inlines, and non-hyperlink fields with a recoverable command string are appended as `UnknownInline` fallback text when exact inline placement is unavailable.
 
 Visible unsupported controls with recoverable text, currently ruby and character overlap, are also preserved as `UnknownBlock` fallback text so exporters leave an explicit trace instead of dropping them silently.
 
@@ -25,7 +25,7 @@ Section/column definition controls and controls already handled through another 
 HTML export now groups consecutive list paragraphs into semantic `<ul>` or `<ol>` elements and writes ordered list numbers as `<li value="...">` when available. Nested list fidelity is still limited because the current `Document IR` stores list metadata per paragraph rather than as explicit list containers.
 
 이 문서는 현재 `hwp-convert` 코드 기준의 bridge/exporter 지원 상태를 정리한다.
-새 Document IR 버전을 제안하는 문서가 아니며, 현재 `IR_VERSION`은 그대로 `6`이다.
+새 Document IR 버전을 제안하는 문서가 아니며, 현재 `IR_VERSION`은 `7`이다.
 
 판정 기준:
 

@@ -239,38 +239,19 @@ impl<'a> BridgeContext<'a> {
         Some(text[..byte_idx].chars().count())
     }
 
-    fn sanitize_anchor_id(name: &str) -> String {
-        let mut id = String::new();
-        for ch in name.chars() {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == ':' || ch == '.' {
-                id.push(ch);
-            } else if ch.is_whitespace() {
-                id.push('-');
-            }
-        }
-        if id.is_empty() {
-            "bookmark".to_string()
-        } else {
-            id
-        }
-    }
-
     fn build_inlines_with_control_placement(
         &mut self,
         paragraph: &RhwpParagraph,
         chars: &[char],
         segments: &[TextSegment],
     ) -> Vec<Inline> {
-        // Determine which controls are already consumed by field ranges
-        let mut consumed_control_idxs = paragraph
-            .field_ranges
+        let link_ranges = self.collect_link_ranges(paragraph, chars, segments);
+        let consumed_control_idxs = link_ranges
             .iter()
-            .map(|r| r.control_idx)
+            .map(|range| range.control_idx)
             .collect::<std::collections::BTreeSet<usize>>();
 
-        // Build insertion candidates: (optional char_pos, order, Inline, appended_if_no_pos)
-        #[allow(clippy::type_complexity)]
-        let mut insertions: Vec<(Option<usize>, usize, Inline, bool)> = Vec::new();
+        let mut insertions = Vec::new();
 
         for (index, control) in paragraph.controls.iter().enumerate() {
             if consumed_control_idxs.contains(&index) {
@@ -279,7 +260,8 @@ impl<'a> BridgeContext<'a> {
 
             match control {
                 Control::Footnote(note) => {
-                    let note_id = self.store_note(NoteKind::Footnote, note.number, &note.paragraphs);
+                    let note_id =
+                        self.store_note(NoteKind::Footnote, note.number, &note.paragraphs);
                     let inline = Inline::FootnoteRef { note_id };
                     // try to match the footnote number in paragraph text
                     let preferred = if note.number > 0 {
@@ -288,7 +270,11 @@ impl<'a> BridgeContext<'a> {
                     } else {
                         None
                     };
-                    insertions.push((preferred, index, inline, true));
+                    insertions.push(InlineInsertion {
+                        position: preferred,
+                        control_idx: index,
+                        inline,
+                    });
                 }
                 Control::Endnote(note) => {
                     let note_id = self.store_note(NoteKind::Endnote, note.number, &note.paragraphs);
@@ -299,13 +285,21 @@ impl<'a> BridgeContext<'a> {
                     } else {
                         None
                     };
-                    insertions.push((preferred, index, inline, true));
+                    insertions.push(InlineInsertion {
+                        position: preferred,
+                        control_idx: index,
+                        inline,
+                    });
                 }
                 Control::Hyperlink(link) => {
                     if let Some(mapped) = self.map_trailing_hyperlink(link) {
                         let preferred = non_empty_string(&link.text)
                             .and_then(|t| self.find_substring_char_index(&paragraph.text, &t));
-                        insertions.push((preferred, index, Inline::Link(mapped), true));
+                        insertions.push(InlineInsertion {
+                            position: preferred,
+                            control_idx: index,
+                            inline: Inline::Link(mapped),
+                        });
                     }
                 }
                 Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
@@ -320,7 +314,11 @@ impl<'a> BridgeContext<'a> {
                         } else {
                             None
                         };
-                        insertions.push((preferred, index, Inline::Link(mapped), true));
+                        insertions.push(InlineInsertion {
+                            position: preferred,
+                            control_idx: index,
+                            inline: Inline::Link(mapped),
+                        });
                     }
                 }
                 Control::Field(field) => {
@@ -336,61 +334,57 @@ impl<'a> BridgeContext<'a> {
                             } else {
                                 None
                             };
-                            insertions.push((preferred, index, inline, true));
+                            insertions.push(InlineInsertion {
+                                position: preferred,
+                                control_idx: index,
+                                inline,
+                            });
                         }
-                    } else {
-                        if let Some(inline) = self.map_field_fallback(field) {
-                            let fallback_text = match &inline {
-                                Inline::Unknown(u) => u.fallback_text.clone().unwrap_or_default(),
-                                _ => String::new(),
-                            };
-                            let preferred = if !fallback_text.is_empty() {
-                                self.find_substring_char_index(&paragraph.text, &fallback_text)
-                            } else {
-                                None
-                            };
-                            insertions.push((preferred, index, inline, true));
-                        }
-                    }
-                }
-                Control::Bookmark(bookmark) => {
-                    if let Some(mapped) = self.map_bookmark_fallback(bookmark) {
-                        // Prefer matching the explicit bookmark name when available
-                        let preferred = non_empty_string(&bookmark.name)
-                            .and_then(|name| self.find_substring_char_index(&paragraph.text, &name));
-                        let fallback_text = match &mapped {
+                    } else if let Some(inline) = self.map_field_fallback(field) {
+                        let fallback_text = match &inline {
                             Inline::Unknown(u) => u.fallback_text.clone().unwrap_or_default(),
                             _ => String::new(),
                         };
-                        let preferred = preferred.or_else(|| {
-                            if !fallback_text.is_empty() {
-                                self.find_substring_char_index(&paragraph.text, &fallback_text)
-                            } else {
-                                None
-                            }
+                        let preferred = if !fallback_text.is_empty() {
+                            self.find_substring_char_index(&paragraph.text, &fallback_text)
+                        } else {
+                            None
+                        };
+                        insertions.push(InlineInsertion {
+                            position: preferred,
+                            control_idx: index,
+                            inline,
                         });
-                        insertions.push((preferred, index, mapped, true));
+                    }
+                }
+                Control::Bookmark(bookmark) => {
+                    if let Some(mapped) = self.map_bookmark_anchor(bookmark) {
+                        // Prefer matching the explicit bookmark name when available
+                        let preferred = non_empty_string(&bookmark.name).and_then(|name| {
+                            self.find_substring_char_index(&paragraph.text, &name)
+                        });
+                        insertions.push(InlineInsertion {
+                            position: preferred,
+                            control_idx: index,
+                            inline: mapped,
+                        });
                     }
                 }
                 _ => {}
             }
         }
 
-        // Sort insertions by position (None go last), then by original order
-        insertions.sort_by(|a, b| match (a.0, b.0) {
-            (Some(pa), Some(pb)) => pa.cmp(&pb).then(a.1.cmp(&b.1)),
+        // Sort insertions by position (None go last), then by original order.
+        insertions.sort_by(|a, b| match (a.position, b.position) {
+            (Some(pa), Some(pb)) => pa.cmp(&pb).then(a.control_idx.cmp(&b.control_idx)),
             (Some(_), None) => std::cmp::Ordering::Less,
             (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.1.cmp(&b.1),
+            (None, None) => a.control_idx.cmp(&b.control_idx),
         });
 
         // Build final inlines by walking paragraph text and field ranges, inserting candidates.
         let mut final_inlines = Vec::new();
-
-        let mut ranges = paragraph.field_ranges.clone();
-        ranges.sort_by_key(|r| (r.start_char_idx, r.end_char_idx));
-        let mut range_iter = ranges.into_iter().peekable();
-
+        let mut range_iter = link_ranges.into_iter().peekable();
         let mut insertion_iter = insertions.into_iter().peekable();
 
         let mut cursor = 0usize;
@@ -398,23 +392,27 @@ impl<'a> BridgeContext<'a> {
 
         while cursor < text_len {
             // If next insertion is at or before cursor, emit it now
-            if let Some((Some(pos), _order, inline, _appended)) = insertion_iter.peek() {
-                if *pos <= cursor {
-                    let (_pos, _order, inline, _appended) = insertion_iter.next().unwrap();
-                    final_inlines.push(inline);
-                    continue;
-                }
+            if let Some(insertion) = insertion_iter.peek()
+                && insertion.position.is_some_and(|pos| pos <= cursor)
+            {
+                let insertion = insertion_iter
+                    .next()
+                    .expect("peeked insertion should exist");
+                final_inlines.push(insertion.inline);
+                continue;
             }
 
             // If next range starts at or before cursor, emit the link block
             if let Some(next_range) = range_iter.peek() {
-                if next_range.start_char_idx <= cursor && next_range.end_char_idx > cursor {
-                    // emit link for this range
-                    let range = range_iter.next().unwrap();
-                    if let Some(link) = self.map_link_from_field_range(paragraph, &range, chars, segments) {
-                        final_inlines.push(Inline::Link(link));
-                    }
-                    cursor = range.end_char_idx.min(text_len);
+                if next_range.start <= cursor && next_range.end > cursor {
+                    let range = range_iter.next().expect("peeked range should exist");
+                    final_inlines.push(Inline::Link(range.link));
+                    cursor = range.end.min(text_len);
+                    continue;
+                }
+
+                if next_range.end <= cursor {
+                    range_iter.next();
                     continue;
                 }
             }
@@ -422,13 +420,22 @@ impl<'a> BridgeContext<'a> {
             // Determine next boundary: next insertion pos or next range start or text end
             let next_insertion_pos = insertion_iter
                 .peek()
-                .and_then(|(pos, _order, _inline, _)| *pos)
+                .and_then(|insertion| insertion.position)
                 .unwrap_or(text_len);
-            let next_range_start = range_iter.peek().map(|r| r.start_char_idx).unwrap_or(text_len);
+            let next_range_start = range_iter
+                .peek()
+                .map(|range| range.start)
+                .unwrap_or(text_len);
             let next_boundary = next_insertion_pos.min(next_range_start).min(text_len);
 
             if cursor < next_boundary {
-                self.push_text_range_as_inlines(&mut final_inlines, chars, segments, cursor, next_boundary);
+                self.push_text_range_as_inlines(
+                    &mut final_inlines,
+                    chars,
+                    segments,
+                    cursor,
+                    next_boundary,
+                );
                 cursor = next_boundary;
                 continue;
             }
@@ -438,12 +445,14 @@ impl<'a> BridgeContext<'a> {
         }
 
         // After walking text, append any remaining insertions (those with None pos)
-        while let Some((_pos, _order, inline, _appended)) = insertion_iter.next() {
-            final_inlines.push(inline);
+        for insertion in insertion_iter {
+            final_inlines.push(insertion.inline);
         }
 
-        // Emit warnings for appended kinds when they had no preferred position
-        if final_inlines.iter().any(|i| matches!(i, Inline::FootnoteRef { .. } | Inline::EndnoteRef { .. })) {
+        if final_inlines
+            .iter()
+            .any(|i| matches!(i, Inline::FootnoteRef { .. } | Inline::EndnoteRef { .. }))
+        {
             self.add_warning_once(
                 "rhwp footnote/endnote controls do not expose exact inline positions, so note references were appended after paragraph text.",
             );
@@ -455,22 +464,62 @@ impl<'a> BridgeContext<'a> {
             );
         }
 
-        if final_inlines.iter().any(|i| matches!(i, Inline::Unknown(_))) {
+        if final_inlines
+            .iter()
+            .any(|i| matches!(i, Inline::Unknown(_)))
+        {
             self.add_warning_once(
                 "Some rhwp click-here fields or other field controls could not be placed at exact inline positions, so bridge fallback appended their fallback text after paragraph text.",
             );
         }
 
-        if final_inlines.iter().any(|i| matches!(i, Inline::Anchor { .. } | Inline::Unknown(_))) {
+        if final_inlines
+            .iter()
+            .any(|i| matches!(i, Inline::Anchor { .. }))
+        {
             self.add_warning_once(
-                "rhwp exposed unsupported control `bookmark`; hwp-convert preserved bookmark names as unknown inline fallback text when available.",
+                "rhwp exposed bookmark controls; hwp-convert preserved bookmark names as anchor inlines when available.",
             );
         }
 
         final_inlines
     }
 
-    
+    fn collect_link_ranges(
+        &self,
+        paragraph: &RhwpParagraph,
+        chars: &[char],
+        segments: &[TextSegment],
+    ) -> Vec<LinkRange> {
+        let mut ranges = paragraph.field_ranges.clone();
+        ranges.sort_by_key(|range| (range.start_char_idx, range.end_char_idx));
+
+        let mut link_ranges = Vec::new();
+        let mut cursor = 0usize;
+        for range in ranges {
+            if range.start_char_idx >= range.end_char_idx
+                || range.end_char_idx > chars.len()
+                || range.start_char_idx < cursor
+            {
+                continue;
+            }
+
+            let Some(link) = self.map_link_from_field_range(paragraph, &range, chars, segments)
+            else {
+                continue;
+            };
+
+            cursor = range.end_char_idx;
+            link_ranges.push(LinkRange {
+                start: range.start_char_idx,
+                end: range.end_char_idx,
+                control_idx: range.control_idx,
+                link,
+            });
+        }
+
+        link_ranges
+    }
 
     fn build_text_segments(&self, paragraph: &RhwpParagraph, text_len: usize) -> Vec<TextSegment> {
         if text_len == 0 {
@@ -595,45 +644,6 @@ impl<'a> BridgeContext<'a> {
         blocks
     }
 
-    fn push_text_and_link_inlines(
-        &mut self,
-        paragraph: &RhwpParagraph,
-        chars: &[char],
-        segments: &[TextSegment],
-        consumed_controls: &mut Vec<usize>,
-        inlines: &mut Vec<Inline>,
-    ) {
-        if chars.is_empty() {
-            return;
-        }
-
-        let mut ranges = paragraph.field_ranges.clone();
-        ranges.sort_by_key(|range| (range.start_char_idx, range.end_char_idx));
-
-        let mut cursor = 0usize;
-
-        for range in ranges {
-            if range.start_char_idx >= range.end_char_idx
-                || range.end_char_idx > chars.len()
-                || range.start_char_idx < cursor
-            {
-                continue;
-            }
-
-            let Some(link) = self.map_link_from_field_range(paragraph, &range, chars, segments)
-            else {
-                continue;
-            };
-
-            self.push_text_range_as_inlines(inlines, chars, segments, cursor, range.start_char_idx);
-            consumed_controls.push(range.control_idx);
-            inlines.push(Inline::Link(link));
-            cursor = range.end_char_idx;
-        }
-
-        self.push_text_range_as_inlines(inlines, chars, segments, cursor, chars.len());
-    }
-
     fn push_text_range_as_inlines(
         &self,
         inlines: &mut Vec<Inline>,
@@ -699,98 +709,19 @@ impl<'a> BridgeContext<'a> {
 
         // Determine a sensible title where available from the control
         let title = match control {
-            Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
-                field
-                    .guide_text()
-                    .map(|s| s.to_string())
-                    .or_else(|| field.field_name().map(|s| s.to_string()))
-            }
+            Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => field
+                .guide_text()
+                .map(|s| s.to_string())
+                .or_else(|| field.field_name().map(|s| s.to_string())),
             Control::Hyperlink(link) => non_empty_string(&link.text),
             _ => None,
         };
 
-        Some(Link { url, title, inlines: link_inlines })
-    }
-
-    fn append_control_reference_inlines(
-        &mut self,
-        paragraph: &RhwpParagraph,
-        consumed_controls: &[usize],
-        inlines: &mut Vec<Inline>,
-    ) {
-        let mut appended_note_ref = false;
-        let mut appended_link_ref = false;
-        let mut appended_field_fallback = false;
-        let mut encountered_bookmark = false;
-
-        for (index, control) in paragraph.controls.iter().enumerate() {
-            if consumed_controls.contains(&index) {
-                continue;
-            }
-
-            match control {
-                Control::Footnote(note) => {
-                    let note_id =
-                        self.store_note(NoteKind::Footnote, note.number, &note.paragraphs);
-                    inlines.push(Inline::FootnoteRef { note_id });
-                    appended_note_ref = true;
-                }
-                Control::Endnote(note) => {
-                    let note_id = self.store_note(NoteKind::Endnote, note.number, &note.paragraphs);
-                    inlines.push(Inline::EndnoteRef { note_id });
-                    appended_note_ref = true;
-                }
-                Control::Hyperlink(link) => {
-                    if let Some(mapped) = self.map_trailing_hyperlink(link) {
-                        inlines.push(Inline::Link(mapped));
-                        appended_link_ref = true;
-                    }
-                }
-                Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
-                    if let Some(mapped) = self.map_field_hyperlink(field) {
-                        inlines.push(Inline::Link(mapped));
-                        appended_link_ref = true;
-                    }
-                }
-                Control::Field(field) => {
-                    if let Some(mapped) = self.map_field_fallback(field) {
-                        inlines.push(mapped);
-                        appended_field_fallback = true;
-                    }
-                }
-                Control::Bookmark(bookmark) => {
-                    encountered_bookmark = true;
-                    if let Some(mapped) = self.map_bookmark_fallback(bookmark) {
-                        inlines.push(mapped);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if appended_note_ref {
-            self.add_warning_once(
-                "rhwp footnote/endnote controls do not expose exact inline positions, so note references were appended after paragraph text.",
-            );
-        }
-
-        if appended_link_ref {
-            self.add_warning_once(
-                "Some rhwp hyperlinks could not be placed at exact inline positions, so bridge fallback appended them after paragraph text when possible.",
-            );
-        }
-
-        if appended_field_fallback {
-            self.add_warning_once(
-                "Some rhwp click-here fields or other field controls could not be placed at exact inline positions, so bridge fallback appended their fallback text after paragraph text.",
-            );
-        }
-
-        if encountered_bookmark {
-            self.add_warning_once(
-                "rhwp exposed unsupported control `bookmark`; hwp-convert preserved bookmark names as unknown inline fallback text when available.",
-            );
-        }
+        Some(Link {
+            url,
+            title,
+            inlines: link_inlines,
+        })
     }
 
     fn map_trailing_hyperlink(&self, link: &RhwpHyperlink) -> Option<Link> {
@@ -842,11 +773,15 @@ impl<'a> BridgeContext<'a> {
             .or_else(|| field.field_name())
             .map(|s| s.to_string());
 
-        Some(Link { url, title, inlines: vec![Inline::Text(TextRun {
-            text: label,
-            style: TextStyle::default(),
-            style_ref: None,
-        })] })
+        Some(Link {
+            url,
+            title,
+            inlines: vec![Inline::Text(TextRun {
+                text: label,
+                style: TextStyle::default(),
+                style_ref: None,
+            })],
+        })
     }
 
     fn map_field_fallback(&self, field: &RhwpField) -> Option<Inline> {
@@ -868,18 +803,12 @@ impl<'a> BridgeContext<'a> {
         }))
     }
 
-    fn map_bookmark_fallback(&self, bookmark: &RhwpBookmark) -> Option<Inline> {
+    fn map_bookmark_anchor(&self, bookmark: &RhwpBookmark) -> Option<Inline> {
         let name = non_empty_string(&bookmark.name)?;
 
-        Some(Inline::Unknown(UnknownInline {
-            kind: "bookmark".to_string(),
-            fallback_text: Some(format!("[bookmark: {name}]")),
-            message: Some(
-                "Bookmark name was preserved as fallback text because Document IR does not yet model anchors."
-                    .to_string(),
-            ),
-            source: Some("rhwp".to_string()),
-        }))
+        Some(Inline::Anchor {
+            id: crate::util::plain_text::sanitize_anchor_id(&name),
+        })
     }
 
     fn store_note(&mut self, kind: NoteKind, number: u16, paragraphs: &[RhwpParagraph]) -> NoteId {
@@ -963,17 +892,14 @@ impl<'a> BridgeContext<'a> {
                     kind: ListKind::Ordered,
                     level,
                     marker: None,
-                    number: numbering_id
-                        .checked_sub(1)
-                        .map(|_| {
-                            list_state.advance(
-                                numbering_id,
-                                level,
-                                paragraph.numbering_restart,
-                                numbering,
-                            )
-                        })
-                        .flatten(),
+                    number: numbering_id.checked_sub(1).and_then(|_| {
+                        list_state.advance(
+                            numbering_id,
+                            level,
+                            paragraph.numbering_restart,
+                            numbering,
+                        )
+                    }),
                 })
             }
         }
@@ -1461,15 +1387,14 @@ impl<'a> BridgeContext<'a> {
     ) -> Option<&rhwp::model::bin_data::BinDataContent> {
         let list_index = bin_data_id.checked_sub(1)? as usize;
 
-        if let Some(bin_data) = self.source.doc_info.bin_data_list.get(list_index) {
-            if let Some(content) = self
+        if let Some(bin_data) = self.source.doc_info.bin_data_list.get(list_index)
+            && let Some(content) = self
                 .source
                 .bin_data_content
                 .iter()
                 .find(|content| content.id == bin_data.storage_id)
-            {
-                return Some(content);
-            }
+        {
+            return Some(content);
         }
 
         self.source
@@ -1619,6 +1544,19 @@ struct TextSegment {
     end: usize,
     style: TextStyle,
     style_ref: Option<TextStyleId>,
+}
+
+struct LinkRange {
+    start: usize,
+    end: usize,
+    control_idx: usize,
+    link: Link,
+}
+
+struct InlineInsertion {
+    position: Option<usize>,
+    control_idx: usize,
+    inline: Inline,
 }
 
 #[derive(Default)]
@@ -1908,10 +1846,6 @@ fn column_def_has_layout_effect(column_def: &RhwpColumnDef) -> bool {
         || column_def.separator_type != 0
         || column_def.separator_width != 0
         || column_def.separator_color != 0
-        || (multi_column && !column_def.same_width)
-        || (multi_column && column_def.spacing != 0)
-        || (multi_column && column_def.direction != RhwpColumnDirection::LeftToRight)
-        || (multi_column && column_def.column_type != RhwpColumnType::Normal)
 }
 
 fn column_type_name(column_type: RhwpColumnType) -> &'static str {
@@ -3252,9 +3186,12 @@ mod tests {
 
         let bridged = BridgeContext::new(&document).into_document();
 
-        assert!(bridged.warnings.iter().any(|warning| {
-            warning.code == WarningCode::Unknown && warning.message.contains("`bookmark`")
-        }));
+        assert!(
+            bridged
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("bookmark controls"))
+        );
         assert!(bridged.warnings.iter().any(|warning| {
             warning.code == WarningCode::Unknown && warning.message.contains("`field:date`")
         }));
@@ -3263,9 +3200,7 @@ mod tests {
                 assert!(paragraph.inlines.iter().any(|inline| {
                     matches!(
                         inline,
-                        Inline::Unknown(unknown)
-                            if unknown.kind == "bookmark"
-                                && unknown.fallback_text.as_deref() == Some("[bookmark: target]")
+                        Inline::Anchor { id } if id == "target"
                     )
                 }));
 
@@ -3276,6 +3211,50 @@ mod tests {
                     }
                     other => panic!("expected date field unknown inline, got {other:?}"),
                 }
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn preserves_text_inside_non_link_field_ranges() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "date text".to_string(),
+                    field_ranges: vec![FieldRange {
+                        control_idx: 0,
+                        start_char_idx: 0,
+                        end_char_idx: 4,
+                    }],
+                    controls: vec![Control::Field(RhwpField {
+                        field_type: RhwpFieldType::Date,
+                        command: "date".to_string(),
+                        ..Default::default()
+                    })],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => {
+                let text = crate::util::plain_text::blocks_to_plain_text(&[Block::Paragraph(
+                    paragraph.clone(),
+                )]);
+                assert!(text.contains("date text"));
+                assert!(paragraph.inlines.iter().any(|inline| {
+                    matches!(
+                        inline,
+                        Inline::Unknown(unknown)
+                            if unknown.kind == "field:date"
+                                && unknown.fallback_text.as_deref() == Some("[field:date: date]")
+                    )
+                }));
             }
             other => panic!("expected paragraph block, got {other:?}"),
         }

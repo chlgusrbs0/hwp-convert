@@ -518,7 +518,7 @@ fn render_placeholder_svg(svg: &mut String, bounds: &RenderBounds, label: &str, 
     let height = sanitized_size(bounds.height, 1.0);
     let label_x = x + 4.0;
     let label_y = y + 4.0;
-    let label_font_size = (height.min(18.0)).max(10.0);
+    let label_font_size = height.clamp(10.0, 18.0);
 
     write!(
         svg,

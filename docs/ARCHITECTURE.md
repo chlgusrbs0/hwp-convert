@@ -155,7 +155,7 @@ Asset output policy today is intentionally narrow: HTML and Markdown exports wri
 ## Limits and TODO
 
 - A real fixture corpus is still needed for broader regression coverage.
-- Anchored controls and read-order fidelity still need work.
+- Bookmark anchors now have semantic IR coverage, but read-order fidelity still needs real-sample validation.
 - Renderer-first image output is still placeholder-based. Image bytes are not embedded into SVG.
 - Renderer-first table output is still placeholder-oriented and does not implement full table visual fidelity.
 - PDF output is a separate future stage.

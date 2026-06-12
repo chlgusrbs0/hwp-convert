@@ -141,10 +141,10 @@ pub fn write_manifest(
         )
     })?;
 
-    if let Some(parent) = manifest_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = manifest_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
     }
 
     fs::write(manifest_path, content)?;
@@ -772,15 +772,14 @@ fn render_html_blocks(
     let mut index = 0;
 
     while index < blocks.len() {
-        if let Block::Paragraph(paragraph) = &blocks[index] {
-            if matches!(paragraph.role, ParagraphRole::Body) {
-                if let Some(list) = &paragraph.list {
-                    let (list_html, next_index) = render_html_list(blocks, index, list);
-                    html.push_str(&list_html);
-                    index = next_index;
-                    continue;
-                }
-            }
+        if let Block::Paragraph(paragraph) = &blocks[index]
+            && matches!(paragraph.role, ParagraphRole::Body)
+            && let Some(list) = &paragraph.list
+        {
+            let (list_html, next_index) = render_html_list(blocks, index, list);
+            html.push_str(&list_html);
+            index = next_index;
+            continue;
         }
 
         html.push_str(&render_html_block(
@@ -911,7 +910,8 @@ fn render_html_inlines(inlines: &[Inline]) -> String {
                 content.push_str(&render_html_note_ref(note_id, NoteKind::Endnote));
             }
             Inline::Anchor { id } => {
-                content.push_str(&format!("<a id=\"{}\"></a>", escape_html(id)));
+                let id = crate::util::plain_text::sanitize_anchor_id(id);
+                content.push_str(&format!("<a id=\"{}\"></a>", escape_html(&id)));
             }
             Inline::Unknown(unknown) => {
                 content.push_str(&render_html_fallback_text(&unknown_inline_display_text(
@@ -1543,7 +1543,7 @@ fn write_image_assets(
     }
 
     let asset_dir = &image_assets.output_dir;
-    fs::create_dir_all(&asset_dir)?;
+    fs::create_dir_all(asset_dir)?;
 
     for image in image_resources {
         let file_name = resource_file_name(resources, &image.id);
@@ -1609,10 +1609,10 @@ fn sanitize_asset_path_segment(segment: &str) -> String {
 }
 
 fn render_markdown_equation(equation: &Equation) -> String {
-    if equation.kind == EquationKind::Latex {
-        if let Some(content) = &equation.content {
-            return format!("$${content}$$");
-        }
+    if equation.kind == EquationKind::Latex
+        && let Some(content) = &equation.content
+    {
+        return format!("$${content}$$");
     }
 
     render_markdown_text(&equation_display_text(equation))
@@ -1629,7 +1629,11 @@ fn render_markdown_chart(chart: &Chart) -> String {
 fn render_markdown_link(link: &Link) -> String {
     let label = render_markdown_link_label(&link.inlines);
     let url = escape_markdown_link_destination(&link.url);
-    let title = link.title.as_deref().map(|t| escape_markdown_title(t)).unwrap_or_default();
+    let title = link
+        .title
+        .as_deref()
+        .map(escape_markdown_title)
+        .unwrap_or_default();
 
     if title.is_empty() {
         format!("[{label}]({url})")
@@ -2467,7 +2471,7 @@ mod tests {
 
         let content = serde_json::to_string_pretty(&document).unwrap();
 
-        assert!(content.contains("\"ir_version\": 6"));
+        assert!(content.contains(&format!("\"ir_version\": {IR_VERSION}")));
         assert!(content.contains("\"sections\": ["));
         assert!(content.contains("\"resources\": {"));
         assert!(content.contains("\"styles\": {"));

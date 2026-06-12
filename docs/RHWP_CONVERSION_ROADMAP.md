@@ -13,7 +13,7 @@
 - 현재 저장소 HEAD: `17652d5`
 - `Cargo.toml`의 rHWP 의존성: `https://github.com/edwardkim/rhwp`, `rev = "bea635bd708274a51ae3f557a71b07683d7c2454"`
 - 현재 crate 버전: `0.1.0`
-- 현재 `IR_VERSION`: `6`
+- 현재 `IR_VERSION`: `7`
 - 현재 입력 형식: `.hwp`, `.hwpx`
 - 현재 CLI 출력 형식: `txt`, `json`, `markdown`, `html`, `svg`
 - PDF 출력은 아직 구현되어 있지 않다.
@@ -538,4 +538,3 @@ tests/fixtures/<fixture_name>/
 - HTML export now renders consecutive list paragraphs as semantic `<ul>`/`<ol>` lists, and manifest success entries include recoverable conversion warnings.
 
 The older roadmap body below remains useful for direction, but treat this addendum and `docs/COMPATIBILITY.md` as the fresher source for current implementation state.
-

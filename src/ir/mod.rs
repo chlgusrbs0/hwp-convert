@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// This is independent from the internal roadmap milestones (`v0`-`v7`).
 /// Bump this when JSON compatibility changes, such as new enum variants,
 /// new required fields, or other output-shape changes.
-pub const IR_VERSION: u16 = 6;
+pub const IR_VERSION: u16 = 7;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {

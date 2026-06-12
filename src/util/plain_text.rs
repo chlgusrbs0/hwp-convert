@@ -267,9 +267,7 @@ fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
             Inline::EndnoteRef { note_id } => {
                 text.push_str(&format!("{ENDNOTE_REF_LABEL}: {}]", note_id.as_str()));
             }
-            Inline::Anchor { id } => {
-                text.push_str(&format!("[bookmark: {}]", id));
-            }
+            Inline::Anchor { .. } => {}
             Inline::Unknown(unknown) => {
                 text.push_str(&unknown_inline_to_plain_text(unknown));
             }
@@ -282,7 +280,7 @@ fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
 pub fn sanitize_anchor_id(name: &str) -> String {
     let mut id = String::new();
     for ch in name.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == ':' || ch == '.' {
+        if ch.is_alphanumeric() || ch == '-' || ch == '_' || ch == ':' || ch == '.' {
             id.push(ch);
         } else if ch.is_whitespace() {
             id.push('-');
@@ -412,6 +410,44 @@ mod tests {
             to_plain_text(&document),
             "3. link [\u{AC01}\u{C8FC}: fn-1] [\u{BBF8}\u{C8FC}: en-1]"
         );
+    }
+
+    #[test]
+    fn omits_anchor_inlines_from_plain_text() {
+        let document = Document {
+            sections: vec![crate::ir::Section {
+                blocks: vec![Block::Paragraph(Paragraph {
+                    role: ParagraphRole::Body,
+                    inlines: vec![
+                        Inline::Text(TextRun {
+                            text: "before".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        }),
+                        Inline::Anchor {
+                            id: "bookmark-1".to_string(),
+                        },
+                        Inline::Text(TextRun {
+                            text: " after".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        }),
+                    ],
+                    style: ParagraphStyle::default(),
+                    style_ref: None,
+                    list: None,
+                })],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(to_plain_text(&document), "before after");
+    }
+
+    #[test]
+    fn sanitizes_anchor_ids_without_dropping_korean_text() {
+        assert_eq!(super::sanitize_anchor_id("본문 앵커 1"), "본문-앵커-1");
     }
 
     #[test]
