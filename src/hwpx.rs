@@ -403,22 +403,25 @@ impl HwpxFallbackContext {
         tag: &str,
         note_xml: &str,
     ) -> Inline {
-        let note_id = self.next_note_id(
-            match note_kind {
-                NoteKind::Footnote => "footnote",
-                NoteKind::Endnote => "endnote",
-            },
-            decoded_xml_attribute_value(tag, "instId")
-                .or_else(|| decoded_xml_attribute_value(tag, "id")),
-        );
-        let blocks = extract_section_xml_blocks(note_xml, self);
-        let note = Note {
-            id: note_id.clone(),
-            kind: note_kind.clone(),
-            blocks,
+        let note_prefix = match note_kind {
+            NoteKind::Footnote => "footnote",
+            NoteKind::Endnote => "endnote",
         };
+        let mut requested_id = decoded_xml_attribute_value(tag, "instId")
+            .or_else(|| decoded_xml_attribute_value(tag, "id"));
+        let blocks = extract_section_xml_blocks(note_xml, self);
 
-        let _ = self.notes.insert_unique(note);
+        let note_id = loop {
+            let candidate = self.next_note_id(note_prefix, requested_id.take());
+            let note = Note {
+                id: candidate.clone(),
+                kind: note_kind.clone(),
+                blocks: blocks.clone(),
+            };
+            if self.notes.insert_unique(note).is_ok() {
+                break candidate;
+            }
+        };
 
         match note_kind {
             NoteKind::Footnote => Inline::FootnoteRef { note_id },
@@ -2957,6 +2960,41 @@ mod tests {
         assert_eq!(
             blocks_first_paragraph_text(&endnote.blocks),
             Some("endnote text".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn keeps_duplicate_hwpx_note_ids_without_dropping_notes() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[(
+            "Contents/section0.xml",
+            r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p>
+                    <hp:run><hp:t>a</hp:t></hp:run>
+                    <hp:ctrl><hp:footNote instId="3"><hp:subList><hp:p><hp:run><hp:t>first note</hp:t></hp:run></hp:p></hp:subList></hp:footNote></hp:ctrl>
+                    <hp:run><hp:t>b</hp:t></hp:run>
+                    <hp:ctrl><hp:footNote instId="3"><hp:subList><hp:p><hp:run><hp:t>second note</hp:t></hp:run></hp:p></hp:subList></hp:footNote></hp:ctrl>
+                  </hp:p>
+                </hs:sec>
+                "#,
+        )])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+
+        assert_eq!(document.notes.notes.len(), 2);
+        assert!(
+            document
+                .notes
+                .get(&NoteId("footnote-3".to_string()))
+                .is_some()
+        );
+        assert!(
+            document
+                .notes
+                .get(&NoteId("footnote-3-2".to_string()))
+                .is_some()
         );
 
         Ok(())
