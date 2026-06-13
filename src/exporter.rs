@@ -1316,7 +1316,7 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
     if let Some(caption) = &image.caption {
         return format!(
             "<figure>{tag}<figcaption>{}</figcaption></figure>\n",
-            escape_html(caption)
+            render_html_fallback_text(caption)
         );
     }
 
@@ -3007,6 +3007,18 @@ mod tests {
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
         assert!(html.contains("<img src=\"sample_assets/images/image-1.png\" alt=\"로고\""));
+    }
+
+    #[test]
+    fn renders_html_image_caption_line_breaks() {
+        let mut document = document_with_image_block("image-1", Some("logo"), Some("png"));
+        if let Block::Image(image) = &mut document.sections[0].blocks[0] {
+            image.caption = Some("first line\nsecond line".to_string());
+        }
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("<figcaption>first line<br />second line</figcaption>"));
     }
 
     #[test]
