@@ -2223,7 +2223,10 @@ fn finalize_hwpx_field(field: HwpxActiveField) -> Inline {
 }
 
 fn hwpx_bookmark_inline(tag: &str) -> Option<Inline> {
-    let name = decoded_xml_attribute_value(tag, "name")?;
+    let name = first_non_empty_string([
+        decoded_xml_attribute_value(tag, "name"),
+        decoded_xml_attribute_value(tag, "id"),
+    ])?;
     Some(Inline::Anchor {
         id: crate::util::plain_text::sanitize_anchor_id(&name),
     })
@@ -3525,6 +3528,24 @@ mod tests {
         assert!(matches!(
             &inlines[1],
             Inline::Text(run) if run.text == "target text"
+        ));
+    }
+
+    #[test]
+    fn preserves_hwpx_bookmark_id_as_anchor_inline() {
+        let xml = r#"
+            <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:ctrl><hp:bookmark id="bookmark-7"/></hp:ctrl>
+              <hp:run><hp:t>target text</hp:t></hp:run>
+            </hp:p>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let inlines = extract_inlines_from_xml_fragment(xml, &mut context);
+
+        assert!(matches!(
+            &inlines[0],
+            Inline::Anchor { id } if id == "bookmark-7"
         ));
     }
 
