@@ -213,21 +213,7 @@ pub(crate) fn read_section_text_from_archive(bytes: &[u8]) -> io::Result<Vec<Str
         )
     })?;
 
-    let mut section_paths = Vec::new();
-    for index in 0..archive.len() {
-        let entry = archive.by_index(index).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("HWPX 아카이브 항목을 읽을 수 없습니다: {error}"),
-            )
-        })?;
-        let name = entry.name().to_string();
-        if is_section_xml_path(&name) {
-            section_paths.push(name);
-        }
-    }
-    section_paths.sort_by_key(|path| section_xml_index(path).unwrap_or(u32::MAX));
-
+    let section_paths = collect_section_xml_paths(&mut archive)?;
     if section_paths.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -260,8 +246,7 @@ pub(crate) fn read_section_document_from_archive(bytes: &[u8]) -> io::Result<Doc
         )
     })?;
 
-    let mut section_paths = collect_section_xml_paths(&mut archive)?;
-    section_paths.sort_by_key(|path| section_xml_index(path).unwrap_or(u32::MAX));
+    let section_paths = collect_section_xml_paths(&mut archive)?;
 
     if section_paths.is_empty() {
         return Err(io::Error::new(
@@ -297,6 +282,16 @@ pub(crate) fn read_section_document_from_archive(bytes: &[u8]) -> io::Result<Doc
 fn collect_section_xml_paths<R: Read + io::Seek>(
     archive: &mut ZipArchive<R>,
 ) -> io::Result<Vec<String>> {
+    if let Ok(content_xml) = read_zip_text_entry(archive, "Contents/content.hpf") {
+        let section_paths = resolve_existing_section_paths(
+            archive,
+            extract_section_paths_from_content_hpf(&content_xml),
+        );
+        if !section_paths.is_empty() {
+            return Ok(section_paths);
+        }
+    }
+
     let mut section_paths = Vec::new();
 
     for index in 0..archive.len() {
@@ -311,8 +306,97 @@ fn collect_section_xml_paths<R: Read + io::Seek>(
             section_paths.push(name);
         }
     }
+    section_paths.sort_by_key(|path| section_xml_index(path).unwrap_or(u32::MAX));
 
     Ok(section_paths)
+}
+
+fn resolve_existing_section_paths<R: Read + io::Seek>(
+    archive: &mut ZipArchive<R>,
+    hrefs: Vec<String>,
+) -> Vec<String> {
+    let mut paths = Vec::new();
+
+    for href in hrefs {
+        for candidate in hwpx_section_entry_candidates(&href) {
+            if paths.contains(&candidate) {
+                break;
+            }
+            if archive.by_name(&candidate).is_ok() {
+                paths.push(candidate);
+                break;
+            }
+        }
+    }
+
+    paths
+}
+
+fn extract_section_paths_from_content_hpf(content_xml: &str) -> Vec<String> {
+    let mut manifest_items = Vec::new();
+    let mut spine_order = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(content_xml, cursor) {
+        if tag.name == "item" && !tag.is_closing {
+            let id = decoded_xml_attribute_value(tag.raw, "id");
+            let href = decoded_xml_attribute_value(tag.raw, "href");
+
+            if let (Some(id), Some(href)) = (id, href) {
+                let media_type = decoded_xml_attribute_value(tag.raw, "media-type");
+                manifest_items.push((id, href, media_type));
+            }
+        } else if tag.name == "itemref"
+            && !tag.is_closing
+            && let Some(idref) = decoded_xml_attribute_value(tag.raw, "idref")
+        {
+            spine_order.push(idref);
+        }
+
+        cursor = tag.end;
+    }
+
+    let mut section_paths = Vec::new();
+    for idref in spine_order {
+        if let Some((_, href, media_type)) = manifest_items.iter().find(|(id, _, _)| id == &idref)
+            && is_hwpx_section_manifest_item(href, media_type.as_deref())
+        {
+            section_paths.push(href.clone());
+        }
+    }
+
+    for (_, href, media_type) in manifest_items {
+        if is_hwpx_section_manifest_item(&href, media_type.as_deref())
+            && !section_paths.contains(&href)
+        {
+            section_paths.push(href);
+        }
+    }
+
+    section_paths
+}
+
+fn is_hwpx_section_manifest_item(href: &str, media_type: Option<&str>) -> bool {
+    let normalized = href.replace('\\', "/");
+
+    normalized.ends_with(".xml")
+        && normalized.contains("section")
+        && media_type.is_none_or(|media_type| media_type == "application/xml")
+}
+
+fn hwpx_section_entry_candidates(href: &str) -> Vec<String> {
+    let normalized = href
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_start_matches('/')
+        .to_string();
+    let mut candidates = vec![normalized.clone()];
+
+    if !normalized.starts_with("Contents/") {
+        candidates.push(format!("Contents/{normalized}"));
+    }
+
+    candidates
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -2826,6 +2910,104 @@ mod tests {
         assert_eq!(
             section_first_paragraph_text(&document.sections[1]),
             Some("second section".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn uses_content_hpf_spine_order_for_hwpx_sections() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                "Contents/content.hpf",
+                r#"
+                <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
+                  <opf:manifest>
+                    <opf:item id="section0" href="section0.xml" media-type="application/xml"/>
+                    <opf:item id="section1" href="section1.xml" media-type="application/xml"/>
+                  </opf:manifest>
+                  <opf:spine>
+                    <opf:itemref idref="section1"/>
+                    <opf:itemref idref="section0"/>
+                  </opf:spine>
+                </opf:package>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run><hp:t>first section</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+            (
+                "Contents/section1.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run><hp:t>second section</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+
+        assert_eq!(document.sections.len(), 2);
+        assert_eq!(
+            section_first_paragraph_text(&document.sections[0]),
+            Some("second section".to_string())
+        );
+        assert_eq!(
+            section_first_paragraph_text(&document.sections[1]),
+            Some("first section".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn text_fallback_uses_content_hpf_spine_order() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                "Contents/content.hpf",
+                r#"
+                <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
+                  <opf:manifest>
+                    <opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/>
+                    <opf:item id="section1" href="Contents/section1.xml" media-type="application/xml"/>
+                  </opf:manifest>
+                  <opf:spine>
+                    <opf:itemref idref="section1"/>
+                    <opf:itemref idref="section0"/>
+                  </opf:spine>
+                </opf:package>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run><hp:t>first section</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+            (
+                "Contents/section1.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run><hp:t>second section</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let fallback = read_text_fallback_from_archive(&bytes)?;
+
+        assert_eq!(fallback.source, HwpxTextFallbackSource::SectionXml);
+        assert_eq!(
+            fallback.paragraphs,
+            vec!["second section".to_string(), "first section".to_string()]
         );
 
         Ok(())
