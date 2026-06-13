@@ -7,11 +7,12 @@ use std::path::Path;
 use zip::ZipArchive;
 
 use crate::ir::{
-    Alignment, Block, Color, Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
-    Image, ImageResource, Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, Metadata, Note,
-    NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId,
-    ResourceStore, Section, Shape, ShapeKind, StyleSheet, Table, TableCell, TableCellStyle,
-    TableRow, TableStyle, TextRun, TextStyle, UnknownBlock, UnknownInline,
+    Alignment, Block, Chart, Color, Document, Equation, EquationKind, HeaderFooter,
+    HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt, LengthPx, Link, ListInfo,
+    ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
+    ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind, StyleSheet,
+    Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
+    UnknownInline,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -1257,6 +1258,11 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
             blocks.push(Block::Shape(extract_hwpx_shape_from_xml(
                 tag.name, object_xml, context,
             )));
+        } else if object_kind == Some("chart") {
+            let object_xml = &paragraph_xml[tag.start..object_end];
+            blocks.push(Block::Chart(extract_hwpx_chart_from_xml(
+                object_xml, context,
+            )));
         } else if let Some(object_kind) = object_kind {
             let object_xml = &paragraph_xml[tag.start..object_end];
             blocks.push(Block::Unknown(unknown_hwpx_object_block(
@@ -1391,6 +1397,27 @@ fn hwpx_shape_kind(tag_name: &str) -> ShapeKind {
         "ellipse" | "arc" => ShapeKind::Ellipse,
         "polygon" | "curve" => ShapeKind::Polygon,
         _ => ShapeKind::Unknown,
+    }
+}
+
+fn extract_hwpx_chart_from_xml(chart_xml: &str, context: &mut HwpxFallbackContext) -> Chart {
+    let title = first_non_empty_string([
+        decoded_first_xml_attribute_value(chart_xml, "title"),
+        decoded_first_xml_attribute_value(chart_xml, "name"),
+        decoded_first_xml_attribute_value(chart_xml, "description"),
+        decoded_first_xml_attribute_value(chart_xml, "desc"),
+        first_hwpx_child_element_text(chart_xml, &["title", "caption", "name"]),
+    ]);
+    let chart_text = non_empty_string_owned(inlines_to_plain_text(
+        &extract_inlines_from_xml_fragment(chart_xml, context),
+    ));
+    let fallback_text =
+        first_non_empty_string([title.clone(), chart_text]).or_else(|| Some("[chart]".to_string()));
+
+    Chart {
+        title,
+        fallback_text,
+        resource_id: None,
     }
 }
 
@@ -2750,6 +2777,7 @@ mod tests {
                 <hp:ctrl><hp:pic><hp:imgRect/></hp:pic></hp:ctrl>
                 <hp:run><hp:t>after image</hp:t></hp:run>
                 <hp:ctrl><hp:equation script="x + y"/></hp:ctrl>
+                <hp:ctrl><hp:chart title="Sales"/></hp:ctrl>
               </hp:p>
             </hs:sec>
         "#;
@@ -2757,7 +2785,7 @@ mod tests {
         let mut context = HwpxFallbackContext::default();
         let blocks = extract_section_xml_blocks(xml, &mut context);
 
-        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks.len(), 5);
         match &blocks[0] {
             Block::Paragraph(paragraph) => match &paragraph.inlines[0] {
                 crate::ir::Inline::Text(run) => assert_eq!(run.text, "before image"),
@@ -2784,6 +2812,12 @@ mod tests {
                 if equation.kind == EquationKind::PlainText
                     && equation.content.as_deref() == Some("x + y")
                     && equation.fallback_text.as_deref() == Some("x + y")
+        ));
+        assert!(matches!(
+            &blocks[4],
+            Block::Chart(chart)
+                if chart.title.as_deref() == Some("Sales")
+                    && chart.fallback_text.as_deref() == Some("Sales")
         ));
     }
 
