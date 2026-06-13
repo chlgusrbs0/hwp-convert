@@ -1297,10 +1297,38 @@ fn extract_hwpx_image_from_pic_xml(
             decoded_first_xml_attribute_value(pic_xml, "desc"),
             decoded_first_xml_attribute_value(pic_xml, "name"),
         ]),
-        caption: None,
+        caption: extract_hwpx_object_caption(pic_xml, context),
         width: hwpx_object_dimension_to_px(pic_xml, "width"),
         height: hwpx_object_dimension_to_px(pic_xml, "height"),
     })
+}
+
+fn extract_hwpx_object_caption(
+    object_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<String> {
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(object_xml, cursor) {
+        if !tag.is_closing && matches!(tag.name, "caption" | "cap") {
+            let caption_end = if tag.is_self_closing {
+                tag.end
+            } else {
+                find_matching_element_end(object_xml, &tag).unwrap_or(tag.end)
+            };
+            let caption_xml = &object_xml[tag.start..caption_end];
+            let blocks = extract_section_xml_blocks(caption_xml, context);
+            let text = crate::util::plain_text::blocks_to_plain_text(&blocks);
+
+            if let Some(caption) = non_empty_string_owned(text) {
+                return Some(caption);
+            }
+        }
+
+        cursor = tag.end;
+    }
+
+    None
 }
 
 fn hwpx_object_dimension_to_px(pic_xml: &str, attribute_name: &str) -> Option<LengthPx> {
@@ -2845,6 +2873,11 @@ mod tests {
                       <hp:pic description="sample image">
                         <hp:sz width="7500" height="3750"/>
                         <hp:img><hc:img binaryItemIDRef="image1"/></hp:img>
+                        <hp:caption>
+                          <hp:subList>
+                            <hp:p><hp:run><hp:t>image caption</hp:t></hp:run></hp:p>
+                          </hp:subList>
+                        </hp:caption>
                       </hp:pic>
                     </hp:ctrl>
                     <hp:run><hp:t>after image</hp:t></hp:run>
@@ -2864,6 +2897,7 @@ mod tests {
         };
         assert_eq!(image.resource_id.as_str(), "image1");
         assert_eq!(image.alt.as_deref(), Some("sample image"));
+        assert_eq!(image.caption.as_deref(), Some("image caption"));
         assert_eq!(image.width, Some(LengthPx(100.0)));
         assert_eq!(image.height, Some(LengthPx(50.0)));
 
