@@ -327,6 +327,11 @@ fn resolve_existing_section_paths<R: Read + io::Seek>(
                 paths.push(candidate);
                 break;
             }
+            if let Ok(Some(actual_path)) = find_archive_entry_case_insensitive(archive, &candidate)
+            {
+                paths.push(actual_path);
+                break;
+            }
         }
     }
 
@@ -819,6 +824,9 @@ fn read_hwpx_binary_entry<R: Read + io::Seek>(
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
+        if let Some(actual_path) = find_archive_entry_case_insensitive(archive, &path)? {
+            return read_zip_binary_entry(archive, &actual_path).map(Some);
+        }
     }
 
     Ok(None)
@@ -867,7 +875,10 @@ fn push_unique_candidate(candidates: &mut Vec<String>, candidate: String) {
 
 fn is_hwpx_image_manifest_item(href: &str, media_type: Option<&str>) -> bool {
     media_type.is_some_and(is_hwpx_image_media_type)
-        || href.replace('\\', "/").contains("BinData/")
+        || href
+            .replace('\\', "/")
+            .to_ascii_lowercase()
+            .contains("bindata/")
             && path_extension(href)
                 .as_deref()
                 .and_then(media_type_for_extension)
@@ -2677,6 +2688,32 @@ fn read_zip_binary_entry<R: Read + io::Seek>(
     Ok(bytes)
 }
 
+fn find_archive_entry_case_insensitive<R: Read + io::Seek>(
+    archive: &mut ZipArchive<R>,
+    path: &str,
+) -> io::Result<Option<String>> {
+    let Some(target) = normalize_hwpx_archive_path(path) else {
+        return Ok(None);
+    };
+
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("HWPX archive entry could not be read: {error}"),
+            )
+        })?;
+        let Some(entry_path) = normalize_hwpx_archive_path(entry.name()) else {
+            continue;
+        };
+        if entry_path.eq_ignore_ascii_case(&target) {
+            return Ok(Some(entry.name().to_string()));
+        }
+    }
+
+    Ok(None)
+}
+
 fn is_section_xml_path(path: &str) -> bool {
     section_xml_index(path).is_some()
 }
@@ -3876,6 +3913,53 @@ mod tests {
         match document.resources.get(&ResourceId("image1".to_string())) {
             Some(Resource::Image(resource)) => {
                 assert_eq!(resource.bytes, b"relative-png-bytes");
+            }
+            other => panic!("expected image resource, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_hwpx_image_resource_from_case_variant_archive_entry() -> Result<(), Box<dyn Error>>
+    {
+        let bytes = create_archive_bytes(&[
+            (
+                "Contents/content.hpf",
+                r#"
+                <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
+                  <opf:manifest>
+                    <opf:item id="image1" href="bindata/IMAGE1.PNG"/>
+                    <opf:item id="section0" href="section0.xml" media-type="application/xml"/>
+                  </opf:manifest>
+                  <opf:spine><opf:itemref idref="section0"/></opf:spine>
+                </opf:package>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+                        xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+                  <hp:p>
+                    <hp:ctrl>
+                      <hp:pic>
+                        <hp:img><hc:img binaryItemIDRef="image1"/></hp:img>
+                      </hp:pic>
+                    </hp:ctrl>
+                  </hp:p>
+                </hs:sec>
+                "#,
+            ),
+            ("BinData/Image1.PNG", "case-png-bytes"),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+
+        match document.resources.get(&ResourceId("image1".to_string())) {
+            Some(Resource::Image(resource)) => {
+                assert_eq!(resource.extension.as_deref(), Some("png"));
+                assert_eq!(resource.bytes, b"case-png-bytes");
             }
             other => panic!("expected image resource, got {other:?}"),
         }
