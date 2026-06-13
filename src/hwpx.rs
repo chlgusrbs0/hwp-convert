@@ -406,6 +406,7 @@ struct HwpxFallbackContext {
     text_styles: Vec<TextStyle>,
     font_faces: Vec<Vec<String>>,
     border_fill_backgrounds: Vec<Option<Color>>,
+    bullet_markers: BTreeMap<u32, String>,
     image_items: BTreeMap<String, HwpxImageItem>,
     image_resource_ids: BTreeMap<String, ResourceId>,
     resources: ResourceStore,
@@ -488,7 +489,12 @@ impl HwpxFallbackContext {
             Some(ListKind::Unordered) => Some(ListInfo {
                 kind: ListKind::Unordered,
                 level: style.level,
-                marker: Some("•".to_string()),
+                marker: Some(
+                    style
+                        .list_id
+                        .and_then(|list_id| self.bullet_markers.get(&list_id).cloned())
+                        .unwrap_or_else(|| "•".to_string()),
+                ),
                 number: None,
             }),
             _ => None,
@@ -675,6 +681,24 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                 context.border_fill_backgrounds[id] =
                     extract_hwpx_border_fill_background_color(border_xml);
                 cursor = border_end;
+            }
+            "bullet" => {
+                let Some(id) =
+                    xml_attribute_value(tag.raw, "id").and_then(|value| value.parse::<u32>().ok())
+                else {
+                    cursor = tag.end;
+                    continue;
+                };
+                let bullet_end = if tag.is_self_closing {
+                    tag.end
+                } else {
+                    find_matching_element_end(header_xml, &tag).unwrap_or(tag.end)
+                };
+                let bullet_xml = &header_xml[tag.start..bullet_end];
+                if let Some(marker) = extract_hwpx_bullet_marker(tag.raw, bullet_xml) {
+                    context.bullet_markers.insert(id, marker);
+                }
+                cursor = bullet_end;
             }
             "paraPr" => {
                 let Some(id) = xml_attribute_value(tag.raw, "id")
@@ -924,6 +948,16 @@ fn extract_hwpx_border_fill_background_color(border_fill_xml: &str) -> Option<Co
     }
 
     None
+}
+
+fn extract_hwpx_bullet_marker(bullet_tag: &str, bullet_xml: &str) -> Option<String> {
+    first_non_empty_string([
+        decoded_xml_attribute_value(bullet_tag, "char"),
+        decoded_xml_attribute_value(bullet_tag, "bulletChar"),
+        decoded_xml_attribute_value(bullet_tag, "marker"),
+        decoded_xml_attribute_value(bullet_tag, "symbol"),
+        first_hwpx_child_element_text(bullet_xml, &["char", "bulletChar", "marker", "symbol"]),
+    ])
 }
 
 fn font_ref_family(font_ref_tag: &str, font_faces: &[Vec<String>]) -> Option<String> {
@@ -3036,6 +3070,9 @@ mod tests {
                 r#"
                 <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
                   <hh:refList>
+                    <hh:bullets>
+                      <hh:bullet id="1" char="*"/>
+                    </hh:bullets>
                     <hh:paraProperties>
                       <hh:paraPr id="0"><hh:heading type="BULLET" idRef="1" level="0"/></hh:paraPr>
                       <hh:paraPr id="1"><hh:heading type="NUMBER" idRef="1" level="0"/></hh:paraPr>
@@ -3078,7 +3115,7 @@ mod tests {
                 .list
                 .as_ref()
                 .and_then(|list| list.marker.as_deref()),
-            Some("•")
+            Some("*")
         );
         assert_eq!(
             paragraphs[1]
