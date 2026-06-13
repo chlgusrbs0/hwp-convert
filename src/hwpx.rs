@@ -386,15 +386,16 @@ fn is_hwpx_section_manifest_item(href: &str, media_type: Option<&str>) -> bool {
 }
 
 fn hwpx_section_entry_candidates(href: &str) -> Vec<String> {
-    let normalized = href
-        .replace('\\', "/")
-        .trim_start_matches("./")
-        .trim_start_matches('/')
-        .to_string();
-    let mut candidates = vec![normalized.clone()];
+    let Some(normalized) = normalize_hwpx_archive_path(href) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    push_unique_candidate(&mut candidates, normalized.clone());
 
     if !normalized.starts_with("Contents/") {
-        candidates.push(format!("Contents/{normalized}"));
+        if let Some(candidate) = normalize_hwpx_archive_path(&format!("Contents/{normalized}")) {
+            push_unique_candidate(&mut candidates, candidate);
+        }
     }
 
     candidates
@@ -810,12 +811,44 @@ fn read_hwpx_binary_entry<R: Read + io::Seek>(
 }
 
 fn hwpx_binary_entry_candidates(href: &str) -> Vec<String> {
-    let normalized = href.replace('\\', "/");
-    let mut candidates = vec![normalized.clone()];
+    let Some(normalized) = normalize_hwpx_archive_path(href) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    push_unique_candidate(&mut candidates, normalized.clone());
     if !normalized.starts_with("Contents/") {
-        candidates.push(format!("Contents/{normalized}"));
+        if let Some(candidate) = normalize_hwpx_archive_path(&format!("Contents/{normalized}")) {
+            push_unique_candidate(&mut candidates, candidate);
+        }
     }
     candidates
+}
+
+fn normalize_hwpx_archive_path(path: &str) -> Option<String> {
+    let normalized = path.replace('\\', "/");
+    let mut parts = Vec::new();
+
+    for part in normalized.trim_start_matches('/').split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
+fn push_unique_candidate(candidates: &mut Vec<String>, candidate: String) {
+    if !candidates.contains(&candidate) {
+        candidates.push(candidate);
+    }
 }
 
 fn is_hwpx_image_manifest_item(href: &str, media_type: Option<&str>) -> bool {
@@ -3741,6 +3774,57 @@ mod tests {
                 assert_eq!(resource.media_type.as_deref(), Some("image/png"));
                 assert_eq!(resource.extension.as_deref(), Some("png"));
                 assert_eq!(resource.bytes, b"fake-png-bytes");
+            }
+            other => panic!("expected image resource, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_hwpx_image_resource_from_parent_relative_manifest_path()
+    -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                "Contents/content.hpf",
+                r#"
+                <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
+                  <opf:manifest>
+                    <opf:item id="image1" href="../BinData/image1.png" media-type="image/png"/>
+                    <opf:item id="section0" href="section0.xml" media-type="application/xml"/>
+                  </opf:manifest>
+                  <opf:spine><opf:itemref idref="section0"/></opf:spine>
+                </opf:package>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+                        xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+                  <hp:p>
+                    <hp:ctrl>
+                      <hp:pic>
+                        <hp:img><hc:img binaryItemIDRef="image1"/></hp:img>
+                      </hp:pic>
+                    </hp:ctrl>
+                  </hp:p>
+                </hs:sec>
+                "#,
+            ),
+            ("BinData/image1.png", "relative-png-bytes"),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+
+        let image = match &document.sections[0].blocks[0] {
+            Block::Image(image) => image,
+            other => panic!("expected image block, got {other:?}"),
+        };
+        assert_eq!(image.resource_id.as_str(), "image1");
+        match document.resources.get(&ResourceId("image1".to_string())) {
+            Some(Resource::Image(resource)) => {
+                assert_eq!(resource.bytes, b"relative-png-bytes");
             }
             other => panic!("expected image resource, got {other:?}"),
         }
