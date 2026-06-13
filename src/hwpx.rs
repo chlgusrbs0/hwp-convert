@@ -382,7 +382,12 @@ fn is_hwpx_section_manifest_item(href: &str, media_type: Option<&str>) -> bool {
 
     normalized.ends_with(".xml")
         && normalized.contains("section")
-        && media_type.is_none_or(|media_type| media_type == "application/xml")
+        && media_type.is_none_or(is_hwpx_xml_media_type)
+}
+
+fn is_hwpx_xml_media_type(media_type: &str) -> bool {
+    let base = media_type_base(media_type);
+    base.eq_ignore_ascii_case("application/xml") || base.eq_ignore_ascii_case("text/xml")
 }
 
 fn hwpx_section_entry_candidates(href: &str) -> Vec<String> {
@@ -852,12 +857,22 @@ fn push_unique_candidate(candidates: &mut Vec<String>, candidate: String) {
 }
 
 fn is_hwpx_image_manifest_item(href: &str, media_type: Option<&str>) -> bool {
-    media_type.is_some_and(|media_type| media_type.starts_with("image/"))
+    media_type.is_some_and(is_hwpx_image_media_type)
         || href.replace('\\', "/").contains("BinData/")
             && path_extension(href)
                 .as_deref()
                 .and_then(media_type_for_extension)
                 .is_some_and(|media_type| media_type.starts_with("image/"))
+}
+
+fn is_hwpx_image_media_type(media_type: &str) -> bool {
+    media_type_base(media_type)
+        .to_ascii_lowercase()
+        .starts_with("image/")
+}
+
+fn media_type_base(media_type: &str) -> &str {
+    media_type.split(';').next().unwrap_or(media_type).trim()
 }
 
 fn hwpx_image_item_lookup_keys(value: &str) -> Vec<String> {
@@ -3833,6 +3848,18 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_hwpx_manifest_media_type_parameters() {
+        assert!(is_hwpx_section_manifest_item(
+            "Contents/section0.xml",
+            Some("text/xml; charset=utf-8")
+        ));
+        assert!(is_hwpx_image_manifest_item(
+            "Media/image.bin",
+            Some("IMAGE/PNG; charset=binary")
+        ));
+    }
+
+    #[test]
     fn preserves_section_boundaries_in_hwpx_section_fallback() -> Result<(), Box<dyn Error>> {
         let bytes = create_archive_bytes(&[
             (
@@ -3876,8 +3903,8 @@ mod tests {
                 r#"
                 <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
                   <opf:manifest>
-                    <opf:item id="section0" href="section0.xml" media-type="application/xml"/>
-                    <opf:item id="section1" href="section1.xml" media-type="application/xml"/>
+                    <opf:item id="section0" href="section0.xml" media-type="application/xml; charset=utf-8"/>
+                    <opf:item id="section1" href="section1.xml" media-type="TEXT/XML"/>
                   </opf:manifest>
                   <opf:spine>
                     <opf:itemref idref="section1"/>
