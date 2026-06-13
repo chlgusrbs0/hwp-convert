@@ -1184,11 +1184,23 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
         .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
 
     TableCell {
-        row_span: first_xml_attribute_u32(cell_xml, "cellSpan", "rowSpan").unwrap_or(1),
-        col_span: first_xml_attribute_u32(cell_xml, "cellSpan", "colSpan").unwrap_or(1),
+        row_span: hwpx_table_cell_span(cell_xml, &["rowSpan", "rowspan"]),
+        col_span: hwpx_table_cell_span(cell_xml, &["colSpan", "colspan"]),
         blocks: extract_section_xml_blocks(cell_xml, context),
         style: TableCellStyle { background_color },
     }
+}
+
+fn hwpx_table_cell_span(cell_xml: &str, attribute_names: &[&str]) -> u32 {
+    attribute_names
+        .iter()
+        .find_map(|attribute_name| first_xml_attribute_u32(cell_xml, "cellSpan", attribute_name))
+        .or_else(|| {
+            attribute_names
+                .iter()
+                .find_map(|attribute_name| first_xml_attribute_u32(cell_xml, "tc", attribute_name))
+        })
+        .unwrap_or(1)
 }
 
 fn extract_blocks_from_paragraph_xml_with_metadata(
@@ -2731,6 +2743,27 @@ mod tests {
             },
             other => panic!("expected paragraph block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn extracts_table_cell_span_from_tc_attributes() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tr>
+                <hp:tc rowSpan="3" colSpan="2">
+                  <hp:subList>
+                    <hp:p><hp:run><hp:t>merged cell</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+
+        assert_eq!(table.rows[0].cells[0].row_span, 3);
+        assert_eq!(table.rows[0].cells[0].col_span, 2);
     }
 
     #[test]
