@@ -1647,8 +1647,8 @@ fn extract_hwpx_image_from_pic_xml(
             decoded_first_xml_attribute_value(pic_xml, "name"),
         ]),
         caption: extract_hwpx_object_caption(pic_xml, context),
-        width: hwpx_object_dimension_to_px(pic_xml, "width"),
-        height: hwpx_object_dimension_to_px(pic_xml, "height"),
+        width: hwpx_object_dimension_to_px(pic_xml, &["width", "w"]),
+        height: hwpx_object_dimension_to_px(pic_xml, &["height", "h"]),
     })
 }
 
@@ -1728,8 +1728,10 @@ fn hwpx_caption_placement(caption_tag: &str) -> HwpxCaptionPlacement {
     }
 }
 
-fn hwpx_object_dimension_to_px(pic_xml: &str, attribute_name: &str) -> Option<LengthPx> {
-    first_xml_attribute_value(pic_xml, attribute_name)
+fn hwpx_object_dimension_to_px(pic_xml: &str, attribute_names: &[&str]) -> Option<LengthPx> {
+    attribute_names
+        .iter()
+        .find_map(|attribute_name| first_xml_attribute_value(pic_xml, attribute_name))
         .and_then(|value| value.parse::<u32>().ok())
         .and_then(hwp_units_to_px_option)
 }
@@ -3827,7 +3829,7 @@ mod tests {
                     <hp:run><hp:t>before image</hp:t></hp:run>
                     <hp:ctrl>
                       <hp:pic description="sample image">
-                        <hp:sz width="7500" height="3750"/>
+                        <hp:sz w="7500" h="3750"/>
                         <hp:img><hc:img binaryItemIDRef="image1"/></hp:img>
                         <hp:caption>
                           <hp:subList>
