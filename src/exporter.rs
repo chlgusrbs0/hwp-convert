@@ -1643,7 +1643,7 @@ fn render_markdown_link(link: &Link) -> String {
 }
 
 fn escape_markdown_title(text: &str) -> String {
-    let escaped = text.replace('"', "\\\"").replace('\\', "\\\\");
+    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{}\"", escaped)
 }
 
@@ -3136,6 +3136,31 @@ mod tests {
         let markdown = render_markdown_document(&document);
 
         assert!(markdown.contains("[Docs](https://example.com/docs)"));
+    }
+
+    #[test]
+    fn escapes_markdown_link_title_quotes_and_backslashes() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![Inline::Link(Link {
+                url: "https://example.com/docs".to_string(),
+                title: Some(r#"quoted "title" \ path"#.to_string()),
+                inlines: vec![Inline::Text(TextRun {
+                    text: "Docs".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+            })],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: None,
+        })]);
+
+        let markdown = render_markdown_document(&document);
+
+        assert!(
+            markdown.contains(r#"[Docs](https://example.com/docs "quoted \"title\" \\ path")"#)
+        );
     }
 
     #[test]
