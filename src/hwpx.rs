@@ -2444,7 +2444,7 @@ fn is_xml_attribute_boundary(tag: &str, attr_start: usize, attr_end: usize) -> b
         || tag
             .as_bytes()
             .get(attr_start.saturating_sub(1))
-            .is_some_and(|byte| byte.is_ascii_whitespace());
+            .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b':');
     let after_ok = tag
         .as_bytes()
         .get(attr_end)
@@ -3162,6 +3162,30 @@ mod tests {
                 assert_eq!(link.url, "https://example.com/direct");
                 assert_eq!(link.title.as_deref(), Some("Direct Example"));
                 assert_eq!(inlines_to_plain_text(&link.inlines), "Direct Site");
+            }
+            other => panic!("expected link inline, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recovers_hwpx_namespaced_hyperlink_attribute() {
+        let xml = r#"
+            <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+                  xmlns:xlink="http://www.w3.org/1999/xlink">
+              <hp:hyperlink xlink:href="https://example.com/namespaced">
+                <hp:run><hp:t>Namespaced Site</hp:t></hp:run>
+              </hp:hyperlink>
+            </hp:p>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let inlines = extract_inlines_from_xml_fragment(xml, &mut context);
+
+        assert_eq!(inlines.len(), 1);
+        match &inlines[0] {
+            Inline::Link(link) => {
+                assert_eq!(link.url, "https://example.com/namespaced");
+                assert_eq!(inlines_to_plain_text(&link.inlines), "Namespaced Site");
             }
             other => panic!("expected link inline, got {other:?}"),
         }
