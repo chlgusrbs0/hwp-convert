@@ -641,9 +641,17 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                     continue;
                 };
                 let fontface_xml = &header_xml[tag.start..fontface_end];
-                context
-                    .font_faces
-                    .push(extract_hwpx_font_face(fontface_xml));
+                let fonts = extract_hwpx_font_face(fontface_xml);
+                if let Some(group_index) =
+                    xml_attribute_value(tag.raw, "lang").and_then(hwpx_font_face_group_index)
+                {
+                    if context.font_faces.len() <= group_index {
+                        context.font_faces.resize_with(group_index + 1, Vec::new);
+                    }
+                    context.font_faces[group_index] = fonts;
+                } else {
+                    context.font_faces.push(fonts);
+                }
                 cursor = fontface_end;
             }
             "charPr" => {
@@ -943,6 +951,19 @@ fn extract_hwpx_font_face(fontface_xml: &str) -> Vec<String> {
     }
 
     fonts
+}
+
+fn hwpx_font_face_group_index(lang: &str) -> Option<usize> {
+    match lang.trim().to_ascii_uppercase().as_str() {
+        "HANGUL" => Some(0),
+        "LATIN" => Some(1),
+        "HANJA" => Some(2),
+        "JAPANESE" => Some(3),
+        "OTHER" => Some(4),
+        "SYMBOL" => Some(5),
+        "USER" => Some(6),
+        _ => None,
+    }
 }
 
 fn extract_hwpx_text_style(
@@ -3613,8 +3634,9 @@ mod tests {
                 HEADER_XML_PATH,
                 r##"
                 <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
-                  <hh:refList>
-                    <hh:fontfaces>
+                    <hh:refList>
+                      <hh:fontfaces>
+                      <hh:fontface lang="LATIN"><hh:font id="0" face="Wrong Latin"/></hh:fontface>
                       <hh:fontface lang="HANGUL"><hh:font id="0" face="Noto Sans KR"/></hh:fontface>
                     </hh:fontfaces>
                     <hh:charProperties>
