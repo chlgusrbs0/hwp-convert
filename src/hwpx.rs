@@ -379,9 +379,10 @@ fn extract_section_paths_from_content_hpf(content_xml: &str) -> Vec<String> {
 
 fn is_hwpx_section_manifest_item(href: &str, media_type: Option<&str>) -> bool {
     let normalized = href.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
 
-    normalized.ends_with(".xml")
-        && normalized.contains("section")
+    lower.ends_with(".xml")
+        && lower.contains("section")
         && media_type.is_none_or(is_hwpx_xml_media_type)
 }
 
@@ -2681,7 +2682,9 @@ fn is_section_xml_path(path: &str) -> bool {
 }
 
 fn section_xml_index(path: &str) -> Option<u32> {
-    let file_name = path.strip_prefix("Contents/section")?;
+    let normalized = path.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    let file_name = lower.strip_prefix("contents/section")?;
 
     let index = file_name.strip_suffix(".xml")?;
     if index.is_empty() || !index.chars().all(|ch| ch.is_ascii_digit()) {
@@ -3886,6 +3889,10 @@ mod tests {
             "Contents/section0.xml",
             Some("text/xml; charset=utf-8")
         ));
+        assert!(is_hwpx_section_manifest_item(
+            "Contents/Section1.XML",
+            Some("APPLICATION/XML")
+        ));
         assert!(is_hwpx_image_manifest_item(
             "Media/image.bin",
             Some("IMAGE/PNG; charset=binary")
@@ -3923,6 +3930,27 @@ mod tests {
         assert_eq!(
             section_first_paragraph_text(&document.sections[1]),
             Some("second section".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_case_variant_section_xml_archive_entries() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[(
+            "Contents/Section0.XML",
+            r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run><hp:t>case variant section</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+        )])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+
+        assert_eq!(
+            section_first_paragraph_text(&document.sections[0]),
+            Some("case variant section".to_string())
         );
 
         Ok(())
