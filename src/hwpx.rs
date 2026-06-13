@@ -2163,7 +2163,87 @@ fn simple_xml_element_text(xml: &str) -> Option<String> {
         .rsplit_once("</")
         .map(|(before_close, _)| before_close)
         .unwrap_or(xml);
-    non_empty_string_owned(decode_xml_text(text))
+    xml_fragment_plain_text(text)
+}
+
+fn xml_fragment_plain_text(xml: &str) -> Option<String> {
+    if xml_fragment_contains_text_node(xml) {
+        hwpx_text_node_plain_text(xml)
+    } else {
+        direct_xml_text(xml)
+    }
+}
+
+fn xml_fragment_contains_text_node(xml: &str) -> bool {
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(xml, cursor) {
+        if tag.name == "t" && !tag.is_closing {
+            return true;
+        }
+        cursor = tag.end;
+    }
+
+    false
+}
+
+fn hwpx_text_node_plain_text(xml: &str) -> Option<String> {
+    let mut text = String::new();
+    let mut cursor = 0usize;
+    let mut text_depth = 0usize;
+
+    while let Some(tag) = next_xml_tag(xml, cursor) {
+        if text_depth > 0 && tag.start > cursor {
+            text.push_str(&decode_xml_text(&xml[cursor..tag.start]));
+        }
+
+        match tag.name {
+            "t" if tag.is_closing => text_depth = text_depth.saturating_sub(1),
+            "t" if !tag.is_closing && !tag.is_self_closing => text_depth += 1,
+            "lineBreak" if !tag.is_closing => text.push('\n'),
+            "tab" if !tag.is_closing => text.push('\t'),
+            _ => {}
+        }
+
+        cursor = tag.end;
+    }
+
+    if text_depth > 0 && cursor < xml.len() {
+        text.push_str(&decode_xml_text(&xml[cursor..]));
+    }
+
+    non_empty_string_owned(text)
+}
+
+fn direct_xml_text(xml: &str) -> Option<String> {
+    let mut text = String::new();
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(xml, cursor) {
+        if tag.start > cursor {
+            push_non_empty_xml_text_segment(&mut text, &xml[cursor..tag.start]);
+        }
+        match tag.name {
+            "lineBreak" if !tag.is_closing => text.push('\n'),
+            "tab" if !tag.is_closing => text.push('\t'),
+            _ => {}
+        }
+        cursor = tag.end;
+    }
+
+    if cursor < xml.len() {
+        push_non_empty_xml_text_segment(&mut text, &xml[cursor..]);
+    }
+
+    non_empty_string_owned(text)
+}
+
+fn push_non_empty_xml_text_segment(output: &mut String, segment: &str) {
+    let decoded = decode_xml_text(segment);
+    if decoded.trim().is_empty() {
+        return;
+    }
+    output.push_str(&decoded);
 }
 
 fn first_hwpx_child_element_text(xml: &str, names: &[&str]) -> Option<String> {
@@ -3092,6 +3172,33 @@ mod tests {
     }
 
     #[test]
+    fn recovers_nested_hwpx_chart_title_text_without_raw_xml() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p>
+                <hp:ctrl>
+                  <hp:chart>
+                    <hp:title>
+                      <hp:run><hp:t>Nested Sales</hp:t></hp:run>
+                    </hp:title>
+                  </hp:chart>
+                </hp:ctrl>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+
+        assert!(matches!(
+            &blocks[0],
+            Block::Chart(chart)
+                if chart.title.as_deref() == Some("Nested Sales")
+                    && chart.fallback_text.as_deref() == Some("Nested Sales")
+        ));
+    }
+
+    #[test]
     fn preserves_unsupported_hwpx_control_without_text_as_unknown_block() {
         let xml = r#"
             <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
@@ -3138,6 +3245,38 @@ mod tests {
                 assert_eq!(link.url, "https://example.com");
                 assert_eq!(link.title.as_deref(), Some("Example"));
                 assert_eq!(inlines_to_plain_text(&link.inlines), "Example Site");
+            }
+            other => panic!("expected link inline, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recovers_hwpx_field_parameter_from_nested_text_node() {
+        let xml = r#"
+            <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:ctrl>
+                <hp:fieldBegin id="8" type="HYPERLINK" name="Nested Example">
+                  <hp:parameters cnt="1">
+                    <hp:stringParam name="URL">
+                      <hp:run><hp:t>https://example.com/nested</hp:t></hp:run>
+                    </hp:stringParam>
+                  </hp:parameters>
+                </hp:fieldBegin>
+              </hp:ctrl>
+              <hp:run><hp:t>Nested Site</hp:t></hp:run>
+              <hp:ctrl><hp:fieldEnd beginIDRef="8"/></hp:ctrl>
+            </hp:p>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let inlines = extract_inlines_from_xml_fragment(xml, &mut context);
+
+        assert_eq!(inlines.len(), 1);
+        match &inlines[0] {
+            Inline::Link(link) => {
+                assert_eq!(link.url, "https://example.com/nested");
+                assert_eq!(link.title.as_deref(), Some("Nested Example"));
+                assert_eq!(inlines_to_plain_text(&link.inlines), "Nested Site");
             }
             other => panic!("expected link inline, got {other:?}"),
         }
