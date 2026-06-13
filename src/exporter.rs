@@ -1779,12 +1779,15 @@ fn resource_public_path(
 
 fn resource_file_name(resources: &ResourceStore, resource_id: &ResourceId) -> String {
     let base = resource_id.as_str();
-    if base.contains('.') {
-        return base.to_string();
-    }
+    let extension = resource_extension(resources, resource_id)
+        .map(ToOwned::to_owned)
+        .or_else(|| path_extension_from_resource_id(base))
+        .unwrap_or_else(|| "png".to_string());
+    let extension = sanitize_asset_extension(&extension);
+    let stem = resource_file_stem(base, &extension);
+    let stem = sanitize_asset_path_segment(stem);
 
-    let extension = resource_extension(resources, resource_id).unwrap_or("png");
-    format!("{base}.{extension}")
+    format!("{stem}.{extension}")
 }
 
 fn resource_extension<'a>(
@@ -1795,6 +1798,42 @@ fn resource_extension<'a>(
         Some(Resource::Image(resource)) => resource.extension.as_deref(),
         Some(Resource::Binary(resource)) => resource.extension.as_deref(),
         None => None,
+    }
+}
+
+fn path_extension_from_resource_id(resource_id: &str) -> Option<String> {
+    resource_id
+        .rsplit(['/', '\\'])
+        .next()
+        .and_then(|file_name| file_name.rsplit_once('.'))
+        .map(|(_, extension)| extension)
+        .filter(|extension| !extension.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn resource_file_stem<'a>(resource_id: &'a str, extension: &str) -> &'a str {
+    let file_name = resource_id
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(resource_id);
+    file_name
+        .rsplit_once('.')
+        .filter(|(_, candidate_extension)| candidate_extension.eq_ignore_ascii_case(extension))
+        .map(|(stem, _)| stem)
+        .unwrap_or(resource_id)
+}
+
+fn sanitize_asset_extension(extension: &str) -> String {
+    let sanitized = extension
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+
+    if sanitized.is_empty() {
+        "bin".to_string()
+    } else {
+        sanitized
     }
 }
 
@@ -2806,6 +2845,30 @@ mod tests {
         );
         assert!(
             fs::read_to_string(&markdown_path)?.contains("](sample_assets/images/image-1.png)")
+        );
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn sanitizes_image_asset_file_names() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("unsafe-image-assets");
+        fs::create_dir_all(&root)?;
+        let document =
+            document_with_image_block("../BinData/unsafe image.png", Some("logo"), Some("png"));
+        let html_path = root.join("sample.html");
+
+        write_html_output(Path::new("sample.hwpx"), &html_path, &document)?;
+
+        let html = fs::read_to_string(&html_path)?;
+        assert!(html.contains("src=\"sample_assets/images/unsafe_image.png\""));
+        assert!(
+            root.join("sample_assets")
+                .join("images")
+                .join("unsafe_image.png")
+                .exists()
         );
 
         fs::remove_dir_all(&root)?;
