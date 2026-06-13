@@ -456,34 +456,17 @@ impl HwpxFallbackContext {
     }
 
     fn paragraph_style_for_paragraph(&self, paragraph_xml: &str) -> ParagraphStyle {
-        let Some(para_pr_id) =
-            first_xml_attribute_u32(paragraph_xml, "p", "paraPrIDRef").map(|id| id as usize)
-        else {
-            return ParagraphStyle::default();
-        };
-
-        self.paragraph_styles
-            .get(para_pr_id)
-            .map(|style| style.style.clone())
-            .unwrap_or_default()
+        self.hwpx_paragraph_style_for_paragraph(paragraph_xml).style
     }
 
     fn paragraph_role_for_paragraph(&self, paragraph_xml: &str) -> ParagraphRole {
-        let Some(para_pr_id) =
-            first_xml_attribute_u32(paragraph_xml, "p", "paraPrIDRef").map(|id| id as usize)
-        else {
-            return ParagraphRole::Body;
-        };
-
-        self.paragraph_styles
-            .get(para_pr_id)
-            .and_then(|style| style.role.clone())
+        self.hwpx_paragraph_style_for_paragraph(paragraph_xml)
+            .role
             .unwrap_or_default()
     }
 
     fn list_info_for_paragraph(&mut self, paragraph_xml: &str) -> Option<ListInfo> {
-        let para_pr_id = first_xml_attribute_u32(paragraph_xml, "p", "paraPrIDRef")? as usize;
-        let style = self.paragraph_styles.get(para_pr_id)?.clone();
+        let style = self.hwpx_paragraph_style_for_paragraph(paragraph_xml);
 
         match style.kind {
             Some(ListKind::Ordered) => {
@@ -511,6 +494,16 @@ impl HwpxFallbackContext {
             }),
             _ => None,
         }
+    }
+
+    fn hwpx_paragraph_style_for_paragraph(&self, paragraph_xml: &str) -> HwpxParagraphStyle {
+        let mut style = first_xml_attribute_u32(paragraph_xml, "p", "paraPrIDRef")
+            .map(|id| id as usize)
+            .and_then(|para_pr_id| self.paragraph_styles.get(para_pr_id).cloned())
+            .unwrap_or_default();
+        let direct_style = extract_hwpx_direct_paragraph_style(paragraph_xml);
+        merge_hwpx_paragraph_style(&mut style, direct_style);
+        style
     }
 
     fn store_note_from_hwpx_control(
@@ -618,6 +611,42 @@ struct HwpxParagraphStyle {
     list_id: Option<u32>,
     role: Option<ParagraphRole>,
     style: ParagraphStyle,
+}
+
+fn merge_hwpx_paragraph_style(base: &mut HwpxParagraphStyle, overlay: HwpxParagraphStyle) {
+    if overlay.kind.is_some() {
+        base.kind = overlay.kind;
+        base.level = overlay.level;
+        base.list_id = overlay.list_id;
+    }
+    if overlay.role.is_some() {
+        base.role = overlay.role;
+    }
+    merge_paragraph_style(&mut base.style, overlay.style);
+}
+
+fn merge_paragraph_style(base: &mut ParagraphStyle, overlay: ParagraphStyle) {
+    if overlay.alignment.is_some() {
+        base.alignment = overlay.alignment;
+    }
+    if overlay.spacing.before_pt.is_some() {
+        base.spacing.before_pt = overlay.spacing.before_pt;
+    }
+    if overlay.spacing.after_pt.is_some() {
+        base.spacing.after_pt = overlay.spacing.after_pt;
+    }
+    if overlay.spacing.line_pt.is_some() {
+        base.spacing.line_pt = overlay.spacing.line_pt;
+    }
+    if overlay.indent.left_pt.is_some() {
+        base.indent.left_pt = overlay.indent.left_pt;
+    }
+    if overlay.indent.right_pt.is_some() {
+        base.indent.right_pt = overlay.indent.right_pt;
+    }
+    if overlay.indent.first_line_pt.is_some() {
+        base.indent.first_line_pt = overlay.indent.first_line_pt;
+    }
 }
 
 fn read_hwpx_fallback_context<R: Read + io::Seek>(
@@ -1131,6 +1160,27 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
     }
 
     paragraph_style
+}
+
+fn extract_hwpx_direct_paragraph_style(paragraph_xml: &str) -> HwpxParagraphStyle {
+    extract_hwpx_paragraph_style(hwpx_direct_paragraph_style_prefix(paragraph_xml))
+}
+
+fn hwpx_direct_paragraph_style_prefix(paragraph_xml: &str) -> &str {
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(paragraph_xml, cursor) {
+        if tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+        if matches!(tag.name, "run" | "ctrl" | "tbl" | "subList") {
+            return &paragraph_xml[..tag.start];
+        }
+        cursor = tag.end;
+    }
+
+    paragraph_xml
 }
 
 fn is_hwpx_percent_line_spacing(tag: &str) -> bool {
@@ -3667,6 +3717,53 @@ mod tests {
         assert_eq!(paragraph.style.spacing.before_pt, Some(LengthPt(4.0)));
         assert_eq!(paragraph.style.spacing.after_pt, Some(LengthPt(5.0)));
         assert_eq!(paragraph.style.spacing.line_pt, Some(LengthPt(6.0)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_direct_hwpx_paragraph_style_without_para_pr_ref() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                HEADER_XML_PATH,
+                r#"
+                <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+                  <hh:refList>
+                    <hh:bullets>
+                      <hh:bullet id="7" char="*"/>
+                    </hh:bullets>
+                  </hh:refList>
+                </hh:head>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p>
+                    <hp:heading type="bullet" idRef="7" level="1"/>
+                    <hp:align horizontal="right"/>
+                    <hp:run><hp:t>direct style paragraph</hp:t></hp:run>
+                  </hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+        let paragraph = match &document.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => paragraph,
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(paragraph.style.alignment, Some(Alignment::Right));
+        assert_eq!(
+            paragraph
+                .list
+                .as_ref()
+                .map(|list| (&list.kind, list.level, list.marker.as_deref())),
+            Some((&ListKind::Unordered, 1, Some("*")))
+        );
 
         Ok(())
     }
