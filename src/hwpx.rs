@@ -1122,8 +1122,9 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
         return None;
     }
 
-    let background_color = first_xml_attribute_u32(table_xml, "tbl", "borderFillIDRef")
-        .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
+    let background_color =
+        first_hwpx_attribute_u32(table_xml, &["tbl", "tblPr"], "borderFillIDRef")
+            .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
 
     Some(Table {
         rows,
@@ -1180,7 +1181,7 @@ fn extract_table_cells_from_row_xml(
 }
 
 fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext) -> TableCell {
-    let background_color = first_xml_attribute_u32(cell_xml, "tc", "borderFillIDRef")
+    let background_color = first_hwpx_attribute_u32(cell_xml, &["tc", "cellPr"], "borderFillIDRef")
         .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
 
     TableCell {
@@ -1201,6 +1202,12 @@ fn hwpx_table_cell_span(cell_xml: &str, attribute_names: &[&str]) -> u32 {
                 .find_map(|attribute_name| first_xml_attribute_u32(cell_xml, "tc", attribute_name))
         })
         .unwrap_or(1)
+}
+
+fn first_hwpx_attribute_u32(xml: &str, tag_names: &[&str], attribute_name: &str) -> Option<u32> {
+    tag_names
+        .iter()
+        .find_map(|tag_name| first_xml_attribute_u32(xml, tag_name, attribute_name))
 }
 
 fn extract_blocks_from_paragraph_xml_with_metadata(
@@ -2764,6 +2771,47 @@ mod tests {
 
         assert_eq!(table.rows[0].cells[0].row_span, 3);
         assert_eq!(table.rows[0].cells[0].col_span, 2);
+    }
+
+    #[test]
+    fn extracts_table_and_cell_background_from_property_tags() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tblPr borderFillIDRef="1"/>
+              <hp:tr>
+                <hp:tc>
+                  <hp:cellPr borderFillIDRef="2"/>
+                  <hp:subList>
+                    <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+        let table_color = Color {
+            r: 0x11,
+            g: 0x22,
+            b: 0x33,
+            a: 255,
+        };
+        let cell_color = Color {
+            r: 0x44,
+            g: 0x55,
+            b: 0x66,
+            a: 255,
+        };
+        let mut context = HwpxFallbackContext {
+            border_fill_backgrounds: vec![None, Some(table_color), Some(cell_color)],
+            ..Default::default()
+        };
+
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+
+        assert_eq!(table.style.background_color, Some(table_color));
+        assert_eq!(
+            table.rows[0].cells[0].style.background_color,
+            Some(cell_color)
+        );
     }
 
     #[test]
