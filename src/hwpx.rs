@@ -454,6 +454,19 @@ impl HwpxFallbackContext {
             .unwrap_or_default()
     }
 
+    fn paragraph_role_for_paragraph(&self, paragraph_xml: &str) -> ParagraphRole {
+        let Some(para_pr_id) =
+            first_xml_attribute_u32(paragraph_xml, "p", "paraPrIDRef").map(|id| id as usize)
+        else {
+            return ParagraphRole::Body;
+        };
+
+        self.paragraph_styles
+            .get(para_pr_id)
+            .and_then(|style| style.role.clone())
+            .unwrap_or_default()
+    }
+
     fn list_info_for_paragraph(&mut self, paragraph_xml: &str) -> Option<ListInfo> {
         let para_pr_id = first_xml_attribute_u32(paragraph_xml, "p", "paraPrIDRef")? as usize;
         let style = self.paragraph_styles.get(para_pr_id)?.clone();
@@ -584,6 +597,7 @@ struct HwpxParagraphStyle {
     kind: Option<ListKind>,
     level: u8,
     list_id: Option<u32>,
+    role: Option<ParagraphRole>,
     style: ParagraphStyle,
 }
 
@@ -943,16 +957,25 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
         if !tag.is_closing {
             match tag.name {
                 "heading" => {
-                    paragraph_style.kind = match xml_attribute_value(tag.raw, "type") {
+                    let heading_type =
+                        xml_attribute_value(tag.raw, "type").map(str::to_ascii_uppercase);
+                    paragraph_style.level = xml_attribute_value(tag.raw, "level")
+                        .and_then(|value| value.parse::<u8>().ok())
+                        .unwrap_or(0);
+                    paragraph_style.kind = match heading_type.as_deref() {
                         Some("NUMBER") => Some(ListKind::Ordered),
                         Some("BULLET") => Some(ListKind::Unordered),
                         _ => None,
                     };
+                    paragraph_style.role = match heading_type.as_deref() {
+                        Some("OUTLINE" | "HEADING") => Some(ParagraphRole::Heading {
+                            level: paragraph_style.level.saturating_add(1).clamp(1, 6),
+                        }),
+                        Some("TITLE") => Some(ParagraphRole::Title),
+                        _ => None,
+                    };
                     paragraph_style.list_id =
                         xml_attribute_value(tag.raw, "idRef").and_then(|value| value.parse().ok());
-                    paragraph_style.level = xml_attribute_value(tag.raw, "level")
-                        .and_then(|value| value.parse::<u8>().ok())
-                        .unwrap_or(0);
                 }
                 "align" => {
                     paragraph_style.style.alignment =
@@ -1177,6 +1200,7 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
     let mut fragment_start = 0usize;
     let mut cursor = 0usize;
     let paragraph_style = context.paragraph_style_for_paragraph(paragraph_xml);
+    let paragraph_role = context.paragraph_role_for_paragraph(paragraph_xml);
     let mut pending_list = context.list_info_for_paragraph(paragraph_xml);
 
     while let Some(tag) = next_xml_tag(paragraph_xml, cursor) {
@@ -1206,6 +1230,7 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
             &mut blocks,
             &paragraph_xml[fragment_start..tag.start],
             pending_list.take(),
+            paragraph_role.clone(),
             paragraph_style.clone(),
             context,
         );
@@ -1242,6 +1267,7 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
         &mut blocks,
         &paragraph_xml[fragment_start..],
         pending_list.take(),
+        paragraph_role,
         paragraph_style,
         context,
     );
@@ -1431,6 +1457,7 @@ fn push_paragraph_text_fragment_as_block(
     blocks: &mut Vec<Block>,
     xml: &str,
     list: Option<ListInfo>,
+    role: ParagraphRole,
     style: ParagraphStyle,
     context: &mut HwpxFallbackContext,
 ) {
@@ -1440,7 +1467,7 @@ fn push_paragraph_text_fragment_as_block(
     }
 
     blocks.push(Block::Paragraph(Paragraph {
-        role: Default::default(),
+        role,
         inlines,
         style,
         style_ref: None,
@@ -2863,6 +2890,43 @@ mod tests {
                 .map(|list| (&list.kind, list.number)),
             Some((&ListKind::Ordered, Some(1)))
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_heading_role_from_hwpx_header_paragraph_properties() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                HEADER_XML_PATH,
+                r#"
+                <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+                  <hh:refList>
+                    <hh:paraProperties>
+                      <hh:paraPr id="0"><hh:heading type="OUTLINE" level="2"/></hh:paraPr>
+                    </hh:paraProperties>
+                  </hh:refList>
+                </hh:head>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p paraPrIDRef="0"><hp:run><hp:t>heading text</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+        let paragraph = match &document.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => paragraph,
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(paragraph.role, ParagraphRole::Heading { level: 3 });
+        assert!(paragraph.list.is_none());
 
         Ok(())
     }
