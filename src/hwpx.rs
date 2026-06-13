@@ -10,8 +10,8 @@ use crate::ir::{
     Alignment, Block, Color, Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
     Image, ImageResource, Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, Metadata, Note,
     NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId,
-    ResourceStore, Section, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
-    TextRun, TextStyle, UnknownBlock, UnknownInline,
+    ResourceStore, Section, Shape, ShapeKind, StyleSheet, Table, TableCell, TableCellStyle,
+    TableRow, TableStyle, TextRun, TextStyle, UnknownBlock, UnknownInline,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -1252,6 +1252,11 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
             blocks.push(Block::Equation(extract_hwpx_equation_from_xml(
                 object_xml, context,
             )));
+        } else if object_kind == Some("shape") {
+            let object_xml = &paragraph_xml[tag.start..object_end];
+            blocks.push(Block::Shape(extract_hwpx_shape_from_xml(
+                tag.name, object_xml, context,
+            )));
         } else if let Some(object_kind) = object_kind {
             let object_xml = &paragraph_xml[tag.start..object_end];
             blocks.push(Block::Unknown(unknown_hwpx_object_block(
@@ -1353,6 +1358,39 @@ fn extract_hwpx_equation_from_xml(
         fallback_text: content.clone().or_else(|| Some("[equation]".to_string())),
         content,
         resource_id: None,
+    }
+}
+
+fn extract_hwpx_shape_from_xml(
+    tag_name: &str,
+    shape_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> Shape {
+    let description = first_non_empty_string([
+        decoded_first_xml_attribute_value(shape_xml, "description"),
+        decoded_first_xml_attribute_value(shape_xml, "desc"),
+        decoded_first_xml_attribute_value(shape_xml, "name"),
+    ]);
+    let shape_text = non_empty_string_owned(inlines_to_plain_text(
+        &extract_inlines_from_xml_fragment(shape_xml, context),
+    ));
+    let fallback_text = first_non_empty_string([description.clone(), shape_text])
+        .or_else(|| Some("[shape]".to_string()));
+
+    Shape {
+        kind: hwpx_shape_kind(tag_name),
+        fallback_text,
+        description,
+    }
+}
+
+fn hwpx_shape_kind(tag_name: &str) -> ShapeKind {
+    match tag_name {
+        "line" | "connectLine" => ShapeKind::Line,
+        "rect" => ShapeKind::Rectangle,
+        "ellipse" | "arc" => ShapeKind::Ellipse,
+        "polygon" | "curve" => ShapeKind::Polygon,
+        _ => ShapeKind::Unknown,
     }
 }
 
@@ -2750,7 +2788,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_text_inside_hwpx_unsupported_object_placeholders() {
+    fn preserves_hwpx_shape_text_as_shape_fallback() {
         let xml = r#"
             <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:p>
@@ -2768,9 +2806,9 @@ mod tests {
 
         assert!(matches!(
             &blocks[0],
-            Block::Unknown(unknown)
-                if unknown.kind == "hwpx:shape"
-                    && unknown.fallback_text.as_deref() == Some("[shape]\nshape text")
+            Block::Shape(shape)
+                if shape.kind == ShapeKind::Rectangle
+                    && shape.fallback_text.as_deref() == Some("shape text")
         ));
     }
 
