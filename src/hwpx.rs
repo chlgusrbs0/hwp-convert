@@ -8,9 +8,9 @@ use zip::ZipArchive;
 
 use crate::ir::{
     Alignment, Block, Color, Document, HeaderFooter, HeaderFooterPlacement, Inline, LengthPt, Link,
-    ListInfo, ListKind, Metadata, NoteStore, Paragraph, ParagraphStyle, ResourceStore, Section,
-    StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
-    UnknownBlock, UnknownInline,
+    ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphStyle,
+    ResourceStore, Section, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
+    TextRun, TextStyle, UnknownBlock, UnknownInline,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -286,7 +286,9 @@ pub(crate) fn read_section_document_from_archive(bytes: &[u8]) -> io::Result<Doc
         ));
     }
 
-    Ok(document_from_sections(sections))
+    let mut document = document_from_sections(sections);
+    document.notes = context.notes;
+    Ok(document)
 }
 
 fn collect_section_xml_paths<R: Read + io::Seek>(
@@ -317,6 +319,8 @@ struct HwpxFallbackContext {
     font_faces: Vec<Vec<String>>,
     border_fill_backgrounds: Vec<Option<Color>>,
     ordered_counts: BTreeMap<(u32, u8), u32>,
+    notes: NoteStore,
+    next_note_ordinal: u32,
 }
 
 impl HwpxFallbackContext {
@@ -384,6 +388,57 @@ impl HwpxFallbackContext {
                 number: None,
             }),
             _ => None,
+        }
+    }
+
+    fn store_note_from_hwpx_control(
+        &mut self,
+        note_kind: NoteKind,
+        tag: &str,
+        note_xml: &str,
+    ) -> Inline {
+        let note_id = self.next_note_id(
+            match note_kind {
+                NoteKind::Footnote => "footnote",
+                NoteKind::Endnote => "endnote",
+            },
+            decoded_xml_attribute_value(tag, "instId")
+                .or_else(|| decoded_xml_attribute_value(tag, "id")),
+        );
+        let blocks = extract_section_xml_blocks(note_xml, self);
+        let note = Note {
+            id: note_id.clone(),
+            kind: note_kind.clone(),
+            blocks,
+        };
+
+        let _ = self.notes.insert_unique(note);
+
+        match note_kind {
+            NoteKind::Footnote => Inline::FootnoteRef { note_id },
+            NoteKind::Endnote => Inline::EndnoteRef { note_id },
+        }
+    }
+
+    fn next_note_id(&mut self, prefix: &str, raw_id: Option<String>) -> NoteId {
+        let base = raw_id
+            .map(|id| format!("{prefix}-{id}"))
+            .unwrap_or_else(|| {
+                self.next_note_ordinal += 1;
+                format!("{prefix}-{}", self.next_note_ordinal)
+            });
+
+        if self.notes.get(&NoteId(base.clone())).is_none() {
+            return NoteId(base);
+        }
+
+        let mut suffix = 2u32;
+        loop {
+            let candidate = NoteId(format!("{base}-{suffix}"));
+            if self.notes.get(&candidate).is_none() {
+                return candidate;
+            }
+            suffix += 1;
         }
     }
 }
@@ -939,7 +994,7 @@ fn hwpx_header_footer_placement(control_xml: &str) -> HeaderFooterPlacement {
 fn unknown_hwpx_object_block(
     object_kind: &str,
     object_xml: &str,
-    context: &HwpxFallbackContext,
+    context: &mut HwpxFallbackContext,
 ) -> UnknownBlock {
     let object_text =
         inlines_to_plain_text(&extract_inlines_from_xml_fragment(object_xml, context));
@@ -964,7 +1019,7 @@ fn push_paragraph_text_fragment_as_block(
     xml: &str,
     list: Option<ListInfo>,
     style: ParagraphStyle,
-    context: &HwpxFallbackContext,
+    context: &mut HwpxFallbackContext,
 ) {
     let inlines = extract_inlines_from_xml_fragment(xml, context);
     if inlines.is_empty() {
@@ -990,7 +1045,7 @@ struct HwpxActiveField {
     inlines: Vec<Inline>,
 }
 
-fn extract_inlines_from_xml_fragment(xml: &str, context: &HwpxFallbackContext) -> Vec<Inline> {
+fn extract_inlines_from_xml_fragment(xml: &str, context: &mut HwpxFallbackContext) -> Vec<Inline> {
     let mut inlines = Vec::new();
     let mut text_buffer = String::new();
     let mut cursor = 0usize;
@@ -1098,6 +1153,32 @@ fn extract_inlines_from_xml_fragment(xml: &str, context: &HwpxFallbackContext) -
                 } else {
                     inlines.push(unknown_hwpx_field_end_inline(tag.raw));
                 }
+            }
+            "footNote" | "endNote" if !tag.is_closing => {
+                push_text_buffer_to_hwpx_inline_target(
+                    &mut inlines,
+                    &mut active_field,
+                    &mut text_buffer,
+                    &current_style,
+                );
+                let note_end = if tag.is_self_closing {
+                    tag.end
+                } else {
+                    find_matching_element_end(xml, &tag).unwrap_or(tag.end)
+                };
+                let note_kind = if tag.name == "footNote" {
+                    NoteKind::Footnote
+                } else {
+                    NoteKind::Endnote
+                };
+                let note_ref = context.store_note_from_hwpx_control(
+                    note_kind,
+                    tag.raw,
+                    &xml[tag.start..note_end],
+                );
+                push_hwpx_inline(&mut inlines, &mut active_field, note_ref);
+                cursor = note_end;
+                continue;
             }
             _ => {}
         }
@@ -2055,7 +2136,8 @@ mod tests {
             </hp:p>
         "#;
 
-        let inlines = extract_inlines_from_xml_fragment(xml, &HwpxFallbackContext::default());
+        let mut context = HwpxFallbackContext::default();
+        let inlines = extract_inlines_from_xml_fragment(xml, &mut context);
 
         assert_eq!(inlines.len(), 1);
         match &inlines[0] {
@@ -2077,7 +2159,8 @@ mod tests {
             </hp:p>
         "#;
 
-        let inlines = extract_inlines_from_xml_fragment(xml, &HwpxFallbackContext::default());
+        let mut context = HwpxFallbackContext::default();
+        let inlines = extract_inlines_from_xml_fragment(xml, &mut context);
 
         assert_eq!(inlines.len(), 2);
         assert!(matches!(
@@ -2102,7 +2185,8 @@ mod tests {
             </hp:p>
         "#;
 
-        let inlines = extract_inlines_from_xml_fragment(xml, &HwpxFallbackContext::default());
+        let mut context = HwpxFallbackContext::default();
+        let inlines = extract_inlines_from_xml_fragment(xml, &mut context);
 
         assert_eq!(inlines.len(), 1);
         assert!(matches!(
@@ -2475,6 +2559,80 @@ mod tests {
     }
 
     #[test]
+    fn recovers_note_controls_from_hwpx_section_fallback() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[(
+            "Contents/section0.xml",
+            r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p>
+                    <hp:run><hp:t>before</hp:t></hp:run>
+                    <hp:ctrl>
+                      <hp:footNote instId="3">
+                        <hp:subList>
+                          <hp:p><hp:run><hp:t>footnote text</hp:t></hp:run></hp:p>
+                        </hp:subList>
+                      </hp:footNote>
+                    </hp:ctrl>
+                    <hp:run><hp:t>after</hp:t></hp:run>
+                    <hp:ctrl>
+                      <hp:endNote instId="4">
+                        <hp:subList>
+                          <hp:p><hp:run><hp:t>endnote text</hp:t></hp:run></hp:p>
+                        </hp:subList>
+                      </hp:endNote>
+                    </hp:ctrl>
+                  </hp:p>
+                </hs:sec>
+                "#,
+        )])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+        let paragraph = match &document.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => paragraph,
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(document.notes.notes.len(), 2);
+        assert!(matches!(
+            &paragraph.inlines[0],
+            Inline::Text(run) if run.text == "before"
+        ));
+        assert!(matches!(
+            &paragraph.inlines[1],
+            Inline::FootnoteRef { note_id } if note_id.as_str() == "footnote-3"
+        ));
+        assert!(matches!(
+            &paragraph.inlines[2],
+            Inline::Text(run) if run.text == "after"
+        ));
+        assert!(matches!(
+            &paragraph.inlines[3],
+            Inline::EndnoteRef { note_id } if note_id.as_str() == "endnote-4"
+        ));
+
+        let footnote = document
+            .notes
+            .get(&NoteId("footnote-3".to_string()))
+            .expect("footnote should be stored");
+        let endnote = document
+            .notes
+            .get(&NoteId("endnote-4".to_string()))
+            .expect("endnote should be stored");
+        assert_eq!(footnote.kind, NoteKind::Footnote);
+        assert_eq!(endnote.kind, NoteKind::Endnote);
+        assert_eq!(
+            blocks_first_paragraph_text(&footnote.blocks),
+            Some("footnote text".to_string())
+        );
+        assert_eq!(
+            blocks_first_paragraph_text(&endnote.blocks),
+            Some("endnote text".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn prefers_section_xml_text_fallback_before_preview_text() -> Result<(), Box<dyn Error>> {
         let bytes = create_archive_bytes(&[
             (
@@ -2560,7 +2718,11 @@ mod tests {
     }
 
     fn section_first_paragraph_text(section: &crate::ir::Section) -> Option<String> {
-        let Block::Paragraph(paragraph) = section.blocks.first()? else {
+        blocks_first_paragraph_text(&section.blocks)
+    }
+
+    fn blocks_first_paragraph_text(blocks: &[Block]) -> Option<String> {
+        let Block::Paragraph(paragraph) = blocks.first()? else {
             return None;
         };
 
