@@ -1084,9 +1084,7 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
                     paragraph_style.style.spacing.after_pt =
                         xml_attribute_hwp_units_to_pt(tag.raw, "value");
                 }
-                "lineSpacing"
-                    if !matches!(xml_attribute_value(tag.raw, "type"), Some("PERCENT")) =>
-                {
+                "lineSpacing" if !is_hwpx_percent_line_spacing(tag.raw) => {
                     paragraph_style.style.spacing.line_pt =
                         xml_attribute_hwp_units_to_pt(tag.raw, "value");
                 }
@@ -1098,6 +1096,10 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
     }
 
     paragraph_style
+}
+
+fn is_hwpx_percent_line_spacing(tag: &str) -> bool {
+    xml_attribute_value(tag, "type").is_some_and(|value| value.eq_ignore_ascii_case("PERCENT"))
 }
 
 fn document_from_sections(sections: Vec<Section>) -> Document {
@@ -1509,7 +1511,10 @@ fn push_hwpx_structural_control(
 }
 
 fn hwpx_header_footer_placement(control_xml: &str) -> HeaderFooterPlacement {
-    match first_xml_attribute_value(control_xml, "applyPageType") {
+    let value = first_xml_attribute_value(control_xml, "applyPageType")
+        .map(|value| value.trim().to_ascii_uppercase());
+
+    match value.as_deref() {
         Some("EVEN") => HeaderFooterPlacement::EvenPage,
         Some("ODD") => HeaderFooterPlacement::OddPage,
         Some("FIRST" | "FIRST_PAGE") => HeaderFooterPlacement::FirstPage,
@@ -2438,7 +2443,8 @@ fn first_xml_attribute_value<'a>(xml: &'a str, attribute_name: &str) -> Option<&
 }
 
 fn map_hwpx_alignment(value: &str) -> Option<Alignment> {
-    Some(match value {
+    let normalized = value.trim().to_ascii_uppercase();
+    Some(match normalized.as_str() {
         "LEFT" => Alignment::Left,
         "CENTER" => Alignment::Center,
         "RIGHT" => Alignment::Right,
@@ -3558,7 +3564,7 @@ mod tests {
                   <hh:refList>
                     <hh:paraProperties>
                       <hh:paraPr id="0">
-                        <hh:align horizontal="CENTER"/>
+                        <hh:align horizontal="center"/>
                         <hh:margin>
                           <hh:intent unit="HWPUNIT" value="100"/>
                           <hh:left unit="HWPUNIT" value="200"/>
@@ -3566,7 +3572,7 @@ mod tests {
                           <hh:prev unit="HWPUNIT" value="400"/>
                           <hh:next unit="HWPUNIT" value="500"/>
                         </hh:margin>
-                        <hh:lineSpacing type="FIXED" value="600" unit="HWPUNIT"/>
+                        <hh:lineSpacing type="fixed" value="600" unit="HWPUNIT"/>
                       </hh:paraPr>
                     </hh:paraProperties>
                   </hh:refList>
@@ -4007,14 +4013,14 @@ mod tests {
                   <hp:p>
                     <hp:run><hp:t>body text</hp:t></hp:run>
                     <hp:ctrl>
-                      <hp:header applyPageType="ODD">
+                      <hp:header applyPageType="odd">
                         <hp:subList>
                           <hp:p><hp:run><hp:t>header text</hp:t></hp:run></hp:p>
                         </hp:subList>
                       </hp:header>
                     </hp:ctrl>
                     <hp:ctrl>
-                      <hp:footer applyPageType="EVEN">
+                      <hp:footer applyPageType="even">
                         <hp:subList>
                           <hp:p><hp:run><hp:t>footer text</hp:t></hp:run></hp:p>
                         </hp:subList>
