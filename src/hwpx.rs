@@ -1697,6 +1697,7 @@ fn extract_hwpx_image_from_pic_xml(
             decoded_first_xml_attribute_value(pic_xml, "description"),
             decoded_first_xml_attribute_value(pic_xml, "desc"),
             decoded_first_xml_attribute_value(pic_xml, "name"),
+            first_hwpx_child_element_text(pic_xml, &["altText", "description", "desc", "name"]),
         ]),
         caption: extract_hwpx_object_caption(pic_xml, context),
         width: hwpx_object_dimension_to_px(pic_xml, &["width", "w"]),
@@ -3927,7 +3928,8 @@ mod tests {
                   <hp:p>
                     <hp:run><hp:t>before image</hp:t></hp:run>
                     <hp:ctrl>
-                      <hp:pic description="sample image">
+                      <hp:pic>
+                        <hp:altText><hp:run><hp:t>sample image</hp:t></hp:run></hp:altText>
                         <hp:sz w="7500" h="3750"/>
                         <hp:img><hc:img binaryItemIDRef="image1"/></hp:img>
                         <hp:caption>
