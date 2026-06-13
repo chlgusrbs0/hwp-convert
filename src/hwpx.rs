@@ -1235,6 +1235,7 @@ fn hwpx_table_cell_span(cell_xml: &str, attribute_names: &[&str]) -> u32 {
                 .iter()
                 .find_map(|attribute_name| first_xml_attribute_u32(cell_xml, "tc", attribute_name))
         })
+        .filter(|span| *span > 0)
         .unwrap_or(1)
 }
 
@@ -2913,6 +2914,27 @@ mod tests {
 
         assert_eq!(table.rows[0].cells[0].row_span, 3);
         assert_eq!(table.rows[0].cells[0].col_span, 2);
+    }
+
+    #[test]
+    fn normalizes_zero_hwpx_table_cell_span_to_one() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tr>
+                <hp:tc rowSpan="0" colSpan="0">
+                  <hp:subList>
+                    <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+
+        assert_eq!(table.rows[0].cells[0].row_span, 1);
+        assert_eq!(table.rows[0].cells[0].col_span, 1);
     }
 
     #[test]
