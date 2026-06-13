@@ -1525,6 +1525,30 @@ fn extract_inlines_from_xml_fragment(xml: &str, context: &mut HwpxFallbackContex
                     push_hwpx_inline(&mut inlines, &mut active_field, bookmark);
                 }
             }
+            "hyperlink" | "a" | "link"
+                if !tag.is_closing && hwpx_direct_link_url(tag.raw).is_some() =>
+            {
+                push_text_buffer_to_hwpx_inline_target(
+                    &mut inlines,
+                    &mut active_field,
+                    &mut text_buffer,
+                    &current_style,
+                );
+                let link_end = if tag.is_self_closing {
+                    tag.end
+                } else {
+                    find_matching_element_end(xml, &tag).unwrap_or(tag.end)
+                };
+                if let Some(link) = extract_hwpx_direct_link(
+                    tag.raw,
+                    xml_element_inner_xml(xml, &tag, link_end),
+                    context,
+                ) {
+                    push_hwpx_inline(&mut inlines, &mut active_field, Inline::Link(link));
+                }
+                cursor = link_end;
+                continue;
+            }
             "fieldBegin" if !tag.is_closing => {
                 push_text_buffer_to_hwpx_inline_target(
                     &mut inlines,
@@ -1639,6 +1663,64 @@ fn push_hwpx_inline(
     } else {
         inlines.push(inline);
     }
+}
+
+fn extract_hwpx_direct_link(
+    tag: &str,
+    inner_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<Link> {
+    let url = hwpx_direct_link_url(tag)?;
+    let title = first_non_empty_string([
+        decoded_xml_attribute_value(tag, "title"),
+        decoded_xml_attribute_value(tag, "name"),
+        decoded_xml_attribute_value(tag, "desc"),
+    ])
+    .filter(|value| value != &url);
+    let inlines = extract_inlines_from_xml_fragment(inner_xml, context);
+    let label = first_non_empty_string([
+        non_empty_string_owned(inlines_to_plain_text(&inlines)),
+        title.clone(),
+        Some(url.clone()),
+    ])
+    .unwrap_or_else(|| url.clone());
+    let inlines = if inlines.is_empty() {
+        vec![Inline::Text(TextRun {
+            text: label,
+            style: TextStyle::default(),
+            style_ref: None,
+        })]
+    } else {
+        inlines
+    };
+
+    Some(Link {
+        url,
+        title,
+        inlines,
+    })
+}
+
+fn hwpx_direct_link_url(tag: &str) -> Option<String> {
+    first_non_empty_string([
+        decoded_xml_attribute_value(tag, "href"),
+        decoded_xml_attribute_value(tag, "url"),
+        decoded_xml_attribute_value(tag, "target"),
+    ])
+}
+
+fn xml_element_inner_xml<'a>(xml: &'a str, start_tag: &XmlTag<'_>, element_end: usize) -> &'a str {
+    if start_tag.is_self_closing || start_tag.end >= element_end {
+        return "";
+    }
+
+    let inner = &xml[start_tag.end..element_end];
+    let inner_end = inner
+        .rfind("</")
+        .map(|relative_close_start| start_tag.end + relative_close_start)
+        .unwrap_or(element_end);
+
+    &xml[start_tag.end..inner_end]
 }
 
 fn extract_hwpx_field_begin(tag: &str, field_xml: &str) -> HwpxActiveField {
@@ -2632,6 +2714,30 @@ mod tests {
                 assert_eq!(link.url, "https://example.com");
                 assert_eq!(link.title.as_deref(), Some("Example"));
                 assert_eq!(inlines_to_plain_text(&link.inlines), "Example Site");
+            }
+            other => panic!("expected link inline, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recovers_hwpx_direct_hyperlink_as_link_inline() {
+        let xml = r#"
+            <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:hyperlink href="https://example.com/direct" title="Direct Example">
+                <hp:run><hp:t>Direct Site</hp:t></hp:run>
+              </hp:hyperlink>
+            </hp:p>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let inlines = extract_inlines_from_xml_fragment(xml, &mut context);
+
+        assert_eq!(inlines.len(), 1);
+        match &inlines[0] {
+            Inline::Link(link) => {
+                assert_eq!(link.url, "https://example.com/direct");
+                assert_eq!(link.title.as_deref(), Some("Direct Example"));
+                assert_eq!(inlines_to_plain_text(&link.inlines), "Direct Site");
             }
             other => panic!("expected link inline, got {other:?}"),
         }
