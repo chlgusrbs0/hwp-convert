@@ -798,8 +798,20 @@ fn render_html_list(
     start_index: usize,
     first_list: &ListInfo,
 ) -> (String, usize) {
-    let tag_name = html_list_tag_name(&first_list.kind);
-    let level = first_list.level;
+    render_html_list_level(
+        blocks,
+        start_index,
+        html_list_tag_name(&first_list.kind),
+        first_list.level,
+    )
+}
+
+fn render_html_list_level(
+    blocks: &[Block],
+    start_index: usize,
+    tag_name: &str,
+    level: u8,
+) -> (String, usize) {
     let mut html = format!("<{tag_name}>\n");
     let mut index = start_index;
 
@@ -810,12 +822,43 @@ fn render_html_list(
         let Some(list) = &paragraph.list else {
             break;
         };
-        if html_list_tag_name(&list.kind) != tag_name || list.level != level {
+        let current_tag_name = html_list_tag_name(&list.kind);
+        if list.level < level || (list.level == level && current_tag_name != tag_name) {
             break;
         }
+        if list.level > level {
+            let (nested_html, next_index) =
+                render_html_list_level(blocks, index, current_tag_name, list.level);
+            html.push_str(&nested_html);
+            index = next_index;
+            continue;
+        }
 
-        html.push_str(&render_html_list_item(paragraph, list));
+        html.push_str(&render_html_list_item_open(paragraph, list));
         index += 1;
+
+        while let Some(Block::Paragraph(next_paragraph)) = blocks.get(index) {
+            if !matches!(next_paragraph.role, ParagraphRole::Body) {
+                break;
+            }
+            let Some(next_list) = &next_paragraph.list else {
+                break;
+            };
+            if next_list.level <= level {
+                break;
+            }
+
+            let (nested_html, next_index) = render_html_list_level(
+                blocks,
+                index,
+                html_list_tag_name(&next_list.kind),
+                next_list.level,
+            );
+            html.push_str(&nested_html);
+            index = next_index;
+        }
+
+        html.push_str("</li>\n");
     }
 
     html.push_str(&format!("</{tag_name}>\n"));
@@ -823,7 +866,7 @@ fn render_html_list(
     (html, index)
 }
 
-fn render_html_list_item(paragraph: &Paragraph, list: &ListInfo) -> String {
+fn render_html_list_item_open(paragraph: &Paragraph, list: &ListInfo) -> String {
     let value = if list.kind == ListKind::Ordered {
         list.number
             .map(|number| format!(" value=\"{number}\""))
@@ -834,7 +877,7 @@ fn render_html_list_item(paragraph: &Paragraph, list: &ListInfo) -> String {
     let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
     let content = render_html_inlines(&paragraph.inlines);
 
-    format!("<li{value}{style}>{content}</li>\n")
+    format!("<li{value}{style}>{content}")
 }
 
 fn html_list_tag_name(kind: &ListKind) -> &'static str {
@@ -2659,6 +2702,66 @@ mod tests {
             html.contains("<ol>\n<li value=\"1\">first</li>\n<li value=\"2\">second</li>\n</ol>")
         );
         assert!(!html.contains("1. first"));
+    }
+
+    #[test]
+    fn renders_html_nested_list_levels_as_nested_lists() {
+        let document = document_with_blocks(vec![
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "parent".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: Some(ListInfo {
+                    kind: ListKind::Unordered,
+                    level: 0,
+                    marker: Some("-".to_string()),
+                    number: None,
+                }),
+            }),
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "child".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: Some(ListInfo {
+                    kind: ListKind::Unordered,
+                    level: 1,
+                    marker: Some("-".to_string()),
+                    number: None,
+                }),
+            }),
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "sibling".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: Some(ListInfo {
+                    kind: ListKind::Unordered,
+                    level: 0,
+                    marker: Some("-".to_string()),
+                    number: None,
+                }),
+            }),
+        ]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains(
+            "<ul>\n<li>parent<ul>\n<li>child</li>\n</ul>\n</li>\n<li>sibling</li>\n</ul>"
+        ));
     }
 
     #[test]
