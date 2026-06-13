@@ -1085,7 +1085,7 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
                     paragraph_style.style.alignment =
                         xml_attribute_value(tag.raw, "horizontal").and_then(map_hwpx_alignment);
                 }
-                "intent" => {
+                "intent" | "indent" => {
                     paragraph_style.style.indent.first_line_pt =
                         xml_attribute_hwp_units_to_pt(tag.raw, "value");
                 }
@@ -3587,7 +3587,7 @@ mod tests {
                       <hh:paraPr id="0">
                         <hh:align horizontal="center"/>
                         <hh:margin>
-                          <hh:intent unit="HWPUNIT" value="100"/>
+                          <hh:indent unit="HWPUNIT" value="100"/>
                           <hh:left unit="HWPUNIT" value="200"/>
                           <hh:right unit="HWPUNIT" value="300"/>
                           <hh:prev unit="HWPUNIT" value="400"/>
