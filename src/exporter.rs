@@ -990,9 +990,18 @@ fn render_html_link(link: &Link) -> String {
         .map(escape_html)
         .map(|title| format!(" title=\"{title}\""))
         .unwrap_or_default();
-    let content = render_html_inlines(&link.inlines);
+    let content = render_html_link_label(link);
 
     format!("<a href=\"{href}\"{title}>{content}</a>")
+}
+
+fn render_html_link_label(link: &Link) -> String {
+    let content = render_html_inlines(&link.inlines);
+    if content.is_empty() {
+        escape_html(link.title.as_deref().unwrap_or(&link.url))
+    } else {
+        content
+    }
 }
 
 fn render_html_note_ref(note_id: &NoteId, kind: NoteKind) -> String {
@@ -1678,7 +1687,7 @@ fn render_markdown_chart(chart: &Chart) -> String {
 }
 
 fn render_markdown_link(link: &Link) -> String {
-    let label = render_markdown_link_label(&link.inlines);
+    let label = render_markdown_link_label(link);
     let url = escape_markdown_link_destination(&link.url);
     let title = link
         .title
@@ -1698,7 +1707,16 @@ fn escape_markdown_title(text: &str) -> String {
     format!("\"{}\"", escaped)
 }
 
-fn render_markdown_link_label(inlines: &[Inline]) -> String {
+fn render_markdown_link_label(link: &Link) -> String {
+    let label = render_markdown_link_label_inlines(&link.inlines);
+    if label.is_empty() {
+        escape_markdown_image_alt(link.title.as_deref().unwrap_or(&link.url))
+    } else {
+        label
+    }
+}
+
+fn render_markdown_link_label_inlines(inlines: &[Inline]) -> String {
     inlines
         .iter()
         .map(markdown_link_label_inline)
@@ -1711,7 +1729,7 @@ fn markdown_link_label_inline(inline: &Inline) -> String {
         Inline::Text(run) => escape_markdown_image_alt(&run.text),
         Inline::LineBreak => " ".to_string(),
         Inline::Tab => "\t".to_string(),
-        Inline::Link(link) => render_markdown_link_label(&link.inlines),
+        Inline::Link(link) => render_markdown_link_label(link),
         Inline::FootnoteRef { note_id } => format!("[^{}]", note_id.as_str()),
         Inline::EndnoteRef { note_id } => format!("[^{}]", note_id.as_str()),
         Inline::Anchor { id } => {
@@ -3380,6 +3398,29 @@ mod tests {
         let markdown = render_markdown_document(&document);
 
         assert!(markdown.contains("[Docs](https://example.com/docs)"));
+    }
+
+    #[test]
+    fn renders_empty_link_label_with_visible_fallback() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![Inline::Link(Link {
+                url: "https://example.com/empty".to_string(),
+                title: None,
+                inlines: Vec::new(),
+            })],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: None,
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+        let markdown = render_markdown_document(&document);
+
+        assert!(
+            html.contains("<a href=\"https://example.com/empty\">https://example.com/empty</a>")
+        );
+        assert!(markdown.contains("[https://example.com/empty](https://example.com/empty)"));
     }
 
     #[test]
