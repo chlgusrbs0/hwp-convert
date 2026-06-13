@@ -1572,6 +1572,7 @@ fn write_image_assets(
     image_assets: &ImageAssetPaths,
     resources: &ResourceStore,
 ) -> Result<(), io::Error> {
+    let resource_file_names = resource_file_name_map(resources);
     let image_resources = resources
         .entries
         .iter()
@@ -1589,7 +1590,10 @@ fn write_image_assets(
     fs::create_dir_all(asset_dir)?;
 
     for image in image_resources {
-        let file_name = resource_file_name(resources, &image.id);
+        let file_name = resource_file_names
+            .get(&image.id)
+            .cloned()
+            .unwrap_or_else(|| sanitized_resource_file_name(resources, &image.id));
         fs::write(asset_dir.join(file_name), &image.bytes)?;
     }
 
@@ -1821,6 +1825,26 @@ fn resource_public_path(
 }
 
 fn resource_file_name(resources: &ResourceStore, resource_id: &ResourceId) -> String {
+    resource_file_name_map(resources)
+        .get(resource_id)
+        .cloned()
+        .unwrap_or_else(|| sanitized_resource_file_name(resources, resource_id))
+}
+
+fn resource_file_name_map(resources: &ResourceStore) -> HashMap<ResourceId, String> {
+    let mut names = HashMap::new();
+    let mut used_names = HashMap::new();
+
+    for resource in &resources.entries {
+        let candidate = sanitized_resource_file_name(resources, resource.id());
+        let unique_name = unique_resource_file_name(&candidate, &mut used_names);
+        names.insert(resource.id().clone(), unique_name);
+    }
+
+    names
+}
+
+fn sanitized_resource_file_name(resources: &ResourceStore, resource_id: &ResourceId) -> String {
     let base = resource_id.as_str();
     let extension = resource_extension(resources, resource_id)
         .map(ToOwned::to_owned)
@@ -1831,6 +1855,31 @@ fn resource_file_name(resources: &ResourceStore, resource_id: &ResourceId) -> St
     let stem = sanitize_asset_path_segment(stem);
 
     format!("{stem}.{extension}")
+}
+
+fn unique_resource_file_name(candidate: &str, used_names: &mut HashMap<String, usize>) -> String {
+    if !used_names.contains_key(candidate) {
+        used_names.insert(candidate.to_string(), 1);
+        return candidate.to_string();
+    }
+
+    let mut suffix = used_names.get(candidate).copied().unwrap_or(1) + 1;
+    loop {
+        let unique_name = append_file_name_suffix(candidate, suffix);
+        if !used_names.contains_key(&unique_name) {
+            used_names.insert(candidate.to_string(), suffix);
+            used_names.insert(unique_name.clone(), 1);
+            return unique_name;
+        }
+        suffix += 1;
+    }
+}
+
+fn append_file_name_suffix(file_name: &str, suffix: usize) -> String {
+    file_name
+        .rsplit_once('.')
+        .map(|(stem, extension)| format!("{stem}-{suffix}.{extension}"))
+        .unwrap_or_else(|| format!("{file_name}-{suffix}"))
 }
 
 fn resource_extension<'a>(
@@ -2972,6 +3021,83 @@ mod tests {
                 .join("images")
                 .join("unsafe_image.png")
                 .exists()
+        );
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn avoids_sanitized_image_asset_file_name_collisions() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("colliding-image-assets");
+        fs::create_dir_all(&root)?;
+        let first_id = ResourceId("same image.png".to_string());
+        let second_id = ResourceId("same?image.png".to_string());
+        let document = Document {
+            ir_version: IR_VERSION,
+            metadata: Metadata::default(),
+            sections: vec![Section {
+                blocks: vec![
+                    Block::Image(Image {
+                        resource_id: first_id.clone(),
+                        alt: Some("first".to_string()),
+                        caption: None,
+                        width: None,
+                        height: None,
+                    }),
+                    Block::Image(Image {
+                        resource_id: second_id.clone(),
+                        alt: Some("second".to_string()),
+                        caption: None,
+                        width: None,
+                        height: None,
+                    }),
+                ],
+                ..Default::default()
+            }],
+            resources: ResourceStore {
+                entries: vec![
+                    Resource::Image(ImageResource {
+                        id: first_id,
+                        media_type: Some("image/png".to_string()),
+                        extension: Some("png".to_string()),
+                        bytes: vec![1],
+                    }),
+                    Resource::Image(ImageResource {
+                        id: second_id,
+                        media_type: Some("image/png".to_string()),
+                        extension: Some("png".to_string()),
+                        bytes: vec![2],
+                    }),
+                ],
+            },
+            styles: StyleSheet::default(),
+            notes: NoteStore::default(),
+            warnings: Vec::<ConversionWarning>::new(),
+        };
+        let html_path = root.join("sample.html");
+
+        write_html_output(Path::new("sample.hwpx"), &html_path, &document)?;
+
+        let html = fs::read_to_string(&html_path)?;
+        assert!(html.contains("src=\"sample_assets/images/same_image.png\""));
+        assert!(html.contains("src=\"sample_assets/images/same_image-2.png\""));
+        assert_eq!(
+            fs::read(
+                root.join("sample_assets")
+                    .join("images")
+                    .join("same_image.png")
+            )?,
+            vec![1]
+        );
+        assert_eq!(
+            fs::read(
+                root.join("sample_assets")
+                    .join("images")
+                    .join("same_image-2.png")
+            )?,
+            vec![2]
         );
 
         fs::remove_dir_all(&root)?;
