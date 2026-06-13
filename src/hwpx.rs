@@ -7,11 +7,11 @@ use std::path::Path;
 use zip::ZipArchive;
 
 use crate::ir::{
-    Alignment, Block, Color, Document, HeaderFooter, HeaderFooterPlacement, Image, ImageResource,
-    Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, Metadata, Note, NoteId, NoteKind,
-    NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore,
-    Section, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun,
-    TextStyle, UnknownBlock, UnknownInline,
+    Alignment, Block, Color, Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
+    Image, ImageResource, Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, Metadata, Note,
+    NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId,
+    ResourceStore, Section, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
+    TextRun, TextStyle, UnknownBlock, UnknownInline,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -1247,6 +1247,11 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
                     "image", object_xml, context,
                 )));
             }
+        } else if object_kind == Some("equation") {
+            let object_xml = &paragraph_xml[tag.start..object_end];
+            blocks.push(Block::Equation(extract_hwpx_equation_from_xml(
+                object_xml, context,
+            )));
         } else if let Some(object_kind) = object_kind {
             let object_xml = &paragraph_xml[tag.start..object_end];
             blocks.push(Block::Unknown(unknown_hwpx_object_block(
@@ -1325,6 +1330,29 @@ fn hwpx_header_footer_placement(control_xml: &str) -> HeaderFooterPlacement {
         Some("ODD") => HeaderFooterPlacement::OddPage,
         Some("FIRST" | "FIRST_PAGE") => HeaderFooterPlacement::FirstPage,
         _ => HeaderFooterPlacement::Default,
+    }
+}
+
+fn extract_hwpx_equation_from_xml(
+    equation_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> Equation {
+    let content = first_non_empty_string([
+        decoded_first_xml_attribute_value(equation_xml, "script"),
+        decoded_first_xml_attribute_value(equation_xml, "text"),
+        decoded_first_xml_attribute_value(equation_xml, "equation"),
+        first_hwpx_child_element_text(equation_xml, &["script", "math", "text"]),
+        non_empty_string_owned(inlines_to_plain_text(&extract_inlines_from_xml_fragment(
+            equation_xml,
+            context,
+        ))),
+    ]);
+
+    Equation {
+        kind: EquationKind::PlainText,
+        fallback_text: content.clone().or_else(|| Some("[equation]".to_string())),
+        content,
+        resource_id: None,
     }
 }
 
@@ -1909,6 +1937,35 @@ fn simple_xml_element_text(xml: &str) -> Option<String> {
         .map(|(before_close, _)| before_close)
         .unwrap_or(xml);
     non_empty_string_owned(decode_xml_text(text))
+}
+
+fn first_hwpx_child_element_text(xml: &str, names: &[&str]) -> Option<String> {
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(xml, cursor) {
+        if tag.is_closing || !names.contains(&tag.name) {
+            cursor = tag.end;
+            continue;
+        }
+
+        if tag.is_self_closing {
+            cursor = tag.end;
+            continue;
+        }
+
+        let Some(element_end) = find_matching_element_end(xml, &tag) else {
+            cursor = tag.end;
+            continue;
+        };
+
+        if let Some(text) = simple_xml_element_text(xml_element_inner_xml(xml, &tag, element_end)) {
+            return Some(text);
+        }
+
+        cursor = tag.end;
+    }
+
+    None
 }
 
 fn decoded_xml_attribute_value(tag: &str, attribute_name: &str) -> Option<String> {
@@ -2654,7 +2711,7 @@ mod tests {
                 <hp:run><hp:t>before image</hp:t></hp:run>
                 <hp:ctrl><hp:pic><hp:imgRect/></hp:pic></hp:ctrl>
                 <hp:run><hp:t>after image</hp:t></hp:run>
-                <hp:ctrl><hp:equation/></hp:ctrl>
+                <hp:ctrl><hp:equation script="x + y"/></hp:ctrl>
               </hp:p>
             </hs:sec>
         "#;
@@ -2685,9 +2742,10 @@ mod tests {
         }
         assert!(matches!(
             &blocks[3],
-            Block::Unknown(unknown)
-                if unknown.kind == "hwpx:equation"
-                    && unknown.fallback_text.as_deref() == Some("[equation]")
+            Block::Equation(equation)
+                if equation.kind == EquationKind::PlainText
+                    && equation.content.as_deref() == Some("x + y")
+                    && equation.fallback_text.as_deref() == Some("x + y")
         ));
     }
 
