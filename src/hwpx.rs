@@ -7,14 +7,16 @@ use std::path::Path;
 use zip::ZipArchive;
 
 use crate::ir::{
-    Alignment, Block, Color, Document, HeaderFooter, HeaderFooterPlacement, Inline, LengthPt, Link,
-    ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphStyle,
-    ResourceStore, Section, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
-    TextRun, TextStyle, UnknownBlock, UnknownInline,
+    Alignment, Block, Color, Document, HeaderFooter, HeaderFooterPlacement, Image, ImageResource,
+    Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, Metadata, Note, NoteId, NoteKind,
+    NoteStore, Paragraph, ParagraphStyle, Resource, ResourceId, ResourceStore, Section, StyleSheet,
+    Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
+    UnknownInline,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
 const HEADER_XML_PATH: &str = "Contents/header.xml";
+const MAX_HWPX_IMAGE_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InputKind {
@@ -287,6 +289,7 @@ pub(crate) fn read_section_document_from_archive(bytes: &[u8]) -> io::Result<Doc
     }
 
     let mut document = document_from_sections(sections);
+    document.resources = context.resources;
     document.notes = context.notes;
     Ok(document)
 }
@@ -318,6 +321,9 @@ struct HwpxFallbackContext {
     text_styles: Vec<TextStyle>,
     font_faces: Vec<Vec<String>>,
     border_fill_backgrounds: Vec<Option<Color>>,
+    image_items: BTreeMap<String, HwpxImageItem>,
+    image_resource_ids: BTreeMap<String, ResourceId>,
+    resources: ResourceStore,
     ordered_counts: BTreeMap<(u32, u8), u32>,
     notes: NoteStore,
     next_note_ordinal: u32,
@@ -420,6 +426,41 @@ impl HwpxFallbackContext {
         }
     }
 
+    fn ensure_image_resource(&mut self, binary_item_id_ref: &str) -> Option<ResourceId> {
+        let image_key = self.resolve_image_item_key(binary_item_id_ref)?;
+        if let Some(resource_id) = self.image_resource_ids.get(&image_key) {
+            return Some(resource_id.clone());
+        }
+
+        let item = self.image_items.get(&image_key)?;
+        let resource_id = ResourceId(item.id.clone());
+        if self.resources.get(&resource_id).is_none() {
+            self.resources
+                .insert_unique(Resource::Image(ImageResource {
+                    id: resource_id.clone(),
+                    media_type: item.media_type.clone(),
+                    extension: item.extension.clone(),
+                    bytes: item.bytes.clone(),
+                }))
+                .ok()?;
+        }
+
+        self.image_resource_ids
+            .insert(image_key, resource_id.clone());
+        Some(resource_id)
+    }
+
+    fn resolve_image_item_key(&self, binary_item_id_ref: &str) -> Option<String> {
+        let raw = binary_item_id_ref.trim();
+        if raw.is_empty() {
+            return None;
+        }
+
+        hwpx_image_item_lookup_keys(raw)
+            .into_iter()
+            .find(|key| self.image_items.contains_key(key))
+    }
+
     fn next_note_id(&mut self, prefix: &str, raw_id: Option<String>) -> NoteId {
         let base = raw_id
             .map(|id| format!("{prefix}-{id}"))
@@ -443,6 +484,14 @@ impl HwpxFallbackContext {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HwpxImageItem {
+    id: String,
+    media_type: Option<String>,
+    extension: Option<String>,
+    bytes: Vec<u8>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 struct HwpxParagraphStyle {
     kind: Option<ListKind>,
@@ -454,8 +503,11 @@ struct HwpxParagraphStyle {
 fn read_hwpx_fallback_context<R: Read + io::Seek>(
     archive: &mut ZipArchive<R>,
 ) -> io::Result<HwpxFallbackContext> {
-    let header_xml = read_zip_text_entry(archive, HEADER_XML_PATH)?;
-    Ok(extract_hwpx_fallback_context(&header_xml))
+    let mut context = read_zip_text_entry(archive, HEADER_XML_PATH)
+        .map(|header_xml| extract_hwpx_fallback_context(&header_xml))
+        .unwrap_or_default();
+    context.image_items = read_hwpx_image_items(archive)?;
+    Ok(context)
 }
 
 fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
@@ -551,6 +603,150 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
     }
 
     context
+}
+
+fn read_hwpx_image_items<R: Read + io::Seek>(
+    archive: &mut ZipArchive<R>,
+) -> io::Result<BTreeMap<String, HwpxImageItem>> {
+    let Ok(content_xml) = read_zip_text_entry(archive, "Contents/content.hpf") else {
+        return Ok(BTreeMap::new());
+    };
+
+    let mut items = BTreeMap::new();
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(&content_xml, cursor) {
+        if tag.name != "item" || tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+
+        let id = decoded_xml_attribute_value(tag.raw, "id");
+        let href = decoded_xml_attribute_value(tag.raw, "href");
+        let media_type = decoded_xml_attribute_value(tag.raw, "media-type");
+        let Some(id) = id else {
+            cursor = tag.end;
+            continue;
+        };
+        let Some(href) = href else {
+            cursor = tag.end;
+            continue;
+        };
+        if !is_hwpx_image_manifest_item(&href, media_type.as_deref()) {
+            cursor = tag.end;
+            continue;
+        }
+
+        if let Ok(Some(bytes)) = read_hwpx_binary_entry(archive, &href) {
+            let extension = path_extension(&href);
+            let media_type = media_type.or_else(|| {
+                extension
+                    .as_deref()
+                    .and_then(media_type_for_extension)
+                    .map(ToOwned::to_owned)
+            });
+            let item = HwpxImageItem {
+                id: id.clone(),
+                media_type,
+                extension,
+                bytes,
+            };
+
+            for key in hwpx_image_item_lookup_keys(&id) {
+                items.insert(key, item.clone());
+            }
+            if let Some(stem) = path_file_stem(&href) {
+                for key in hwpx_image_item_lookup_keys(&stem) {
+                    items.insert(key, item.clone());
+                }
+            }
+        }
+
+        cursor = tag.end;
+    }
+
+    Ok(items)
+}
+
+fn read_hwpx_binary_entry<R: Read + io::Seek>(
+    archive: &mut ZipArchive<R>,
+    href: &str,
+) -> io::Result<Option<Vec<u8>>> {
+    for path in hwpx_binary_entry_candidates(href) {
+        match read_zip_binary_entry(archive, &path) {
+            Ok(bytes) => return Ok(Some(bytes)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(None)
+}
+
+fn hwpx_binary_entry_candidates(href: &str) -> Vec<String> {
+    let normalized = href.replace('\\', "/");
+    let mut candidates = vec![normalized.clone()];
+    if !normalized.starts_with("Contents/") {
+        candidates.push(format!("Contents/{normalized}"));
+    }
+    candidates
+}
+
+fn is_hwpx_image_manifest_item(href: &str, media_type: Option<&str>) -> bool {
+    media_type.is_some_and(|media_type| media_type.starts_with("image/"))
+        || href.replace('\\', "/").contains("BinData/")
+            && path_extension(href)
+                .as_deref()
+                .and_then(media_type_for_extension)
+                .is_some_and(|media_type| media_type.starts_with("image/"))
+}
+
+fn hwpx_image_item_lookup_keys(value: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return keys;
+    }
+
+    keys.push(trimmed.to_string());
+    let digits = trimmed
+        .chars()
+        .filter(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if !digits.is_empty() {
+        keys.push(digits.clone());
+        keys.push(format!("image{digits}"));
+    }
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+fn path_extension(path: &str) -> Option<String> {
+    let file_name = path.replace('\\', "/").rsplit('/').next()?.to_string();
+    let extension = file_name.rsplit_once('.')?.1;
+    non_empty_string_owned(extension.to_ascii_lowercase())
+}
+
+fn path_file_stem(path: &str) -> Option<String> {
+    let normalized = path.replace('\\', "/");
+    let file_name = normalized.rsplit('/').next()?;
+    let stem = file_name
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(file_name);
+    non_empty_string_owned(stem.to_string())
+}
+
+fn media_type_for_extension(extension: &str) -> Option<&'static str> {
+    match extension.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "bmp" => Some("image/bmp"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
 }
 
 fn extract_hwpx_font_face(fontface_xml: &str) -> Vec<String> {
@@ -911,6 +1107,15 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
             if let Some(table) = extract_table_from_xml(table_xml, context) {
                 blocks.push(Block::Table(table));
             }
+        } else if object_kind == Some("image") {
+            let object_xml = &paragraph_xml[tag.start..object_end];
+            if let Some(image) = extract_hwpx_image_from_pic_xml(object_xml, context) {
+                blocks.push(Block::Image(image));
+            } else {
+                blocks.push(Block::Unknown(unknown_hwpx_object_block(
+                    "image", object_xml, context,
+                )));
+            }
         } else if let Some(object_kind) = object_kind {
             let object_xml = &paragraph_xml[tag.start..object_end];
             blocks.push(Block::Unknown(unknown_hwpx_object_block(
@@ -989,6 +1194,32 @@ fn hwpx_header_footer_placement(control_xml: &str) -> HeaderFooterPlacement {
         Some("FIRST" | "FIRST_PAGE") => HeaderFooterPlacement::FirstPage,
         _ => HeaderFooterPlacement::Default,
     }
+}
+
+fn extract_hwpx_image_from_pic_xml(
+    pic_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<Image> {
+    let binary_item_id_ref = first_xml_attribute_value(pic_xml, "binaryItemIDRef")?;
+    let resource_id = context.ensure_image_resource(binary_item_id_ref)?;
+
+    Some(Image {
+        resource_id,
+        alt: first_non_empty_string([
+            decoded_first_xml_attribute_value(pic_xml, "description"),
+            decoded_first_xml_attribute_value(pic_xml, "desc"),
+            decoded_first_xml_attribute_value(pic_xml, "name"),
+        ]),
+        caption: None,
+        width: hwpx_object_dimension_to_px(pic_xml, "width"),
+        height: hwpx_object_dimension_to_px(pic_xml, "height"),
+    })
+}
+
+fn hwpx_object_dimension_to_px(pic_xml: &str, attribute_name: &str) -> Option<LengthPx> {
+    first_xml_attribute_value(pic_xml, attribute_name)
+        .and_then(|value| value.parse::<u32>().ok())
+        .and_then(hwp_units_to_px_option)
 }
 
 fn unknown_hwpx_object_block(
@@ -1395,6 +1626,12 @@ fn decoded_xml_attribute_value(tag: &str, attribute_name: &str) -> Option<String
         .and_then(non_empty_string_owned)
 }
 
+fn decoded_first_xml_attribute_value(xml: &str, attribute_name: &str) -> Option<String> {
+    first_xml_attribute_value(xml, attribute_name)
+        .map(decode_xml_text)
+        .and_then(non_empty_string_owned)
+}
+
 fn first_non_empty_string(values: impl IntoIterator<Item = Option<String>>) -> Option<String> {
     values
         .into_iter()
@@ -1518,6 +1755,14 @@ fn hwp_units_to_pt_option(value: i32) -> Option<LengthPt> {
         None
     } else {
         Some(LengthPt(value as f32 / 100.0))
+    }
+}
+
+fn hwp_units_to_px_option(value: u32) -> Option<LengthPx> {
+    if value == 0 {
+        None
+    } else {
+        Some(LengthPx(value as f32 / 75.0))
     }
 }
 
@@ -1669,6 +1914,31 @@ fn read_zip_text_entry<R: Read + io::Seek>(
             format!("{path}가 UTF-8이 아닙니다: {error}"),
         )
     })
+}
+
+fn read_zip_binary_entry<R: Read + io::Seek>(
+    archive: &mut ZipArchive<R>,
+    path: &str,
+) -> io::Result<Vec<u8>> {
+    let mut file = archive.by_name(path).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{path} entry was not found"),
+        )
+    })?;
+    if file.size() > MAX_HWPX_IMAGE_RESOURCE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{path} is larger than the HWPX fallback image limit"),
+        ));
+    }
+
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|error| {
+        io::Error::new(error.kind(), format!("{path} could not be read: {error}"))
+    })?;
+
+    Ok(bytes)
 }
 
 fn is_section_xml_path(path: &str) -> bool {
@@ -2458,6 +2728,66 @@ mod tests {
                 a: 255,
             })
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_hwpx_image_resource_from_manifest() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                "Contents/content.hpf",
+                r#"
+                <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
+                  <opf:manifest>
+                    <opf:item id="image1" href="BinData/image1.png" media-type="image/png"/>
+                    <opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/>
+                  </opf:manifest>
+                  <opf:spine><opf:itemref idref="section0"/></opf:spine>
+                </opf:package>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+                        xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+                  <hp:p>
+                    <hp:run><hp:t>before image</hp:t></hp:run>
+                    <hp:ctrl>
+                      <hp:pic description="sample image">
+                        <hp:sz width="7500" height="3750"/>
+                        <hp:img><hc:img binaryItemIDRef="image1"/></hp:img>
+                      </hp:pic>
+                    </hp:ctrl>
+                    <hp:run><hp:t>after image</hp:t></hp:run>
+                  </hp:p>
+                </hs:sec>
+                "#,
+            ),
+            ("BinData/image1.png", "fake-png-bytes"),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+
+        assert_eq!(document.resources.entries.len(), 1);
+        let image = match &document.sections[0].blocks[1] {
+            Block::Image(image) => image,
+            other => panic!("expected image block, got {other:?}"),
+        };
+        assert_eq!(image.resource_id.as_str(), "image1");
+        assert_eq!(image.alt.as_deref(), Some("sample image"));
+        assert_eq!(image.width, Some(LengthPx(100.0)));
+        assert_eq!(image.height, Some(LengthPx(50.0)));
+
+        match document.resources.get(&ResourceId("image1".to_string())) {
+            Some(Resource::Image(resource)) => {
+                assert_eq!(resource.media_type.as_deref(), Some("image/png"));
+                assert_eq!(resource.extension.as_deref(), Some("png"));
+                assert_eq!(resource.bytes, b"fake-png-bytes");
+            }
+            other => panic!("expected image resource, got {other:?}"),
+        }
 
         Ok(())
     }

@@ -88,7 +88,7 @@ fn document_from_hwpx_fallback(mut document: Document, source: HwpxTextFallbackS
     let warning = match source {
         HwpxTextFallbackSource::SectionXml => ConversionWarning {
             code: WarningCode::Unknown,
-            message: "Used HWPX section XML fallback. This recovers paragraph text, inline line breaks/tabs, simple table structure, list metadata, field/bookmark inlines, headers/footers, notes, and some basic styles, but image and layout data may be missing.".to_string(),
+            message: "Used HWPX section XML fallback. This recovers paragraph text, inline line breaks/tabs, simple table structure, image resources, list metadata, field/bookmark inlines, headers/footers, notes, and some basic styles, but image layout data may be missing.".to_string(),
         },
         HwpxTextFallbackSource::PreviewText => ConversionWarning {
             code: WarningCode::UsedHwpxPreviewFallback,
