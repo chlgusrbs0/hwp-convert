@@ -397,10 +397,10 @@ fn hwpx_section_entry_candidates(href: &str) -> Vec<String> {
     let mut candidates = Vec::new();
     push_unique_candidate(&mut candidates, normalized.clone());
 
-    if !normalized.starts_with("Contents/") {
-        if let Some(candidate) = normalize_hwpx_archive_path(&format!("Contents/{normalized}")) {
-            push_unique_candidate(&mut candidates, candidate);
-        }
+    if !normalized.starts_with("Contents/")
+        && let Some(candidate) = normalize_hwpx_archive_path(&format!("Contents/{normalized}"))
+    {
+        push_unique_candidate(&mut candidates, candidate);
     }
 
     candidates
@@ -829,10 +829,10 @@ fn hwpx_binary_entry_candidates(href: &str) -> Vec<String> {
     };
     let mut candidates = Vec::new();
     push_unique_candidate(&mut candidates, normalized.clone());
-    if !normalized.starts_with("Contents/") {
-        if let Some(candidate) = normalize_hwpx_archive_path(&format!("Contents/{normalized}")) {
-            push_unique_candidate(&mut candidates, candidate);
-        }
+    if !normalized.starts_with("Contents/")
+        && let Some(candidate) = normalize_hwpx_archive_path(&format!("Contents/{normalized}"))
+    {
+        push_unique_candidate(&mut candidates, candidate);
     }
     candidates
 }
