@@ -1263,6 +1263,35 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
             continue;
         }
 
+        if tag.name == "ctrl" && !hwpx_control_contains_supported_content(paragraph_xml, &tag) {
+            let control_end = if tag.is_self_closing {
+                tag.end
+            } else {
+                let Some(end) = find_matching_element_end(paragraph_xml, &tag) else {
+                    cursor = tag.end;
+                    continue;
+                };
+                end
+            };
+            push_paragraph_text_fragment_as_block(
+                &mut blocks,
+                &paragraph_xml[fragment_start..tag.start],
+                pending_list.take(),
+                paragraph_role.clone(),
+                paragraph_style.clone(),
+                context,
+            );
+
+            let control_xml = &paragraph_xml[tag.start..control_end];
+            blocks.push(Block::Unknown(unknown_hwpx_control_block(
+                control_xml,
+                context,
+            )));
+            fragment_start = control_end;
+            cursor = control_end;
+            continue;
+        }
+
         let object_kind = hwpx_fallback_object_kind(tag.name);
         let structural_kind = hwpx_fallback_structural_control_kind(tag.name);
         if object_kind.is_none() && structural_kind.is_none() {
@@ -1362,6 +1391,48 @@ fn hwpx_fallback_structural_control_kind(tag_name: &str) -> Option<&'static str>
         "footer" => Some("footer"),
         _ => None,
     }
+}
+
+fn hwpx_control_contains_supported_content(xml: &str, control_tag: &XmlTag<'_>) -> bool {
+    let control_end = if control_tag.is_self_closing {
+        control_tag.end
+    } else {
+        find_matching_element_end(xml, control_tag).unwrap_or(control_tag.end)
+    };
+    let control_xml = &xml[control_tag.start..control_end];
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(control_xml, cursor) {
+        if tag.is_closing || tag.name == "ctrl" {
+            cursor = tag.end;
+            continue;
+        }
+
+        if hwpx_fallback_object_kind(tag.name).is_some()
+            || hwpx_fallback_structural_control_kind(tag.name).is_some()
+            || is_hwpx_inline_control_tag(tag.name)
+        {
+            return true;
+        }
+
+        cursor = tag.end;
+    }
+
+    false
+}
+
+fn is_hwpx_inline_control_tag(tag_name: &str) -> bool {
+    matches!(
+        tag_name,
+        "bookmark"
+            | "fieldBegin"
+            | "fieldEnd"
+            | "footNote"
+            | "endNote"
+            | "hyperlink"
+            | "a"
+            | "link"
+    )
 }
 
 fn push_hwpx_structural_control(
@@ -1597,6 +1668,43 @@ fn unknown_hwpx_object_block(
         ),
         source: Some("Contents/section*.xml".to_string()),
     }
+}
+
+fn unknown_hwpx_control_block(
+    control_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> UnknownBlock {
+    let control_kind =
+        first_hwpx_control_child_name(control_xml).unwrap_or_else(|| "unknown".to_string());
+    let control_text =
+        inlines_to_plain_text(&extract_inlines_from_xml_fragment(control_xml, context));
+    let fallback_text = if control_text.is_empty() {
+        format!("[control: {control_kind}]")
+    } else {
+        format!("[control: {control_kind}]\n{control_text}")
+    };
+
+    UnknownBlock {
+        kind: format!("hwpx:control:{control_kind}"),
+        fallback_text: Some(fallback_text),
+        message: Some(
+            "HWPX section XML fallback preserved an unsupported control placeholder.".to_string(),
+        ),
+        source: Some("Contents/section*.xml".to_string()),
+    }
+}
+
+fn first_hwpx_control_child_name(control_xml: &str) -> Option<String> {
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(control_xml, cursor) {
+        if !tag.is_closing && tag.name != "ctrl" {
+            return Some(tag.name.to_string());
+        }
+        cursor = tag.end;
+    }
+
+    None
 }
 
 fn push_paragraph_text_fragment_as_block(
@@ -2958,6 +3066,28 @@ mod tests {
             Block::Shape(shape)
                 if shape.kind == ShapeKind::Rectangle
                     && shape.fallback_text.as_deref() == Some("shape text")
+        ));
+    }
+
+    #[test]
+    fn preserves_unsupported_hwpx_control_without_text_as_unknown_block() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p>
+                <hp:ctrl><hp:unknownControl id="7"/></hp:ctrl>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(
+            &blocks[0],
+            Block::Unknown(unknown)
+                if unknown.kind == "hwpx:control:unknownControl"
+                    && unknown.fallback_text.as_deref() == Some("[control: unknownControl]")
         ));
     }
 
