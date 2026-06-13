@@ -1548,7 +1548,11 @@ fn render_markdown_image(
     image_asset_prefix: &str,
 ) -> String {
     let alt = escape_markdown_image_alt(image.alt.as_deref().unwrap_or(image.resource_id.as_str()));
-    let path = resource_public_path(resources, &image.resource_id, image_asset_prefix);
+    let path = escape_markdown_link_destination(&resource_public_path(
+        resources,
+        &image.resource_id,
+        image_asset_prefix,
+    ));
 
     let mut markdown = format!("![{alt}]({path})");
     if let Some(caption) = image
@@ -1792,6 +1796,7 @@ fn escape_markdown_image_alt(text: &str) -> String {
 
 fn escape_markdown_link_destination(text: &str) -> String {
     text.replace('\\', "\\\\")
+        .replace(' ', "%20")
         .replace(')', "\\)")
         .replace('(', "\\(")
 }
@@ -2965,6 +2970,16 @@ mod tests {
 
         assert!(markdown.contains("![logo](sample_assets/images/image-1.png)"));
         assert!(markdown.contains("Image caption"));
+    }
+
+    #[test]
+    fn escapes_markdown_image_asset_path() {
+        let document = document_with_image_block("image-1", Some("logo"), Some("png"));
+
+        let markdown =
+            render_markdown_document_with_asset_prefix(&document, "assets (draft)/images");
+
+        assert!(markdown.contains("![logo](assets%20\\(draft\\)/images/image-1.png)"));
     }
 
     #[test]
