@@ -9,9 +9,9 @@ use zip::ZipArchive;
 use crate::ir::{
     Alignment, Block, Color, Document, HeaderFooter, HeaderFooterPlacement, Image, ImageResource,
     Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, Metadata, Note, NoteId, NoteKind,
-    NoteStore, Paragraph, ParagraphStyle, Resource, ResourceId, ResourceStore, Section, StyleSheet,
-    Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
-    UnknownInline,
+    NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore,
+    Section, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun,
+    TextStyle, UnknownBlock, UnknownInline,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -1046,9 +1046,7 @@ fn extract_section_xml_blocks_with_metadata(
                     continue;
                 };
                 let table_xml = &xml[tag.start..table_end];
-                if let Some(table) = extract_table_from_xml(table_xml, context) {
-                    blocks.push(Block::Table(table));
-                }
+                blocks.extend(extract_table_blocks_from_xml(table_xml, context));
                 cursor = table_end;
             }
             "p" => {
@@ -1107,6 +1105,29 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
         rows,
         style: TableStyle { background_color },
     })
+}
+
+fn extract_table_blocks_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) -> Vec<Block> {
+    let Some(table) = extract_table_from_xml(table_xml, context) else {
+        return Vec::new();
+    };
+    let table_block = Block::Table(table);
+    let Some(caption) = extract_hwpx_object_caption_blocks(table_xml, context) else {
+        return vec![table_block];
+    };
+
+    match caption.placement {
+        HwpxCaptionPlacement::Before => {
+            let mut blocks = caption.blocks;
+            blocks.push(table_block);
+            blocks
+        }
+        HwpxCaptionPlacement::After => {
+            let mut blocks = vec![table_block];
+            blocks.extend(caption.blocks);
+            blocks
+        }
+    }
 }
 
 fn extract_table_cells_from_row_xml(
@@ -1191,9 +1212,7 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
 
         if object_kind == Some("table") {
             let table_xml = &paragraph_xml[tag.start..object_end];
-            if let Some(table) = extract_table_from_xml(table_xml, context) {
-                blocks.push(Block::Table(table));
-            }
+            blocks.extend(extract_table_blocks_from_xml(table_xml, context));
         } else if object_kind == Some("image") {
             let object_xml = &paragraph_xml[tag.start..object_end];
             if let Some(image) = extract_hwpx_image_from_pic_xml(object_xml, context) {
@@ -1303,10 +1322,32 @@ fn extract_hwpx_image_from_pic_xml(
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HwpxCaptionPlacement {
+    Before,
+    After,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct HwpxObjectCaption {
+    blocks: Vec<Block>,
+    placement: HwpxCaptionPlacement,
+}
+
 fn extract_hwpx_object_caption(
     object_xml: &str,
     context: &mut HwpxFallbackContext,
 ) -> Option<String> {
+    let caption = extract_hwpx_object_caption_blocks(object_xml, context)?;
+    let text = crate::util::plain_text::blocks_to_plain_text(&caption.blocks);
+
+    non_empty_string_owned(text)
+}
+
+fn extract_hwpx_object_caption_blocks(
+    object_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<HwpxObjectCaption> {
     let mut cursor = 0usize;
 
     while let Some(tag) = next_xml_tag(object_xml, cursor) {
@@ -1317,11 +1358,14 @@ fn extract_hwpx_object_caption(
                 find_matching_element_end(object_xml, &tag).unwrap_or(tag.end)
             };
             let caption_xml = &object_xml[tag.start..caption_end];
-            let blocks = extract_section_xml_blocks(caption_xml, context);
-            let text = crate::util::plain_text::blocks_to_plain_text(&blocks);
+            let mut blocks = extract_section_xml_blocks(caption_xml, context);
+            mark_blocks_as_caption(&mut blocks);
 
-            if let Some(caption) = non_empty_string_owned(text) {
-                return Some(caption);
+            if !blocks.is_empty() {
+                return Some(HwpxObjectCaption {
+                    blocks,
+                    placement: hwpx_caption_placement(tag.raw),
+                });
             }
         }
 
@@ -1329,6 +1373,29 @@ fn extract_hwpx_object_caption(
     }
 
     None
+}
+
+fn mark_blocks_as_caption(blocks: &mut [Block]) {
+    for block in blocks {
+        if let Block::Paragraph(paragraph) = block {
+            paragraph.role = ParagraphRole::Caption;
+        }
+    }
+}
+
+fn hwpx_caption_placement(caption_tag: &str) -> HwpxCaptionPlacement {
+    let value = first_non_empty_string([
+        decoded_xml_attribute_value(caption_tag, "side"),
+        decoded_xml_attribute_value(caption_tag, "position"),
+        decoded_xml_attribute_value(caption_tag, "pos"),
+    ]);
+
+    let normalized = value.as_deref().map(str::to_ascii_uppercase);
+
+    match normalized.as_deref() {
+        Some("LEFT" | "TOP" | "L" | "T" | "BEFORE") => HwpxCaptionPlacement::Before,
+        _ => HwpxCaptionPlacement::After,
+    }
 }
 
 fn hwpx_object_dimension_to_px(pic_xml: &str, attribute_name: &str) -> Option<LengthPx> {
@@ -2433,6 +2500,41 @@ mod tests {
             },
             other => panic!("expected paragraph block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn preserves_hwpx_table_caption_as_adjacent_caption_block() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tbl>
+                <hp:caption side="TOP">
+                  <hp:subList>
+                    <hp:p><hp:run><hp:t>table caption</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:caption>
+                <hp:tr>
+                  <hp:tc>
+                    <hp:subList>
+                      <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
+                    </hp:subList>
+                  </hp:tc>
+                </hp:tr>
+              </hp:tbl>
+            </hs:sec>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+
+        assert_eq!(blocks.len(), 2);
+        match &blocks[0] {
+            Block::Paragraph(paragraph) => {
+                assert_eq!(paragraph.role, ParagraphRole::Caption);
+                assert_eq!(inlines_to_plain_text(&paragraph.inlines), "table caption");
+            }
+            other => panic!("expected caption paragraph block, got {other:?}"),
+        }
+        assert!(matches!(&blocks[1], Block::Table(_)));
     }
 
     #[test]
