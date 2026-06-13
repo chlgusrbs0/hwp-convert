@@ -256,7 +256,7 @@ pub(crate) fn read_section_document_from_archive(bytes: &[u8]) -> io::Result<Doc
         ));
     }
 
-    let mut context = read_hwpx_fallback_context(&mut archive).unwrap_or_default();
+    let mut context = read_hwpx_fallback_context(&mut archive)?;
     let mut sections = Vec::new();
     for section_path in section_paths {
         let section_xml = read_zip_text_entry(&mut archive, &section_path)?;
@@ -623,9 +623,11 @@ struct HwpxParagraphStyle {
 fn read_hwpx_fallback_context<R: Read + io::Seek>(
     archive: &mut ZipArchive<R>,
 ) -> io::Result<HwpxFallbackContext> {
-    let mut context = read_zip_text_entry(archive, HEADER_XML_PATH)
-        .map(|header_xml| extract_hwpx_fallback_context(&header_xml))
-        .unwrap_or_default();
+    let mut context = match read_zip_text_entry(archive, HEADER_XML_PATH) {
+        Ok(header_xml) => extract_hwpx_fallback_context(&header_xml),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => HwpxFallbackContext::default(),
+        Err(error) => return Err(error),
+    };
     context.image_items = read_hwpx_image_items(archive)?;
     Ok(context)
 }
@@ -4394,6 +4396,29 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn rejects_invalid_hwpx_header_xml_in_document_fallback() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_binary_bytes(&[
+            (HEADER_XML_PATH, &[0xff, 0xfe]),
+            (
+                "Contents/section0.xml",
+                br#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run><hp:t>body</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let error = read_section_document_from_archive(&bytes).expect_err("header should fail");
+        let message = error.to_string();
+
+        assert!(message.contains(HEADER_XML_PATH));
+        assert!(message.contains("UTF-8"));
+
+        Ok(())
+    }
+
     fn section_first_paragraph_text(section: &crate::ir::Section) -> Option<String> {
         blocks_first_paragraph_text(&section.blocks)
     }
@@ -4420,6 +4445,19 @@ mod tests {
         for (path, content) in entries {
             writer.start_file(*path, SimpleFileOptions::default())?;
             writer.write_all(content.as_bytes())?;
+        }
+
+        let cursor = writer.finish()?;
+        Ok(cursor.into_inner())
+    }
+
+    fn create_archive_binary_bytes(entries: &[(&str, &[u8])]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(cursor);
+
+        for (path, content) in entries {
+            writer.start_file(*path, SimpleFileOptions::default())?;
+            writer.write_all(content)?;
         }
 
         let cursor = writer.finish()?;
