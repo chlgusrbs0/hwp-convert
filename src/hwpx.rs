@@ -2470,7 +2470,12 @@ fn hwp_units_to_px_option(value: u32) -> Option<LengthPx> {
 }
 
 fn parse_hwpx_hex_color(value: &str) -> Option<Color> {
-    let hex = value.strip_prefix('#')?;
+    let trimmed = value.trim();
+    let hex = trimmed
+        .strip_prefix('#')
+        .or_else(|| trimmed.strip_prefix("0x"))
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
     if hex.len() != 6 {
         return None;
     }
@@ -3607,7 +3612,7 @@ mod tests {
                       <hh:fontface lang="HANGUL"><hh:font id="0" face="Noto Sans KR"/></hh:fontface>
                     </hh:fontfaces>
                     <hh:charProperties>
-                      <hh:charPr id="7" height="1200" textColor="#010203" shadeColor="#040506">
+                      <hh:charPr id="7" height="1200" textColor="010203" shadeColor="0x040506">
                         <hh:fontRef hangul="0"/>
                         <hh:bold/>
                         <hh:italic/>
@@ -3677,8 +3682,8 @@ mod tests {
                          xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
                   <hh:refList>
                     <hh:borderFills>
-                      <hh:borderFill id="3"><hc:fillBrush><hc:winBrush faceColor="#112233"/></hc:fillBrush></hh:borderFill>
-                      <hh:borderFill id="4"><hc:fillBrush><hc:winBrush faceColor="#445566"/></hc:fillBrush></hh:borderFill>
+                      <hh:borderFill id="3"><hc:fillBrush><hc:winBrush faceColor="112233"/></hc:fillBrush></hh:borderFill>
+                      <hh:borderFill id="4"><hc:fillBrush><hc:winBrush faceColor="0X445566"/></hc:fillBrush></hh:borderFill>
                     </hh:borderFills>
                   </hh:refList>
                 </hh:head>
