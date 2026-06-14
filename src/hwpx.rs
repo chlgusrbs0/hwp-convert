@@ -2758,15 +2758,17 @@ fn next_xml_tag(xml: &str, cursor: usize) -> Option<XmlTag<'_>> {
 }
 
 fn xml_tag_end_exclusive(xml: &str, start: usize) -> Option<usize> {
-    if xml.get(start..)?.starts_with("<![CDATA[") {
-        return xml
-            .get(start..)?
-            .find("]]>")
-            .map(|relative| start + relative + 3);
+    let rest = xml.get(start..)?;
+    if rest.starts_with("<![CDATA[") {
+        return rest.find("]]>").map(|relative| start + relative + 3);
     }
-    xml.get(start..)?
-        .find('>')
-        .map(|relative| start + relative + 1)
+    if rest.starts_with("<!--") {
+        return rest.find("-->").map(|relative| start + relative + 3);
+    }
+    if rest.starts_with("<?") {
+        return rest.find("?>").map(|relative| start + relative + 2);
+    }
+    rest.find('>').map(|relative| start + relative + 1)
 }
 
 fn find_matching_element_end(xml: &str, start_tag: &XmlTag<'_>) -> Option<usize> {
@@ -3254,10 +3256,11 @@ mod tests {
     fn skips_xml_declaration_and_comments_in_section_xml_blocks() {
         let xml = r#"
             <?xml version="1.0" encoding="UTF-8"?>
-            <!-- section comment -->
+            <!-- section comment with > marker -->
             <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:p>
-                <!-- paragraph comment -->
+                <?ignore value="a > b"?>
+                <!-- paragraph comment with > marker -->
                 <hp:run><hp:t>Hello</hp:t></hp:run>
               </hp:p>
             </hs:sec>
