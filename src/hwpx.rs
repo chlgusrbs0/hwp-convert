@@ -18,6 +18,8 @@ use crate::ir::{
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
 const CONTENT_HPF_PATH: &str = "Contents/content.hpf";
 const HEADER_XML_PATH: &str = "Contents/header.xml";
+const HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES: &[&str] =
+    &["binaryItemIDRef", "binaryItemIdRef", "binaryItemIDREF"];
 const MAX_HWPX_IMAGE_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1711,7 +1713,7 @@ fn extract_hwpx_image_from_pic_xml(
     context: &mut HwpxFallbackContext,
 ) -> Option<Image> {
     let binary_item_id_ref = hwpx_pic_binary_item_id_ref(pic_xml)?;
-    let resource_id = context.ensure_image_resource(binary_item_id_ref)?;
+    let resource_id = context.ensure_image_resource(&binary_item_id_ref)?;
 
     Some(Image {
         resource_id,
@@ -1730,15 +1732,17 @@ fn extract_hwpx_image_from_pic_xml(
     })
 }
 
-fn hwpx_pic_binary_item_id_ref(pic_xml: &str) -> Option<&str> {
-    if let Some(value) = root_xml_attribute_value(pic_xml, "binaryItemIDRef") {
-        return Some(value);
-    }
-
+fn hwpx_pic_binary_item_id_ref(pic_xml: &str) -> Option<String> {
     let root = next_xml_tag(pic_xml, 0)?;
     if root.name != "pic" || root.is_closing || root.is_self_closing {
         return None;
     }
+    if let Some(value) =
+        decoded_xml_attribute_value_any(root.raw, HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES)
+    {
+        return Some(value);
+    }
+
     let root_end = find_matching_element_end(pic_xml, &root)?;
     let mut cursor = root.end;
 
@@ -1757,7 +1761,8 @@ fn hwpx_pic_binary_item_id_ref(pic_xml: &str) -> Option<&str> {
         };
         if matches!(tag.name, "img" | "image")
             && let Some(image_xml) = pic_xml.get(tag.start..tag_end)
-            && let Some(value) = first_xml_attribute_value(image_xml, "binaryItemIDRef")
+            && let Some(value) =
+                first_decoded_xml_attribute_value_any(image_xml, HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES)
         {
             return Some(value);
         }
@@ -2690,12 +2695,15 @@ fn root_or_direct_child_xml_attribute_u32(
     None
 }
 
-fn first_xml_attribute_value<'a>(xml: &'a str, attribute_name: &str) -> Option<&'a str> {
+fn first_decoded_xml_attribute_value_any(
+    xml: &str,
+    attribute_names: &[&str],
+) -> Option<String> {
     let mut cursor = 0usize;
 
     while let Some(tag) = next_xml_tag(xml, cursor) {
         if !tag.is_closing
-            && let Some(value) = xml_attribute_value(tag.raw, attribute_name)
+            && let Some(value) = decoded_xml_attribute_value_any(tag.raw, attribute_names)
         {
             return Some(value);
         }
@@ -4527,7 +4535,7 @@ mod tests {
                       <hp:pic>
                         <hp:altText><hp:run><hp:t>sample image</hp:t></hp:run></hp:altText>
                         <hp:sz w="7500" h="3750"/>
-                        <hp:img><hc:img binaryItemIDRef="image1"/></hp:img>
+                        <hp:img><hc:img binaryItemIdRef="image1"/></hp:img>
                         <hp:caption>
                           <hp:subList>
                             <hp:p><hp:run><hp:t>image caption</hp:t></hp:run></hp:p>
