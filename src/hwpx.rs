@@ -653,13 +653,29 @@ fn merge_paragraph_style(base: &mut ParagraphStyle, overlay: ParagraphStyle) {
 fn read_hwpx_fallback_context<R: Read + io::Seek>(
     archive: &mut ZipArchive<R>,
 ) -> io::Result<HwpxFallbackContext> {
-    let mut context = match read_zip_text_entry(archive, HEADER_XML_PATH) {
-        Ok(header_xml) => extract_hwpx_fallback_context(&header_xml),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => HwpxFallbackContext::default(),
+    let mut context = match read_hwpx_header_xml(archive) {
+        Ok(Some(header_xml)) => extract_hwpx_fallback_context(&header_xml),
+        Ok(None) => HwpxFallbackContext::default(),
         Err(error) => return Err(error),
     };
     context.image_items = read_hwpx_image_items(archive)?;
     Ok(context)
+}
+
+fn read_hwpx_header_xml<R: Read + io::Seek>(
+    archive: &mut ZipArchive<R>,
+) -> io::Result<Option<String>> {
+    match read_zip_text_entry(archive, HEADER_XML_PATH) {
+        Ok(header_xml) => Ok(Some(header_xml)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let Some(actual_path) = find_archive_entry_case_insensitive(archive, HEADER_XML_PATH)?
+            else {
+                return Ok(None);
+            };
+            read_zip_text_entry(archive, &actual_path).map(Some)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
@@ -4130,6 +4146,45 @@ mod tests {
         assert_eq!(paragraph.style.spacing.before_pt, Some(LengthPt(4.0)));
         assert_eq!(paragraph.style.spacing.after_pt, Some(LengthPt(5.0)));
         assert_eq!(paragraph.style.spacing.line_pt, Some(LengthPt(6.0)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_hwpx_header_context_from_case_variant_archive_entry() -> Result<(), Box<dyn Error>>
+    {
+        let bytes = create_archive_bytes(&[
+            (
+                "contents/HEADER.XML",
+                r#"
+                <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+                  <hh:refList>
+                    <hh:paraProperties>
+                      <hh:paraPr id="0">
+                        <hh:align horizontal="center"/>
+                      </hh:paraPr>
+                    </hh:paraProperties>
+                  </hh:refList>
+                </hh:head>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p paraPrIDRef="0"><hp:run><hp:t>styled paragraph</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+        let paragraph = match &document.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => paragraph,
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(paragraph.style.alignment, Some(Alignment::Center));
 
         Ok(())
     }
