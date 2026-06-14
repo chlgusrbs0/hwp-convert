@@ -1680,7 +1680,7 @@ fn extract_hwpx_image_from_pic_xml(
     pic_xml: &str,
     context: &mut HwpxFallbackContext,
 ) -> Option<Image> {
-    let binary_item_id_ref = first_xml_attribute_value(pic_xml, "binaryItemIDRef")?;
+    let binary_item_id_ref = hwpx_pic_binary_item_id_ref(pic_xml)?;
     let resource_id = context.ensure_image_resource(binary_item_id_ref)?;
 
     Some(Image {
@@ -1695,6 +1695,43 @@ fn extract_hwpx_image_from_pic_xml(
         width: hwpx_object_dimension_to_px(pic_xml, &["width", "w"]),
         height: hwpx_object_dimension_to_px(pic_xml, &["height", "h"]),
     })
+}
+
+fn hwpx_pic_binary_item_id_ref(pic_xml: &str) -> Option<&str> {
+    if let Some(value) = root_xml_attribute_value(pic_xml, "binaryItemIDRef") {
+        return Some(value);
+    }
+
+    let root = next_xml_tag(pic_xml, 0)?;
+    if root.name != "pic" || root.is_closing || root.is_self_closing {
+        return None;
+    }
+    let root_end = find_matching_element_end(pic_xml, &root)?;
+    let mut cursor = root.end;
+
+    while let Some(tag) = next_xml_tag(pic_xml, cursor) {
+        if tag.start >= root_end {
+            break;
+        }
+        if tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+        let tag_end = if tag.is_self_closing {
+            tag.end
+        } else {
+            find_matching_element_end(pic_xml, &tag).unwrap_or(tag.end)
+        };
+        if matches!(tag.name, "img" | "image")
+            && let Some(image_xml) = pic_xml.get(tag.start..tag_end)
+            && let Some(value) = first_xml_attribute_value(image_xml, "binaryItemIDRef")
+        {
+            return Some(value);
+        }
+        cursor = tag_end;
+    }
+
+    None
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4236,6 +4273,37 @@ mod tests {
         assert_eq!(image.width, None);
         assert_eq!(image.height, None);
         assert_eq!(image.caption.as_deref(), Some("caption"));
+    }
+
+    #[test]
+    fn does_not_use_caption_image_resource_as_outer_hwpx_image_resource() {
+        let mut context = HwpxFallbackContext::default();
+        context.image_items.insert(
+            "caption-image".to_string(),
+            HwpxImageItem {
+                id: "caption-image".to_string(),
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: b"caption-image-bytes".to_vec(),
+            },
+        );
+        let xml = r#"
+            <hp:pic xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+                    xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+              <hp:caption>
+                <hp:subList>
+                  <hp:p>
+                    <hp:ctrl>
+                      <hp:pic><hp:img><hc:img binaryItemIDRef="caption-image"/></hp:img></hp:pic>
+                    </hp:ctrl>
+                    <hp:run><hp:t>caption</hp:t></hp:run>
+                  </hp:p>
+                </hp:subList>
+              </hp:caption>
+            </hp:pic>
+        "#;
+
+        assert!(extract_hwpx_image_from_pic_xml(xml, &mut context).is_none());
     }
 
     #[test]
