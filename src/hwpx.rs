@@ -1760,15 +1760,28 @@ fn extract_hwpx_object_caption_blocks(
     object_xml: &str,
     context: &mut HwpxFallbackContext,
 ) -> Option<HwpxObjectCaption> {
-    let mut cursor = 0usize;
+    let root = next_xml_tag(object_xml, 0)?;
+    if root.is_closing || root.is_self_closing {
+        return None;
+    }
+    let root_end = find_matching_element_end(object_xml, &root)?;
+    let mut cursor = root.end;
 
     while let Some(tag) = next_xml_tag(object_xml, cursor) {
-        if !tag.is_closing && matches!(tag.name, "caption" | "cap") {
-            let caption_end = if tag.is_self_closing {
-                tag.end
-            } else {
-                find_matching_element_end(object_xml, &tag).unwrap_or(tag.end)
-            };
+        if tag.start >= root_end {
+            break;
+        }
+        if tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+        let tag_end = if tag.is_self_closing {
+            tag.end
+        } else {
+            find_matching_element_end(object_xml, &tag).unwrap_or(tag.end)
+        };
+        if matches!(tag.name, "caption" | "cap") {
+            let caption_end = tag_end;
             let caption_xml = &object_xml[tag.start..caption_end];
             let mut blocks = extract_section_xml_blocks(caption_xml, context);
             mark_blocks_as_caption(&mut blocks);
@@ -1781,7 +1794,7 @@ fn extract_hwpx_object_caption_blocks(
             }
         }
 
-        cursor = tag.end;
+        cursor = tag_end;
     }
 
     None
@@ -3403,6 +3416,53 @@ mod tests {
             other => panic!("expected caption paragraph block, got {other:?}"),
         }
         assert!(matches!(&blocks[1], Block::Table(_)));
+    }
+
+    #[test]
+    fn does_not_leak_nested_hwpx_table_caption_to_outer_table() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tr>
+                <hp:tc>
+                  <hp:subList>
+                    <hp:tbl>
+                      <hp:caption side="TOP">
+                        <hp:subList>
+                          <hp:p><hp:run><hp:t>nested caption</hp:t></hp:run></hp:p>
+                        </hp:subList>
+                      </hp:caption>
+                      <hp:tr>
+                        <hp:tc>
+                          <hp:subList>
+                            <hp:p><hp:run><hp:t>nested cell</hp:t></hp:run></hp:p>
+                          </hp:subList>
+                        </hp:tc>
+                      </hp:tr>
+                    </hp:tbl>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_table_blocks_from_xml(xml, &mut context);
+
+        assert_eq!(blocks.len(), 1);
+        let outer_table = match &blocks[0] {
+            Block::Table(table) => table,
+            other => panic!("expected outer table block, got {other:?}"),
+        };
+        assert!(matches!(
+            &outer_table.rows[0].cells[0].blocks[0],
+            Block::Paragraph(paragraph)
+                if paragraph.role == ParagraphRole::Caption
+                    && inlines_to_plain_text(&paragraph.inlines) == "nested caption"
+        ));
+        assert!(matches!(
+            &outer_table.rows[0].cells[0].blocks[1],
+            Block::Table(_)
+        ));
     }
 
     #[test]
