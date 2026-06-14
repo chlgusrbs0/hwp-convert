@@ -1734,13 +1734,16 @@ fn extract_hwpx_image_from_pic_xml(
 
 fn hwpx_pic_binary_item_id_ref(pic_xml: &str) -> Option<String> {
     let root = next_xml_tag(pic_xml, 0)?;
-    if root.name != "pic" || root.is_closing || root.is_self_closing {
+    if root.name != "pic" || root.is_closing {
         return None;
     }
     if let Some(value) =
         decoded_xml_attribute_value_any(root.raw, HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES)
     {
         return Some(value);
+    }
+    if root.is_self_closing {
+        return None;
     }
 
     let root_end = find_matching_element_end(pic_xml, &root)?;
@@ -4607,6 +4610,28 @@ mod tests {
         assert_eq!(image.width, None);
         assert_eq!(image.height, None);
         assert_eq!(image.caption.as_deref(), Some("caption"));
+    }
+
+    #[test]
+    fn recovers_self_closing_hwpx_pic_root_image_ref() {
+        let mut context = HwpxFallbackContext::default();
+        context.image_items.insert(
+            "image1".to_string(),
+            HwpxImageItem {
+                id: "image1".to_string(),
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: b"image-bytes".to_vec(),
+            },
+        );
+        let xml = r#"
+            <hp:pic xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+                    binaryItemIdRef="image1"/>
+        "#;
+
+        let image = extract_hwpx_image_from_pic_xml(xml, &mut context).expect("image should parse");
+
+        assert_eq!(image.resource_id.as_str(), "image1");
     }
 
     #[test]
