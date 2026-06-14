@@ -1292,7 +1292,7 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
     }
 
     let background_color =
-        first_hwpx_attribute_u32(table_xml, &["tbl", "tblPr"], "borderFillIDRef")
+        root_or_direct_child_xml_attribute_u32(table_xml, "tbl", &["tblPr"], "borderFillIDRef")
             .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
 
     Some(Table {
@@ -1350,8 +1350,9 @@ fn extract_table_cells_from_row_xml(
 }
 
 fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext) -> TableCell {
-    let background_color = first_hwpx_attribute_u32(cell_xml, &["tc", "cellPr"], "borderFillIDRef")
-        .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
+    let background_color =
+        root_or_direct_child_xml_attribute_u32(cell_xml, "tc", &["cellPr"], "borderFillIDRef")
+            .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
 
     TableCell {
         row_span: hwpx_table_cell_span(cell_xml, &["rowSpan", "rowspan"]),
@@ -1364,20 +1365,11 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
 fn hwpx_table_cell_span(cell_xml: &str, attribute_names: &[&str]) -> u32 {
     attribute_names
         .iter()
-        .find_map(|attribute_name| first_xml_attribute_u32(cell_xml, "cellSpan", attribute_name))
-        .or_else(|| {
-            attribute_names
-                .iter()
-                .find_map(|attribute_name| first_xml_attribute_u32(cell_xml, "tc", attribute_name))
+        .find_map(|attribute_name| {
+            root_or_direct_child_xml_attribute_u32(cell_xml, "tc", &["cellSpan"], attribute_name)
         })
         .filter(|span| *span > 0)
         .unwrap_or(1)
-}
-
-fn first_hwpx_attribute_u32(xml: &str, tag_names: &[&str], attribute_name: &str) -> Option<u32> {
-    tag_names
-        .iter()
-        .find_map(|tag_name| first_xml_attribute_u32(xml, tag_name, attribute_name))
 }
 
 fn extract_blocks_from_paragraph_xml_with_metadata(
@@ -2502,22 +2494,6 @@ fn trim_trailing_empty_break_inlines(inlines: &mut Vec<Inline>) {
     }
 }
 
-fn first_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> Option<u32> {
-    let mut cursor = 0usize;
-
-    while let Some(tag) = next_xml_tag(xml, cursor) {
-        if tag.name == tag_name
-            && !tag.is_closing
-            && let Some(value) = xml_attribute_value(tag.raw, attribute_name)
-        {
-            return value.parse().ok();
-        }
-        cursor = tag.end;
-    }
-
-    None
-}
-
 fn root_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> Option<u32> {
     let tag = next_xml_tag(xml, 0)?;
     if tag.name == tag_name && !tag.is_closing {
@@ -2525,6 +2501,51 @@ fn root_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> Op
     } else {
         None
     }
+}
+
+fn root_or_direct_child_xml_attribute_u32(
+    xml: &str,
+    root_name: &str,
+    child_names: &[&str],
+    attribute_name: &str,
+) -> Option<u32> {
+    let root = next_xml_tag(xml, 0)?;
+    if root.name != root_name || root.is_closing {
+        return None;
+    }
+    if let Some(value) =
+        xml_attribute_value(root.raw, attribute_name).and_then(|value| value.parse().ok())
+    {
+        return Some(value);
+    }
+    if root.is_self_closing {
+        return None;
+    }
+
+    let root_end = find_matching_element_end(xml, &root)?;
+    let mut cursor = root.end;
+    while let Some(tag) = next_xml_tag(xml, cursor) {
+        if tag.start >= root_end {
+            break;
+        }
+        if tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+        if child_names.contains(&tag.name)
+            && let Some(value) =
+                xml_attribute_value(tag.raw, attribute_name).and_then(|value| value.parse().ok())
+        {
+            return Some(value);
+        }
+        cursor = if tag.is_self_closing {
+            tag.end
+        } else {
+            find_matching_element_end(xml, &tag).unwrap_or(tag.end)
+        };
+    }
+
+    None
 }
 
 fn first_xml_attribute_value<'a>(xml: &'a str, attribute_name: &str) -> Option<&'a str> {
@@ -3243,6 +3264,59 @@ mod tests {
             table.rows[0].cells[0].style.background_color,
             Some(cell_color)
         );
+    }
+
+    #[test]
+    fn does_not_leak_nested_hwpx_table_properties_to_outer_table() {
+        let nested_color = Color {
+            r: 0x44,
+            g: 0x55,
+            b: 0x66,
+            a: 255,
+        };
+        let mut context = HwpxFallbackContext {
+            border_fill_backgrounds: vec![None, Some(nested_color)],
+            ..Default::default()
+        };
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tr>
+                <hp:tc>
+                  <hp:subList>
+                    <hp:tbl borderFillIDRef="1">
+                      <hp:tr>
+                        <hp:tc rowSpan="2" colSpan="3" borderFillIDRef="1">
+                          <hp:subList>
+                            <hp:p><hp:run><hp:t>nested</hp:t></hp:run></hp:p>
+                          </hp:subList>
+                        </hp:tc>
+                      </hp:tr>
+                    </hp:tbl>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+
+        assert_eq!(table.style.background_color, None);
+        assert_eq!(table.rows.len(), 1);
+        assert_eq!(table.rows[0].cells.len(), 1);
+        let outer_cell = &table.rows[0].cells[0];
+        assert_eq!(outer_cell.row_span, 1);
+        assert_eq!(outer_cell.col_span, 1);
+        assert_eq!(outer_cell.style.background_color, None);
+
+        let nested_table = match &outer_cell.blocks[0] {
+            Block::Table(table) => table,
+            other => panic!("expected nested table block, got {other:?}"),
+        };
+        assert_eq!(nested_table.style.background_color, Some(nested_color));
+        let nested_cell = &nested_table.rows[0].cells[0];
+        assert_eq!(nested_cell.row_span, 2);
+        assert_eq!(nested_cell.col_span, 3);
+        assert_eq!(nested_cell.style.background_color, Some(nested_color));
     }
 
     #[test]
