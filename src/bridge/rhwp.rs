@@ -1240,15 +1240,21 @@ impl<'a> BridgeContext<'a> {
                 width: hwp_units_to_px_option(picture.common.width),
                 height: hwp_units_to_px_option(picture.common.height),
             }),
-            None => Block::Unknown(crate::ir::UnknownBlock {
-                kind: "picture".to_string(),
-                fallback_text: Some("[image]".to_string()),
-                message: Some(format!(
-                    "bin data {} was missing, so the image resource could not be loaded",
+            None => {
+                self.add_warning_once(&format!(
+                    "rhwp picture referenced missing bin data {}; hwp-convert preserved an image placeholder.",
                     picture.image_attr.bin_data_id
-                )),
-                source: Some("rhwp".to_string()),
-            }),
+                ));
+                Block::Unknown(crate::ir::UnknownBlock {
+                    kind: "picture".to_string(),
+                    fallback_text: Some("[image]".to_string()),
+                    message: Some(format!(
+                        "bin data {} was missing, so the image resource could not be loaded",
+                        picture.image_attr.bin_data_id
+                    )),
+                    source: Some("rhwp".to_string()),
+                })
+            }
         }
     }
 
@@ -2391,6 +2397,41 @@ mod tests {
             }
             other => panic!("expected image resource, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn warns_when_picture_bin_data_is_missing() {
+        let picture = Picture {
+            image_attr: ImageAttr {
+                bin_data_id: 7,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Picture(Box::new(picture))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert!(matches!(
+            &bridged.sections[0].blocks[0],
+            Block::Unknown(unknown)
+                if unknown.kind == "picture"
+                    && unknown.fallback_text.as_deref() == Some("[image]")
+        ));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("picture referenced missing bin data 7")
+        }));
     }
 
     #[test]
