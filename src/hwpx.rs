@@ -2804,7 +2804,35 @@ fn xml_tag_end_exclusive(xml: &str, start: usize) -> Option<usize> {
     if rest.starts_with("<?") {
         return rest.find("?>").map(|relative| start + relative + 2);
     }
+    if rest.starts_with("<!") {
+        return xml_markup_declaration_end_exclusive(xml, start);
+    }
     rest.find('>').map(|relative| start + relative + 1)
+}
+
+fn xml_markup_declaration_end_exclusive(xml: &str, start: usize) -> Option<usize> {
+    let rest = xml.get(start + 2..)?;
+    let mut bracket_depth = 0usize;
+    let mut quote = None;
+
+    for (relative, ch) in rest.char_indices() {
+        if let Some(quote_ch) = quote {
+            if ch == quote_ch {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            '>' if bracket_depth == 0 => return Some(start + 2 + relative + ch.len_utf8()),
+            _ => {}
+        }
+    }
+
+    None
 }
 
 fn find_matching_element_end(xml: &str, start_tag: &XmlTag<'_>) -> Option<usize> {
@@ -3299,6 +3327,9 @@ mod tests {
     fn skips_xml_declaration_and_comments_in_section_xml_blocks() {
         let xml = r#"
             <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE hs:sec [
+              <!ENTITY sample "a > b">
+            ]>
             <!-- section comment with > marker -->
             <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:p>
