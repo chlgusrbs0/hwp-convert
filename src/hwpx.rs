@@ -346,10 +346,11 @@ fn extract_section_paths_from_content_hpf(content_xml: &str) -> Vec<String> {
     while let Some(tag) = next_xml_tag(content_xml, cursor) {
         if tag.name == "item" && !tag.is_closing {
             let id = decoded_xml_attribute_value(tag.raw, "id");
-            let href = decoded_xml_attribute_value(tag.raw, "href");
+            let href = decoded_xml_attribute_value_any(tag.raw, &["href", "full-path", "fullPath"]);
 
             if let (Some(id), Some(href)) = (id, href) {
-                let media_type = decoded_xml_attribute_value(tag.raw, "media-type");
+                let media_type =
+                    decoded_xml_attribute_value_any(tag.raw, &["media-type", "mediaType"]);
                 manifest_items.push((id, href, media_type));
             }
         } else if tag.name == "itemref"
@@ -799,8 +800,8 @@ fn read_hwpx_image_items<R: Read + io::Seek>(
         }
 
         let id = decoded_xml_attribute_value(tag.raw, "id");
-        let href = decoded_xml_attribute_value(tag.raw, "href");
-        let media_type = decoded_xml_attribute_value(tag.raw, "media-type");
+        let href = decoded_xml_attribute_value_any(tag.raw, &["href", "full-path", "fullPath"]);
+        let media_type = decoded_xml_attribute_value_any(tag.raw, &["media-type", "mediaType"]);
         let Some(id) = id else {
             cursor = tag.end;
             continue;
@@ -2513,6 +2514,12 @@ fn decoded_xml_attribute_value(tag: &str, attribute_name: &str) -> Option<String
     xml_attribute_value(tag, attribute_name)
         .map(decode_xml_text)
         .and_then(non_empty_string_owned)
+}
+
+fn decoded_xml_attribute_value_any(tag: &str, attribute_names: &[&str]) -> Option<String> {
+    attribute_names
+        .iter()
+        .find_map(|attribute_name| decoded_xml_attribute_value(tag, attribute_name))
 }
 
 fn first_non_empty_string(values: impl IntoIterator<Item = Option<String>>) -> Option<String> {
@@ -4618,6 +4625,53 @@ mod tests {
     }
 
     #[test]
+    fn recovers_hwpx_image_resource_from_manifest_attribute_aliases() -> Result<(), Box<dyn Error>>
+    {
+        let bytes = create_archive_bytes(&[
+            (
+                "Contents/content.hpf",
+                r#"
+                <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
+                  <opf:manifest>
+                    <opf:item id="image1" full-path="BinData/image1.png" mediaType="image/png"/>
+                    <opf:item id="section0" full-path="section0.xml" mediaType="application/xml"/>
+                  </opf:manifest>
+                  <opf:spine><opf:itemref idref="section0"/></opf:spine>
+                </opf:package>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+                        xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+                  <hp:p>
+                    <hp:ctrl>
+                      <hp:pic>
+                        <hp:img><hc:img binaryItemIDRef="image1"/></hp:img>
+                      </hp:pic>
+                    </hp:ctrl>
+                  </hp:p>
+                </hs:sec>
+                "#,
+            ),
+            ("BinData/image1.png", "alias-png-bytes"),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+
+        match document.resources.get(&ResourceId("image1".to_string())) {
+            Some(Resource::Image(resource)) => {
+                assert_eq!(resource.media_type.as_deref(), Some("image/png"));
+                assert_eq!(resource.bytes, b"alias-png-bytes");
+            }
+            other => panic!("expected image resource, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn recognizes_hwpx_manifest_media_type_parameters() {
         assert!(is_hwpx_section_manifest_item(
             "Contents/section0.xml",
@@ -4736,6 +4790,40 @@ mod tests {
         assert_eq!(
             section_first_paragraph_text(&document.sections[1]),
             Some("first section".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn uses_content_hpf_attribute_aliases_for_hwpx_sections() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                "Contents/content.hpf",
+                r#"
+                <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
+                  <opf:manifest>
+                    <opf:item id="section0" full-path="section0.xml" mediaType="application/xml"/>
+                  </opf:manifest>
+                  <opf:spine><opf:itemref idref="section0"/></opf:spine>
+                </opf:package>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run><hp:t>alias section</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+
+        assert_eq!(
+            section_first_paragraph_text(&document.sections[0]),
+            Some("alias section".to_string())
         );
 
         Ok(())
