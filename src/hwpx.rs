@@ -497,7 +497,7 @@ impl HwpxFallbackContext {
     }
 
     fn hwpx_paragraph_style_for_paragraph(&self, paragraph_xml: &str) -> HwpxParagraphStyle {
-        let mut style = first_xml_attribute_u32(paragraph_xml, "p", "paraPrIDRef")
+        let mut style = root_xml_attribute_u32(paragraph_xml, "p", "paraPrIDRef")
             .map(|id| id as usize)
             .and_then(|para_pr_id| self.paragraph_styles.get(para_pr_id).cloned())
             .unwrap_or_default();
@@ -2518,6 +2518,15 @@ fn first_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> O
     None
 }
 
+fn root_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> Option<u32> {
+    let tag = next_xml_tag(xml, 0)?;
+    if tag.name == tag_name && !tag.is_closing {
+        xml_attribute_value(tag.raw, attribute_name)?.parse().ok()
+    } else {
+        None
+    }
+}
+
 fn first_xml_attribute_value<'a>(xml: &'a str, attribute_name: &str) -> Option<&'a str> {
     let mut cursor = 0usize;
 
@@ -3784,6 +3793,84 @@ mod tests {
                 .list
                 .as_ref()
                 .map(|list| (&list.kind, list.level, list.marker.as_deref())),
+            Some((&ListKind::Unordered, 1, Some("*")))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_leak_nested_hwpx_paragraph_style_to_outer_paragraph() -> Result<(), Box<dyn Error>>
+    {
+        let bytes = create_archive_bytes(&[
+            (
+                HEADER_XML_PATH,
+                r#"
+                <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+                  <hh:refList>
+                    <hh:bullets>
+                      <hh:bullet id="7" char="*"/>
+                    </hh:bullets>
+                    <hh:paraProperties>
+                      <hh:paraPr id="0">
+                        <hh:heading type="bullet" idRef="7" level="1"/>
+                        <hh:align horizontal="right"/>
+                      </hh:paraPr>
+                    </hh:paraProperties>
+                  </hh:refList>
+                </hh:head>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p>
+                    <hp:run><hp:t>outer before</hp:t></hp:run>
+                    <hp:ctrl>
+                      <hp:tbl>
+                        <hp:tr>
+                          <hp:tc>
+                            <hp:subList>
+                              <hp:p paraPrIDRef="0"><hp:run><hp:t>styled cell</hp:t></hp:run></hp:p>
+                            </hp:subList>
+                          </hp:tc>
+                        </hp:tr>
+                      </hp:tbl>
+                    </hp:ctrl>
+                    <hp:run><hp:t>outer after</hp:t></hp:run>
+                  </hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+        assert_eq!(document.sections[0].blocks.len(), 3);
+
+        for index in [0, 2] {
+            let paragraph = match &document.sections[0].blocks[index] {
+                Block::Paragraph(paragraph) => paragraph,
+                other => panic!("expected outer paragraph fragment, got {other:?}"),
+            };
+            assert_eq!(paragraph.style.alignment, None);
+            assert!(paragraph.list.is_none());
+        }
+
+        let cell_paragraph = match &document.sections[0].blocks[1] {
+            Block::Table(table) => match &table.rows[0].cells[0].blocks[0] {
+                Block::Paragraph(paragraph) => paragraph,
+                other => panic!("expected styled cell paragraph, got {other:?}"),
+            },
+            other => panic!("expected table block, got {other:?}"),
+        };
+        assert_eq!(cell_paragraph.style.alignment, Some(Alignment::Right));
+        assert_eq!(
+            cell_paragraph.list.as_ref().map(|list| (
+                &list.kind,
+                list.level,
+                list.marker.as_deref()
+            )),
             Some((&ListKind::Unordered, 1, Some("*")))
         );
 
