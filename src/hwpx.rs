@@ -1946,6 +1946,9 @@ fn extract_inlines_from_xml_fragment(xml: &str, context: &mut HwpxFallbackContex
         }
 
         match tag.name {
+            "" if text_depth > 0 && is_xml_cdata_tag(tag.raw) => {
+                text_buffer.push_str(xml_cdata_text(tag.raw));
+            }
             "run" if !tag.is_closing => {
                 push_text_buffer_to_hwpx_inline_target(
                     &mut inlines,
@@ -2393,6 +2396,9 @@ fn hwpx_text_node_plain_text(xml: &str) -> Option<String> {
         }
 
         match tag.name {
+            "" if text_depth > 0 && is_xml_cdata_tag(tag.raw) => {
+                text.push_str(xml_cdata_text(tag.raw));
+            }
             "t" if tag.is_closing => text_depth = text_depth.saturating_sub(1),
             "t" if !tag.is_closing && !tag.is_self_closing => text_depth += 1,
             "lineBreak" if !tag.is_closing => text.push('\n'),
@@ -2419,6 +2425,7 @@ fn direct_xml_text(xml: &str) -> Option<String> {
             push_non_empty_xml_text_segment(&mut text, &xml[cursor..tag.start]);
         }
         match tag.name {
+            "" if is_xml_cdata_tag(tag.raw) => text.push_str(xml_cdata_text(tag.raw)),
             "lineBreak" if !tag.is_closing => text.push('\n'),
             "tab" if !tag.is_closing => text.push('\t'),
             _ => {}
@@ -2727,8 +2734,7 @@ struct XmlTag<'a> {
 fn next_xml_tag(xml: &str, cursor: usize) -> Option<XmlTag<'_>> {
     let relative_start = xml.get(cursor..)?.find('<')?;
     let start = cursor + relative_start;
-    let relative_end = xml.get(start..)?.find('>')?;
-    let end = start + relative_end + 1;
+    let end = xml_tag_end_exclusive(xml, start)?;
     let raw = xml.get(start + 1..end - 1)?;
     let Some(name) = xml_tag_local_name(raw) else {
         return Some(XmlTag {
@@ -2749,6 +2755,18 @@ fn next_xml_tag(xml: &str, cursor: usize) -> Option<XmlTag<'_>> {
         is_closing: is_xml_closing_tag(raw),
         is_self_closing: is_xml_self_closing_tag(raw),
     })
+}
+
+fn xml_tag_end_exclusive(xml: &str, start: usize) -> Option<usize> {
+    if xml.get(start..)?.starts_with("<![CDATA[") {
+        return xml
+            .get(start..)?
+            .find("]]>")
+            .map(|relative| start + relative + 3);
+    }
+    xml.get(start..)?
+        .find('>')
+        .map(|relative| start + relative + 1)
 }
 
 fn find_matching_element_end(xml: &str, start_tag: &XmlTag<'_>) -> Option<usize> {
@@ -2940,16 +2958,18 @@ fn extract_section_xml_paragraphs(xml: &str) -> Vec<String> {
             current.push_str(&decode_xml_text(&xml[cursor..tag_start]));
         }
 
-        let Some(relative_tag_end) = xml[tag_start..].find('>') else {
+        let Some(tag_end) = xml_tag_end_exclusive(xml, tag_start) else {
             break;
         };
-        let tag_end = tag_start + relative_tag_end;
-        let tag = &xml[tag_start + 1..tag_end];
+        let tag = &xml[tag_start + 1..tag_end - 1];
         let tag_name = xml_tag_local_name(tag);
         let is_closing = is_xml_closing_tag(tag);
         let is_self_closing = is_xml_self_closing_tag(tag);
 
         match tag_name {
+            None if paragraph_depth > 0 && text_depth > 0 && is_xml_cdata_tag(tag) => {
+                current.push_str(xml_cdata_text(tag));
+            }
             Some("p") if is_closing && paragraph_depth > 0 => {
                 paragraph_depth -= 1;
                 if paragraph_depth == 0 {
@@ -2981,7 +3001,7 @@ fn extract_section_xml_paragraphs(xml: &str) -> Vec<String> {
             _ => {}
         }
 
-        cursor = tag_end + 1;
+        cursor = tag_end;
     }
 
     if paragraph_depth > 0 && text_depth > 0 && cursor < xml.len() {
@@ -3018,6 +3038,18 @@ fn is_xml_closing_tag(tag: &str) -> bool {
 
 fn is_xml_self_closing_tag(tag: &str) -> bool {
     tag.trim_end().ends_with('/')
+}
+
+fn is_xml_cdata_tag(tag: &str) -> bool {
+    tag.trim_start().starts_with("![CDATA[")
+}
+
+fn xml_cdata_text(tag: &str) -> &str {
+    let trimmed = tag.trim();
+    trimmed
+        .strip_prefix("![CDATA[")
+        .and_then(|value| value.strip_suffix("]]"))
+        .unwrap_or("")
 }
 
 fn decode_xml_text(text: &str) -> String {
@@ -3239,6 +3271,30 @@ mod tests {
             &blocks[0],
             Block::Paragraph(paragraph)
                 if inlines_to_plain_text(&paragraph.inlines) == "Hello"
+        ));
+    }
+
+    #[test]
+    fn preserves_cdata_text_in_hwpx_text_fallbacks() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p>
+                <hp:run><hp:t><![CDATA[<raw & text>]]></hp:t></hp:run>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        assert_eq!(
+            extract_section_xml_paragraphs(xml),
+            vec!["<raw & text>".to_string()]
+        );
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+        assert!(matches!(
+            &blocks[0],
+            Block::Paragraph(paragraph)
+                if inlines_to_plain_text(&paragraph.inlines) == "<raw & text>"
         ));
     }
 
