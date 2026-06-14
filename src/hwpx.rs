@@ -16,6 +16,7 @@ use crate::ir::{
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
+const CONTENT_HPF_PATH: &str = "Contents/content.hpf";
 const HEADER_XML_PATH: &str = "Contents/header.xml";
 const MAX_HWPX_IMAGE_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -283,7 +284,7 @@ pub(crate) fn read_section_document_from_archive(bytes: &[u8]) -> io::Result<Doc
 fn collect_section_xml_paths<R: Read + io::Seek>(
     archive: &mut ZipArchive<R>,
 ) -> io::Result<Vec<String>> {
-    if let Ok(content_xml) = read_zip_text_entry(archive, "Contents/content.hpf") {
+    if let Some(content_xml) = read_hwpx_content_hpf_xml(archive)? {
         let section_paths = resolve_existing_section_paths(
             archive,
             extract_section_paths_from_content_hpf(&content_xml),
@@ -665,11 +666,23 @@ fn read_hwpx_fallback_context<R: Read + io::Seek>(
 fn read_hwpx_header_xml<R: Read + io::Seek>(
     archive: &mut ZipArchive<R>,
 ) -> io::Result<Option<String>> {
-    match read_zip_text_entry(archive, HEADER_XML_PATH) {
+    read_optional_zip_text_entry_case_insensitive(archive, HEADER_XML_PATH)
+}
+
+fn read_hwpx_content_hpf_xml<R: Read + io::Seek>(
+    archive: &mut ZipArchive<R>,
+) -> io::Result<Option<String>> {
+    read_optional_zip_text_entry_case_insensitive(archive, CONTENT_HPF_PATH)
+}
+
+fn read_optional_zip_text_entry_case_insensitive<R: Read + io::Seek>(
+    archive: &mut ZipArchive<R>,
+    path: &str,
+) -> io::Result<Option<String>> {
+    match read_zip_text_entry(archive, path) {
         Ok(header_xml) => Ok(Some(header_xml)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let Some(actual_path) = find_archive_entry_case_insensitive(archive, HEADER_XML_PATH)?
-            else {
+            let Some(actual_path) = find_archive_entry_case_insensitive(archive, path)? else {
                 return Ok(None);
             };
             read_zip_text_entry(archive, &actual_path).map(Some)
@@ -802,7 +815,7 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
 fn read_hwpx_image_items<R: Read + io::Seek>(
     archive: &mut ZipArchive<R>,
 ) -> io::Result<BTreeMap<String, HwpxImageItem>> {
-    let Ok(content_xml) = read_zip_text_entry(archive, "Contents/content.hpf") else {
+    let Some(content_xml) = read_hwpx_content_hpf_xml(archive)? else {
         return Ok(BTreeMap::new());
     };
 
@@ -4727,6 +4740,49 @@ mod tests {
     }
 
     #[test]
+    fn recovers_hwpx_image_resource_from_case_variant_content_hpf() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                "contents/CONTENT.HPF",
+                r#"
+                <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
+                  <opf:manifest>
+                    <opf:item id="image1" href="BinData/image1.png" media-type="image/png"/>
+                    <opf:item id="section0" href="section0.xml" media-type="application/xml"/>
+                  </opf:manifest>
+                  <opf:spine><opf:itemref idref="section0"/></opf:spine>
+                </opf:package>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+                        xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+                  <hp:p>
+                    <hp:ctrl>
+                      <hp:pic>
+                        <hp:img><hc:img binaryItemIDRef="image1"/></hp:img>
+                      </hp:pic>
+                    </hp:ctrl>
+                  </hp:p>
+                </hs:sec>
+                "#,
+            ),
+            ("BinData/image1.png", "case-content-png-bytes"),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+
+        assert!(matches!(
+            document.resources.get(&ResourceId("image1".to_string())),
+            Some(Resource::Image(resource)) if resource.bytes == b"case-content-png-bytes"
+        ));
+
+        Ok(())
+    }
+
+    #[test]
     fn recognizes_hwpx_manifest_media_type_parameters() {
         assert!(is_hwpx_section_manifest_item(
             "Contents/section0.xml",
@@ -4879,6 +4935,56 @@ mod tests {
         assert_eq!(
             section_first_paragraph_text(&document.sections[0]),
             Some("alias section".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn uses_case_variant_content_hpf_for_hwpx_section_order() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                "contents/CONTENT.HPF",
+                r#"
+                <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
+                  <opf:manifest>
+                    <opf:item id="section0" href="section0.xml" media-type="application/xml"/>
+                    <opf:item id="section1" href="section1.xml" media-type="application/xml"/>
+                  </opf:manifest>
+                  <opf:spine>
+                    <opf:itemref idref="section1"/>
+                    <opf:itemref idref="section0"/>
+                  </opf:spine>
+                </opf:package>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run><hp:t>first in archive</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+            (
+                "Contents/section1.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run><hp:t>first in spine</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+
+        assert_eq!(
+            section_first_paragraph_text(&document.sections[0]),
+            Some("first in spine".to_string())
+        );
+        assert_eq!(
+            section_first_paragraph_text(&document.sections[1]),
+            Some("first in archive".to_string())
         );
 
         Ok(())
