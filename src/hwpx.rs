@@ -20,6 +20,7 @@ const CONTENT_HPF_PATH: &str = "Contents/content.hpf";
 const HEADER_XML_PATH: &str = "Contents/header.xml";
 const HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES: &[&str] =
     &["binaryItemIDRef", "binaryItemIdRef", "binaryItemIDREF"];
+const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
 const MAX_HWPX_IMAGE_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -447,11 +448,9 @@ impl HwpxFallbackContext {
     }
 
     fn text_style_for_run(&self, run_tag: &str) -> TextStyle {
-        let Some(char_pr_id) = xml_attribute_value_any(
-            run_tag,
-            &["charPrIDRef", "charPrIdRef", "charPrIDREF"],
-        )
-            .and_then(|value| value.parse::<usize>().ok())
+        let Some(char_pr_id) =
+            xml_attribute_value_any(run_tag, &["charPrIDRef", "charPrIdRef", "charPrIDREF"])
+                .and_then(|value| value.parse::<usize>().ok())
         else {
             return TextStyle::default();
         };
@@ -506,9 +505,9 @@ impl HwpxFallbackContext {
     fn hwpx_paragraph_style_for_paragraph(&self, paragraph_xml: &str) -> HwpxParagraphStyle {
         let mut style =
             root_xml_attribute_u32_any(paragraph_xml, "p", &["paraPrIDRef", "paraPrIdRef"])
-            .map(|id| id as usize)
-            .and_then(|para_pr_id| self.paragraph_styles.get(para_pr_id).cloned())
-            .unwrap_or_default();
+                .map(|id| id as usize)
+                .and_then(|para_pr_id| self.paragraph_styles.get(para_pr_id).cloned())
+                .unwrap_or_default();
         let direct_style = extract_hwpx_direct_paragraph_style(paragraph_xml);
         merge_hwpx_paragraph_style(&mut style, direct_style);
         style
@@ -1320,11 +1319,7 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
         let row_xml = &table_xml[tag.start..row_end];
         let cells = extract_table_cells_from_row_xml(row_xml, context);
         if !cells.is_empty() {
-            rows.push((
-                hwpx_table_row_addr(row_xml),
-                next_order,
-                TableRow { cells },
-            ));
+            rows.push((hwpx_table_row_addr(row_xml), next_order, TableRow { cells }));
             next_order += 1;
         }
         cursor = row_end;
@@ -2136,7 +2131,10 @@ fn extract_inlines_from_xml_fragment(xml: &str, context: &mut HwpxFallbackContex
                     &current_style,
                 );
                 if let Some(field) = active_field.take() {
-                    let begin_id = decoded_xml_attribute_value(tag.raw, "beginIDRef");
+                    let begin_id = decoded_xml_attribute_value_any(
+                        tag.raw,
+                        HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES,
+                    );
                     if field.id.as_deref() == begin_id.as_deref() || begin_id.is_none() {
                         inlines.push(finalize_hwpx_field(field));
                     } else {
@@ -2366,7 +2364,7 @@ fn hwpx_bookmark_inline(tag: &str) -> Option<Inline> {
 }
 
 fn unknown_hwpx_field_end_inline(tag: &str) -> Inline {
-    let fallback_text = decoded_xml_attribute_value(tag, "beginIDRef")
+    let fallback_text = decoded_xml_attribute_value_any(tag, HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES)
         .map(|id| format!("[field_end:{id}]"))
         .unwrap_or_else(|| "[field_end]".to_string());
 
@@ -2680,11 +2678,7 @@ fn root_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> Op
     }
 }
 
-fn root_xml_attribute_u32_any(
-    xml: &str,
-    tag_name: &str,
-    attribute_names: &[&str],
-) -> Option<u32> {
+fn root_xml_attribute_u32_any(xml: &str, tag_name: &str, attribute_names: &[&str]) -> Option<u32> {
     attribute_names
         .iter()
         .find_map(|attribute_name| root_xml_attribute_u32(xml, tag_name, attribute_name))
@@ -2749,10 +2743,7 @@ fn root_or_direct_child_xml_attribute_u32(
     None
 }
 
-fn first_decoded_xml_attribute_value_any(
-    xml: &str,
-    attribute_names: &[&str],
-) -> Option<String> {
+fn first_decoded_xml_attribute_value_any(xml: &str, attribute_names: &[&str]) -> Option<String> {
     let mut cursor = 0usize;
 
     while let Some(tag) = next_xml_tag(xml, cursor) {
@@ -4002,7 +3993,7 @@ mod tests {
                 </hp:fieldBegin>
               </hp:ctrl>
               <hp:run><hp:t>Example Site</hp:t></hp:run>
-              <hp:ctrl><hp:fieldEnd beginIDRef="7"/></hp:ctrl>
+              <hp:ctrl><hp:fieldEnd beginIdRef="7"/></hp:ctrl>
             </hp:p>
         "#;
 
