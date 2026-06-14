@@ -1730,8 +1730,8 @@ fn markdown_link_label_inline(inline: &Inline) -> String {
         Inline::LineBreak => " ".to_string(),
         Inline::Tab => "\t".to_string(),
         Inline::Link(link) => render_markdown_link_label(link),
-        Inline::FootnoteRef { note_id } => format!("[^{}]", note_id.as_str()),
-        Inline::EndnoteRef { note_id } => format!("[^{}]", note_id.as_str()),
+        Inline::FootnoteRef { note_id } => render_markdown_note_ref(note_id),
+        Inline::EndnoteRef { note_id } => render_markdown_note_ref(note_id),
         Inline::Anchor { id } => {
             let id = crate::util::plain_text::sanitize_anchor_id(id);
             format!("<a id=\"{}\"></a>", escape_html(&id))
@@ -3433,6 +3433,52 @@ mod tests {
             html.contains("<a href=\"https://example.com/empty\">https://example.com/empty</a>")
         );
         assert!(markdown.contains("[https://example.com/empty](https://example.com/empty)"));
+    }
+
+    #[test]
+    fn escapes_markdown_note_ref_inside_link_labels() {
+        let document = document_with_notes(
+            vec![Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Link(Link {
+                    url: "https://example.com/note".to_string(),
+                    title: None,
+                    inlines: vec![
+                        Inline::Text(TextRun {
+                            text: "See note ".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        }),
+                        Inline::FootnoteRef {
+                            note_id: NoteId("fn 1/가".to_string()),
+                        },
+                    ],
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: None,
+            })],
+            vec![Note {
+                id: NoteId("fn 1/가".to_string()),
+                kind: NoteKind::Footnote,
+                blocks: vec![Block::Paragraph(Paragraph {
+                    role: ParagraphRole::Body,
+                    inlines: vec![Inline::Text(TextRun {
+                        text: "note body".to_string(),
+                        style: TextStyle::default(),
+                        style_ref: None,
+                    })],
+                    style: ParagraphStyle::default(),
+                    style_ref: None,
+                    list: None,
+                })],
+            }],
+        );
+
+        let markdown = render_markdown_document(&document);
+
+        assert!(markdown.contains("[See note [^fn-1--]](https://example.com/note)"));
+        assert!(markdown.contains("[^fn-1--]: note body"));
     }
 
     #[test]
