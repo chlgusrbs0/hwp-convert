@@ -1607,7 +1607,7 @@ fn extract_hwpx_equation_from_xml(
         decoded_root_xml_attribute_value(equation_xml, "script"),
         decoded_root_xml_attribute_value(equation_xml, "text"),
         decoded_root_xml_attribute_value(equation_xml, "equation"),
-        first_hwpx_child_element_text(equation_xml, &["script", "math", "text"]),
+        first_hwpx_direct_child_element_text(equation_xml, &["script", "math", "text"]),
         non_empty_string_owned(inlines_to_plain_text(&extract_inlines_from_xml_fragment(
             equation_xml,
             context,
@@ -1661,7 +1661,7 @@ fn extract_hwpx_chart_from_xml(chart_xml: &str, context: &mut HwpxFallbackContex
         decoded_root_xml_attribute_value(chart_xml, "name"),
         decoded_root_xml_attribute_value(chart_xml, "description"),
         decoded_root_xml_attribute_value(chart_xml, "desc"),
-        first_hwpx_child_element_text(chart_xml, &["title", "caption", "name"]),
+        first_hwpx_direct_child_element_text(chart_xml, &["title", "caption", "name"]),
     ]);
     let chart_text = non_empty_string_owned(inlines_to_plain_text(
         &extract_inlines_from_xml_fragment(chart_xml, context),
@@ -1689,7 +1689,10 @@ fn extract_hwpx_image_from_pic_xml(
             decoded_root_xml_attribute_value(pic_xml, "description"),
             decoded_root_xml_attribute_value(pic_xml, "desc"),
             decoded_root_xml_attribute_value(pic_xml, "name"),
-            first_hwpx_child_element_text(pic_xml, &["altText", "description", "desc", "name"]),
+            first_hwpx_direct_child_element_text(
+                pic_xml,
+                &["altText", "description", "desc", "name"],
+            ),
         ]),
         caption: extract_hwpx_object_caption(pic_xml, context),
         width: hwpx_object_dimension_to_px(pic_xml, &["width", "w"]),
@@ -2462,6 +2465,38 @@ fn first_hwpx_child_element_text(xml: &str, names: &[&str]) -> Option<String> {
         }
 
         cursor = tag.end;
+    }
+
+    None
+}
+
+fn first_hwpx_direct_child_element_text(xml: &str, names: &[&str]) -> Option<String> {
+    let root = next_xml_tag(xml, 0)?;
+    if root.is_closing || root.is_self_closing {
+        return None;
+    }
+    let root_end = find_matching_element_end(xml, &root)?;
+    let mut cursor = root.end;
+
+    while let Some(tag) = next_xml_tag(xml, cursor) {
+        if tag.start >= root_end {
+            break;
+        }
+        if tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+        let tag_end = if tag.is_self_closing {
+            tag.end
+        } else {
+            find_matching_element_end(xml, &tag).unwrap_or(tag.end)
+        };
+        if names.contains(&tag.name)
+            && let Some(text) = simple_xml_element_text(xml_element_inner_xml(xml, &tag, tag_end))
+        {
+            return Some(text);
+        }
+        cursor = tag_end;
     }
 
     None
@@ -3604,6 +3639,32 @@ mod tests {
             Block::Chart(chart)
                 if chart.title.as_deref() == Some("Right Title")
                     && chart.fallback_text.as_deref() == Some("Right Title")
+        ));
+    }
+
+    #[test]
+    fn does_not_leak_nested_hwpx_child_metadata_to_outer_object() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p>
+                <hp:ctrl>
+                  <hp:chart>
+                    <hp:series><hp:title>Wrong Series Title</hp:title></hp:series>
+                    <hp:run><hp:t>Chart Body</hp:t></hp:run>
+                  </hp:chart>
+                </hp:ctrl>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+
+        assert!(matches!(
+            &blocks[0],
+            Block::Chart(chart)
+                if chart.title.is_none()
+                    && chart.fallback_text.as_deref() == Some("Chart Body")
         ));
     }
 
