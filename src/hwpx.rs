@@ -447,7 +447,10 @@ impl HwpxFallbackContext {
     }
 
     fn text_style_for_run(&self, run_tag: &str) -> TextStyle {
-        let Some(char_pr_id) = xml_attribute_value(run_tag, "charPrIDRef")
+        let Some(char_pr_id) = xml_attribute_value_any(
+            run_tag,
+            &["charPrIDRef", "charPrIdRef", "charPrIDREF"],
+        )
             .and_then(|value| value.parse::<usize>().ok())
         else {
             return TextStyle::default();
@@ -501,7 +504,8 @@ impl HwpxFallbackContext {
     }
 
     fn hwpx_paragraph_style_for_paragraph(&self, paragraph_xml: &str) -> HwpxParagraphStyle {
-        let mut style = root_xml_attribute_u32(paragraph_xml, "p", "paraPrIDRef")
+        let mut style =
+            root_xml_attribute_u32_any(paragraph_xml, "p", &["paraPrIDRef", "paraPrIdRef"])
             .map(|id| id as usize)
             .and_then(|para_pr_id| self.paragraph_styles.get(para_pr_id).cloned())
             .unwrap_or_default();
@@ -1154,7 +1158,8 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
                         _ => None,
                     };
                     paragraph_style.list_id =
-                        xml_attribute_value(tag.raw, "idRef").and_then(|value| value.parse().ok());
+                        xml_attribute_value_any(tag.raw, &["idRef", "idref", "idREF"])
+                            .and_then(|value| value.parse().ok());
                 }
                 "align" => {
                     paragraph_style.style.alignment =
@@ -2948,6 +2953,12 @@ fn xml_attribute_value<'a>(tag: &'a str, attribute_name: &str) -> Option<&'a str
     None
 }
 
+fn xml_attribute_value_any<'a>(tag: &'a str, attribute_names: &[&str]) -> Option<&'a str> {
+    attribute_names
+        .iter()
+        .find_map(|attribute_name| xml_attribute_value(tag, attribute_name))
+}
+
 fn is_xml_attribute_boundary(tag: &str, attr_start: usize, attr_end: usize) -> bool {
     let before_ok = attr_start == 0
         || tag
@@ -4301,7 +4312,7 @@ mod tests {
                 "Contents/section0.xml",
                 r#"
                 <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-                  <hp:p paraPrIDRef="0"><hp:run><hp:t>styled paragraph</hp:t></hp:run></hp:p>
+                  <hp:p paraPrIdRef="0"><hp:run><hp:t>styled paragraph</hp:t></hp:run></hp:p>
                 </hs:sec>
                 "#,
             ),
@@ -4383,7 +4394,7 @@ mod tests {
                 r#"
                 <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
                   <hp:p>
-                    <hp:heading type="bullet" idRef="7" level="1"/>
+                    <hp:heading type="bullet" idref="7" level="1"/>
                     <hp:align horizontal="right"/>
                     <hp:run><hp:t>direct style paragraph</hp:t></hp:run>
                   </hp:p>
@@ -4517,7 +4528,7 @@ mod tests {
                 "Contents/section0.xml",
                 r#"
                 <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-                  <hp:p><hp:run charPrIDRef="7"><hp:t>styled text</hp:t></hp:run></hp:p>
+                  <hp:p><hp:run charPrIdRef="7"><hp:t>styled text</hp:t></hp:run></hp:p>
                 </hs:sec>
                 "#,
             ),
