@@ -300,6 +300,15 @@ impl<'a> BridgeContext<'a> {
                             control_idx: index,
                             inline: Inline::Link(mapped),
                         });
+                    } else if let Some(inline) = self.map_hyperlink_fallback(link) {
+                        self.add_warning_once(
+                            "rhwp hyperlink control URL was not URL-like; hwp-convert preserved it as unknown inline fallback text.",
+                        );
+                        insertions.push(InlineInsertion {
+                            position: None,
+                            control_idx: index,
+                            inline,
+                        });
                     }
                 }
                 Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
@@ -690,7 +699,7 @@ impl<'a> BridgeContext<'a> {
             Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
                 non_empty_url_like_string(&field.command)
             }
-            Control::Hyperlink(link) => non_empty_string(&link.url),
+            Control::Hyperlink(link) => non_empty_url_like_string(&link.url),
             _ => None,
         }?;
 
@@ -734,7 +743,7 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn map_trailing_hyperlink(&self, link: &RhwpHyperlink) -> Option<Link> {
-        let url = non_empty_string(&link.url)?;
+        let url = non_empty_url_like_string(&link.url)?;
         let label = non_empty_string(&link.text).unwrap_or_else(|| url.clone());
 
         let title = non_empty_string(&link.text);
@@ -748,6 +757,23 @@ impl<'a> BridgeContext<'a> {
                 style_ref: None,
             })],
         })
+    }
+
+    fn map_hyperlink_fallback(&self, link: &RhwpHyperlink) -> Option<Inline> {
+        let fallback_text = first_non_empty_string([
+            non_empty_string(&link.text),
+            non_empty_string(&link.url),
+        ])?;
+
+        Some(Inline::Unknown(UnknownInline {
+            kind: "hyperlink".to_string(),
+            fallback_text: Some(format!("[hyperlink: {fallback_text}]")),
+            message: Some(
+                "rHWP hyperlink control was preserved as fallback text because its URL was not URL-like."
+                    .to_string(),
+            ),
+            source: Some("rhwp".to_string()),
+        }))
     }
 
     fn map_click_here_field(&self, field: &RhwpField) -> Option<Inline> {
@@ -2002,6 +2028,10 @@ fn non_empty_url_like_string(value: &str) -> Option<String> {
     }
 }
 
+fn first_non_empty_string(values: impl IntoIterator<Item = Option<String>>) -> Option<String> {
+    values.into_iter().flatten().find(|value| !value.is_empty())
+}
+
 fn style_name(style: &rhwp::model::style::Style) -> Option<String> {
     non_empty_string(&style.local_name).or_else(|| non_empty_string(&style.english_name))
 }
@@ -2960,6 +2990,50 @@ mod tests {
             warning
                 .message
                 .contains("hyperlink field command was not URL-like")
+        }));
+    }
+
+    #[test]
+    fn preserves_non_url_hyperlink_control_as_unknown_inline() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "body".to_string(),
+                    controls: vec![Control::Hyperlink(RhwpHyperlink {
+                        url: "not a url".to_string(),
+                        text: "Example".to_string(),
+                    })],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => {
+                assert!(
+                    !paragraph
+                        .inlines
+                        .iter()
+                        .any(|inline| matches!(inline, Inline::Link(_)))
+                );
+                assert!(matches!(
+                    paragraph.inlines.last(),
+                    Some(Inline::Unknown(unknown))
+                        if unknown.kind == "hyperlink"
+                            && unknown.fallback_text.as_deref()
+                                == Some("[hyperlink: Example]")
+                ));
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("hyperlink control URL was not URL-like")
         }));
     }
 
