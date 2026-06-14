@@ -1588,7 +1588,7 @@ fn push_hwpx_structural_control(
 }
 
 fn hwpx_header_footer_placement(control_xml: &str) -> HeaderFooterPlacement {
-    let value = first_xml_attribute_value(control_xml, "applyPageType")
+    let value = root_xml_attribute_value(control_xml, "applyPageType")
         .map(|value| value.trim().to_ascii_uppercase());
 
     match value.as_deref() {
@@ -1604,9 +1604,9 @@ fn extract_hwpx_equation_from_xml(
     context: &mut HwpxFallbackContext,
 ) -> Equation {
     let content = first_non_empty_string([
-        decoded_first_xml_attribute_value(equation_xml, "script"),
-        decoded_first_xml_attribute_value(equation_xml, "text"),
-        decoded_first_xml_attribute_value(equation_xml, "equation"),
+        decoded_root_xml_attribute_value(equation_xml, "script"),
+        decoded_root_xml_attribute_value(equation_xml, "text"),
+        decoded_root_xml_attribute_value(equation_xml, "equation"),
         first_hwpx_child_element_text(equation_xml, &["script", "math", "text"]),
         non_empty_string_owned(inlines_to_plain_text(&extract_inlines_from_xml_fragment(
             equation_xml,
@@ -1628,9 +1628,9 @@ fn extract_hwpx_shape_from_xml(
     context: &mut HwpxFallbackContext,
 ) -> Shape {
     let description = first_non_empty_string([
-        decoded_first_xml_attribute_value(shape_xml, "description"),
-        decoded_first_xml_attribute_value(shape_xml, "desc"),
-        decoded_first_xml_attribute_value(shape_xml, "name"),
+        decoded_root_xml_attribute_value(shape_xml, "description"),
+        decoded_root_xml_attribute_value(shape_xml, "desc"),
+        decoded_root_xml_attribute_value(shape_xml, "name"),
     ]);
     let shape_text = non_empty_string_owned(inlines_to_plain_text(
         &extract_inlines_from_xml_fragment(shape_xml, context),
@@ -1657,10 +1657,10 @@ fn hwpx_shape_kind(tag_name: &str) -> ShapeKind {
 
 fn extract_hwpx_chart_from_xml(chart_xml: &str, context: &mut HwpxFallbackContext) -> Chart {
     let title = first_non_empty_string([
-        decoded_first_xml_attribute_value(chart_xml, "title"),
-        decoded_first_xml_attribute_value(chart_xml, "name"),
-        decoded_first_xml_attribute_value(chart_xml, "description"),
-        decoded_first_xml_attribute_value(chart_xml, "desc"),
+        decoded_root_xml_attribute_value(chart_xml, "title"),
+        decoded_root_xml_attribute_value(chart_xml, "name"),
+        decoded_root_xml_attribute_value(chart_xml, "description"),
+        decoded_root_xml_attribute_value(chart_xml, "desc"),
         first_hwpx_child_element_text(chart_xml, &["title", "caption", "name"]),
     ]);
     let chart_text = non_empty_string_owned(inlines_to_plain_text(
@@ -1686,9 +1686,9 @@ fn extract_hwpx_image_from_pic_xml(
     Some(Image {
         resource_id,
         alt: first_non_empty_string([
-            decoded_first_xml_attribute_value(pic_xml, "description"),
-            decoded_first_xml_attribute_value(pic_xml, "desc"),
-            decoded_first_xml_attribute_value(pic_xml, "name"),
+            decoded_root_xml_attribute_value(pic_xml, "description"),
+            decoded_root_xml_attribute_value(pic_xml, "desc"),
+            decoded_root_xml_attribute_value(pic_xml, "name"),
             first_hwpx_child_element_text(pic_xml, &["altText", "description", "desc", "name"]),
         ]),
         caption: extract_hwpx_object_caption(pic_xml, context),
@@ -1776,8 +1776,14 @@ fn hwpx_caption_placement(caption_tag: &str) -> HwpxCaptionPlacement {
 fn hwpx_object_dimension_to_px(pic_xml: &str, attribute_names: &[&str]) -> Option<LengthPx> {
     attribute_names
         .iter()
-        .find_map(|attribute_name| first_xml_attribute_value(pic_xml, attribute_name))
-        .and_then(|value| value.parse::<u32>().ok())
+        .find_map(|attribute_name| {
+            root_or_direct_child_xml_attribute_u32(
+                pic_xml,
+                "pic",
+                &["sz", "imgRect", "size", "extent"],
+                attribute_name,
+            )
+        })
         .and_then(hwp_units_to_px_option)
 }
 
@@ -2417,12 +2423,6 @@ fn decoded_xml_attribute_value(tag: &str, attribute_name: &str) -> Option<String
         .and_then(non_empty_string_owned)
 }
 
-fn decoded_first_xml_attribute_value(xml: &str, attribute_name: &str) -> Option<String> {
-    first_xml_attribute_value(xml, attribute_name)
-        .map(decode_xml_text)
-        .and_then(non_empty_string_owned)
-}
-
 fn first_non_empty_string(values: impl IntoIterator<Item = Option<String>>) -> Option<String> {
     values
         .into_iter()
@@ -2501,6 +2501,20 @@ fn root_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> Op
     } else {
         None
     }
+}
+
+fn root_xml_attribute_value<'a>(xml: &'a str, attribute_name: &str) -> Option<&'a str> {
+    let tag = next_xml_tag(xml, 0)?;
+    if tag.is_closing {
+        return None;
+    }
+    xml_attribute_value(tag.raw, attribute_name)
+}
+
+fn decoded_root_xml_attribute_value(xml: &str, attribute_name: &str) -> Option<String> {
+    root_xml_attribute_value(xml, attribute_name)
+        .map(decode_xml_text)
+        .and_then(non_empty_string_owned)
 }
 
 fn root_or_direct_child_xml_attribute_u32(
@@ -3460,6 +3474,43 @@ mod tests {
     }
 
     #[test]
+    fn does_not_leak_nested_hwpx_object_attributes_to_root_metadata() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p>
+                <hp:ctrl>
+                  <hp:equation>
+                    <hp:run text="wrong attribute"><hp:t>x + y</hp:t></hp:run>
+                  </hp:equation>
+                </hp:ctrl>
+                <hp:ctrl>
+                  <hp:chart>
+                    <hp:series name="Wrong Series"/>
+                    <hp:title><hp:run><hp:t>Right Title</hp:t></hp:run></hp:title>
+                  </hp:chart>
+                </hp:ctrl>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+
+        assert!(matches!(
+            &blocks[0],
+            Block::Equation(equation)
+                if equation.content.as_deref() == Some("x + y")
+                    && equation.fallback_text.as_deref() == Some("x + y")
+        ));
+        assert!(matches!(
+            &blocks[1],
+            Block::Chart(chart)
+                if chart.title.as_deref() == Some("Right Title")
+                    && chart.fallback_text.as_deref() == Some("Right Title")
+        ));
+    }
+
+    #[test]
     fn preserves_unsupported_hwpx_control_without_text_as_unknown_block() {
         let xml = r#"
             <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
@@ -4152,6 +4203,39 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn does_not_leak_caption_dimensions_to_hwpx_image_size() {
+        let mut context = HwpxFallbackContext::default();
+        context.image_items.insert(
+            "image1".to_string(),
+            HwpxImageItem {
+                id: "image1".to_string(),
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: b"image-bytes".to_vec(),
+            },
+        );
+        let xml = r#"
+            <hp:pic xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+                    xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+              <hp:img><hc:img binaryItemIDRef="image1"/></hp:img>
+              <hp:caption>
+                <hp:subList>
+                  <hp:p>
+                    <hp:run w="7500" h="3750"><hp:t>caption</hp:t></hp:run>
+                  </hp:p>
+                </hp:subList>
+              </hp:caption>
+            </hp:pic>
+        "#;
+
+        let image = extract_hwpx_image_from_pic_xml(xml, &mut context).expect("image should parse");
+
+        assert_eq!(image.width, None);
+        assert_eq!(image.height, None);
+        assert_eq!(image.caption.as_deref(), Some("caption"));
     }
 
     #[test]
