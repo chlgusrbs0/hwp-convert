@@ -1361,6 +1361,7 @@ fn extract_table_cells_from_row_xml(
     context: &mut HwpxFallbackContext,
 ) -> Vec<TableCell> {
     let mut cells = Vec::new();
+    let mut next_order = 0usize;
     let mut cursor = 0usize;
 
     while let Some(tag) = next_xml_tag(row_xml, cursor) {
@@ -1374,11 +1375,21 @@ fn extract_table_cells_from_row_xml(
             continue;
         };
         let cell_xml = &row_xml[tag.start..cell_end];
-        cells.push(extract_table_cell_from_xml(cell_xml, context));
+        let col_addr = root_xml_attribute_u32_any(cell_xml, "tc", &["colAddr", "coladdr"]);
+        cells.push((
+            col_addr,
+            next_order,
+            extract_table_cell_from_xml(cell_xml, context),
+        ));
+        next_order += 1;
         cursor = cell_end;
     }
 
-    cells
+    if cells.iter().any(|(col_addr, _, _)| col_addr.is_some()) {
+        cells.sort_by_key(|(col_addr, order, _)| (col_addr.unwrap_or(u32::MAX), *order));
+    }
+
+    cells.into_iter().map(|(_, _, cell)| cell).collect()
 }
 
 fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext) -> TableCell {
@@ -2639,6 +2650,16 @@ fn root_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> Op
     }
 }
 
+fn root_xml_attribute_u32_any(
+    xml: &str,
+    tag_name: &str,
+    attribute_names: &[&str],
+) -> Option<u32> {
+    attribute_names
+        .iter()
+        .find_map(|attribute_name| root_xml_attribute_u32(xml, tag_name, attribute_name))
+}
+
 fn root_xml_attribute_value<'a>(xml: &'a str, attribute_name: &str) -> Option<&'a str> {
     let tag = next_xml_tag(xml, 0)?;
     if tag.is_closing {
@@ -3478,6 +3499,38 @@ mod tests {
 
         assert_eq!(table.rows[0].cells[0].row_span, 3);
         assert_eq!(table.rows[0].cells[0].col_span, 2);
+    }
+
+    #[test]
+    fn orders_hwpx_table_cells_by_col_addr_when_present() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tr>
+                <hp:tc colAddr="1">
+                  <hp:subList>
+                    <hp:p><hp:run><hp:t>second cell</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:tc>
+                <hp:tc colAddr="0">
+                  <hp:subList>
+                    <hp:p><hp:run><hp:t>first cell</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+
+        assert_eq!(
+            blocks_first_paragraph_text(&table.rows[0].cells[0].blocks),
+            Some("first cell".to_string())
+        );
+        assert_eq!(
+            blocks_first_paragraph_text(&table.rows[0].cells[1].blocks),
+            Some("second cell".to_string())
+        );
     }
 
     #[test]
