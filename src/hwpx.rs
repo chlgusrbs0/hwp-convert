@@ -2730,7 +2730,16 @@ fn next_xml_tag(xml: &str, cursor: usize) -> Option<XmlTag<'_>> {
     let relative_end = xml.get(start..)?.find('>')?;
     let end = start + relative_end + 1;
     let raw = xml.get(start + 1..end - 1)?;
-    let name = xml_tag_local_name(raw)?;
+    let Some(name) = xml_tag_local_name(raw) else {
+        return Some(XmlTag {
+            start,
+            end,
+            raw,
+            name: "",
+            is_closing: false,
+            is_self_closing: true,
+        });
+    };
 
     Some(XmlTag {
         start,
@@ -3207,6 +3216,30 @@ mod tests {
                 "tab one\ttab two".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn skips_xml_declaration_and_comments_in_section_xml_blocks() {
+        let xml = r#"
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!-- section comment -->
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p>
+                <!-- paragraph comment -->
+                <hp:run><hp:t>Hello</hp:t></hp:run>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(
+            &blocks[0],
+            Block::Paragraph(paragraph)
+                if inlines_to_plain_text(&paragraph.inlines) == "Hello"
+        ));
     }
 
     #[test]
