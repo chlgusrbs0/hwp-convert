@@ -1299,6 +1299,7 @@ fn extract_section_xml_blocks_with_metadata(
 
 fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) -> Option<Table> {
     let mut rows = Vec::new();
+    let mut next_order = 0usize;
     let mut cursor = 0usize;
 
     while let Some(tag) = next_xml_tag(table_xml, cursor) {
@@ -1314,7 +1315,12 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
         let row_xml = &table_xml[tag.start..row_end];
         let cells = extract_table_cells_from_row_xml(row_xml, context);
         if !cells.is_empty() {
-            rows.push(TableRow { cells });
+            rows.push((
+                hwpx_table_row_addr(row_xml),
+                next_order,
+                TableRow { cells },
+            ));
+            next_order += 1;
         }
         cursor = row_end;
     }
@@ -1322,6 +1328,10 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
     if rows.is_empty() {
         return None;
     }
+    if rows.iter().any(|(row_addr, _, _)| row_addr.is_some()) {
+        rows.sort_by_key(|(row_addr, order, _)| (row_addr.unwrap_or(u32::MAX), *order));
+    }
+    let rows = rows.into_iter().map(|(_, _, row)| row).collect();
 
     let background_color =
         root_or_direct_child_xml_attribute_u32(table_xml, "tbl", &["tblPr"], "borderFillIDRef")
@@ -1330,6 +1340,21 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
     Some(Table {
         rows,
         style: TableStyle { background_color },
+    })
+}
+
+fn hwpx_table_row_addr(row_xml: &str) -> Option<u32> {
+    root_xml_attribute_u32_any(row_xml, "tr", &["rowAddr", "rowaddr"]).or_else(|| {
+        let mut cursor = 0usize;
+        while let Some(tag) = next_xml_tag(row_xml, cursor) {
+            if tag.name == "tc" && !tag.is_closing {
+                return xml_attribute_value(tag.raw, "rowAddr")
+                    .or_else(|| xml_attribute_value(tag.raw, "rowaddr"))
+                    .and_then(|value| value.parse().ok());
+            }
+            cursor = tag.end;
+        }
+        None
     })
 }
 
@@ -3530,6 +3555,40 @@ mod tests {
         assert_eq!(
             blocks_first_paragraph_text(&table.rows[0].cells[1].blocks),
             Some("second cell".to_string())
+        );
+    }
+
+    #[test]
+    fn orders_hwpx_table_rows_by_row_addr_when_present() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tr rowAddr="1">
+                <hp:tc>
+                  <hp:subList>
+                    <hp:p><hp:run><hp:t>second row</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+              <hp:tr rowAddr="0">
+                <hp:tc>
+                  <hp:subList>
+                    <hp:p><hp:run><hp:t>first row</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+
+        assert_eq!(
+            blocks_first_paragraph_text(&table.rows[0].cells[0].blocks),
+            Some("first row".to_string())
+        );
+        assert_eq!(
+            blocks_first_paragraph_text(&table.rows[1].cells[0].blocks),
+            Some("second row".to_string())
         );
     }
 
