@@ -207,7 +207,7 @@ impl<'a> BridgeContext<'a> {
         Some(Paragraph {
             role: self.map_paragraph_role(paragraph),
             inlines,
-            style: self.map_paragraph_style_by_id(paragraph.para_shape_id),
+            style: self.map_paragraph_style_by_id(paragraph.para_shape_id, "paragraph style"),
             style_ref: self.paragraph_style_ref(paragraph),
             list: self.map_list_info(paragraph, outline_numbering_id, list_state),
         })
@@ -539,20 +539,31 @@ impl<'a> BridgeContext<'a> {
         link_ranges
     }
 
-    fn build_text_segments(&self, paragraph: &RhwpParagraph, text_len: usize) -> Vec<TextSegment> {
+    fn build_text_segments(
+        &mut self,
+        paragraph: &RhwpParagraph,
+        text_len: usize,
+    ) -> Vec<TextSegment> {
         if text_len == 0 {
             return Vec::new();
         }
 
-        let fallback_style_id = self
-            .source
-            .doc_info
-            .styles
-            .get(paragraph.style_id as usize)
-            .map(|style| style.char_shape_id as u32);
+        let fallback_style_id = match self.source.doc_info.styles.get(paragraph.style_id as usize) {
+            Some(style) => Some(style.char_shape_id as u32),
+            None => {
+                if !self.source.doc_info.styles.is_empty() {
+                    self.add_warning_once(&format!(
+                        "rhwp paragraph referenced missing style id {}; hwp-convert used direct char shape refs or default text style.",
+                        paragraph.style_id
+                    ));
+                }
+                None
+            }
+        };
         let fallback_style = fallback_style_id
-            .and_then(|char_shape_id| self.lookup_char_shape(char_shape_id))
-            .map(|char_shape| self.map_text_style(char_shape))
+            .and_then(|char_shape_id| {
+                self.map_text_style_by_char_shape_id_or_warn(char_shape_id, "paragraph named style")
+            })
             .unwrap_or_default();
         let fallback_style_ref = self.text_style_ref(paragraph.style_id);
 
@@ -592,8 +603,10 @@ impl<'a> BridgeContext<'a> {
                 char_index_for_utf16_position(paragraph, char_shape_ref.start_pos, text_len);
             let end = char_index_for_utf16_position(paragraph, next_start, text_len);
             let style = self
-                .lookup_char_shape(char_shape_ref.char_shape_id)
-                .map(|char_shape| self.map_text_style(char_shape))
+                .map_text_style_by_char_shape_id_or_warn(
+                    char_shape_ref.char_shape_id,
+                    "paragraph text run",
+                )
                 .unwrap_or_else(|| fallback_style.clone());
             let style_ref = if fallback_style_id == Some(char_shape_ref.char_shape_id) {
                 fallback_style_ref.clone()
@@ -1445,23 +1458,27 @@ impl<'a> BridgeContext<'a> {
             .or_else(|| self.source.bin_data_content.get(list_index))
     }
 
-    fn map_style_sheet(&self) -> StyleSheet {
+    fn map_style_sheet(&mut self) -> StyleSheet {
         let mut style_sheet = StyleSheet::default();
 
-        for (index, style) in self.source.doc_info.styles.iter().enumerate() {
+        for index in 0..self.source.doc_info.styles.len() {
+            let style = &self.source.doc_info.styles[index];
+            let name = style_name(style);
+            let char_shape_id = style.char_shape_id as u32;
+            let para_shape_id = style.para_shape_id;
+
             style_sheet.text_styles.push(NamedTextStyle {
                 id: TextStyleId(text_style_key(index)),
-                name: style_name(style),
+                name: name.clone(),
                 style: self
-                    .lookup_char_shape(style.char_shape_id as u32)
-                    .map(|char_shape| self.map_text_style(char_shape))
+                    .map_text_style_by_char_shape_id_or_warn(char_shape_id, "style sheet")
                     .unwrap_or_default(),
             });
 
             style_sheet.paragraph_styles.push(NamedParagraphStyle {
                 id: ParagraphStyleId(paragraph_style_key(index)),
-                name: style_name(style),
-                style: self.map_paragraph_style_by_id(style.para_shape_id),
+                name,
+                style: self.map_paragraph_style_by_id(para_shape_id, "style sheet"),
             });
         }
 
@@ -1481,10 +1498,18 @@ impl<'a> BridgeContext<'a> {
         }
     }
 
-    fn map_paragraph_style_by_id(&self, para_shape_id: u16) -> ParagraphStyle {
-        self.lookup_para_shape(para_shape_id)
-            .map(|para_shape| self.map_paragraph_style(para_shape))
-            .unwrap_or_default()
+    fn map_paragraph_style_by_id(&mut self, para_shape_id: u16, context: &str) -> ParagraphStyle {
+        if let Some(para_shape) = self.lookup_para_shape(para_shape_id) {
+            return self.map_paragraph_style(para_shape);
+        }
+
+        if !self.source.doc_info.para_shapes.is_empty() || para_shape_id != 0 {
+            self.add_warning_once(&format!(
+                "rhwp {context} referenced missing para shape id {para_shape_id}; hwp-convert used fallback paragraph style."
+            ));
+        }
+
+        ParagraphStyle::default()
     }
 
     fn map_paragraph_style(&self, para_shape: &RhwpParaShape) -> ParagraphStyle {
@@ -1529,6 +1554,24 @@ impl<'a> BridgeContext<'a> {
 
     fn lookup_char_shape(&self, char_shape_id: u32) -> Option<&RhwpCharShape> {
         self.source.doc_info.char_shapes.get(char_shape_id as usize)
+    }
+
+    fn map_text_style_by_char_shape_id_or_warn(
+        &mut self,
+        char_shape_id: u32,
+        context: &str,
+    ) -> Option<TextStyle> {
+        match self.lookup_char_shape(char_shape_id) {
+            Some(char_shape) => Some(self.map_text_style(char_shape)),
+            None => {
+                if !self.source.doc_info.char_shapes.is_empty() || char_shape_id != 0 {
+                    self.add_warning_once(&format!(
+                        "rhwp {context} referenced missing char shape id {char_shape_id}; hwp-convert used fallback text style."
+                    ));
+                }
+                None
+            }
+        }
     }
 
     fn lookup_para_shape(&self, para_shape_id: u16) -> Option<&RhwpParaShape> {
@@ -2805,6 +2848,88 @@ mod tests {
 
         assert_eq!(bridged.styles.text_styles.len(), 1);
         assert_eq!(bridged.styles.paragraph_styles.len(), 1);
+    }
+
+    #[test]
+    fn warns_when_paragraph_style_shape_refs_are_missing() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                char_shapes: vec![RhwpCharShape::default()],
+                para_shapes: vec![RhwpParaShape::default()],
+                styles: vec![RhwpStyle {
+                    local_name: "broken".to_string(),
+                    para_shape_id: 5,
+                    char_shape_id: 9,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "styled".to_string(),
+                    para_shape_id: 5,
+                    style_id: 0,
+                    char_offsets: vec![0, 1, 2, 3, 4, 5],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("paragraph style referenced missing para shape id 5")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("paragraph named style referenced missing char shape id 9")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("style sheet referenced missing para shape id 5")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("style sheet referenced missing char shape id 9")
+        }));
+    }
+
+    #[test]
+    fn warns_when_text_run_char_shape_ref_is_missing() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                char_shapes: vec![RhwpCharShape::default()],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "broken".to_string(),
+                    char_offsets: vec![0, 1, 2, 3, 4, 5],
+                    char_shapes: vec![CharShapeRef {
+                        start_pos: 0,
+                        char_shape_id: 7,
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("paragraph text run referenced missing char shape id 7")
+        }));
     }
 
     #[test]
