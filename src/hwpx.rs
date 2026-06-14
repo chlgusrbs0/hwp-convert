@@ -356,7 +356,7 @@ fn extract_section_paths_from_content_hpf(content_xml: &str) -> Vec<String> {
             }
         } else if tag.name == "itemref"
             && !tag.is_closing
-            && let Some(idref) = decoded_xml_attribute_value(tag.raw, "idref")
+            && let Some(idref) = decoded_xml_attribute_value_any(tag.raw, &["idref", "idRef"])
         {
             spine_order.push(idref);
         }
@@ -4481,7 +4481,7 @@ mod tests {
                     <opf:item id="image1" href="BinData/image1.png" media-type="image/png"/>
                     <opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/>
                   </opf:manifest>
-                  <opf:spine><opf:itemref idref="section0"/></opf:spine>
+                  <opf:spine><opf:itemref idRef="section0"/></opf:spine>
                 </opf:package>
                 "#,
             ),
