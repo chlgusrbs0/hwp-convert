@@ -450,7 +450,7 @@ impl HwpxFallbackContext {
     fn text_style_for_run(&self, run_tag: &str) -> TextStyle {
         let Some(char_pr_id) =
             xml_attribute_value_any(run_tag, &["charPrIDRef", "charPrIdRef", "charPrIDREF"])
-                .and_then(|value| value.parse::<usize>().ok())
+                .and_then(parse_trimmed::<usize>)
         else {
             return TextStyle::default();
         };
@@ -727,8 +727,7 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                 cursor = fontface_end;
             }
             "charPr" => {
-                let Some(id) = xml_attribute_value(tag.raw, "id")
-                    .and_then(|value| value.parse::<usize>().ok())
+                let Some(id) = xml_attribute_value(tag.raw, "id").and_then(parse_trimmed::<usize>)
                 else {
                     cursor = tag.end;
                     continue;
@@ -748,8 +747,7 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                 cursor = char_end;
             }
             "borderFill" => {
-                let Some(id) = xml_attribute_value(tag.raw, "id")
-                    .and_then(|value| value.parse::<usize>().ok())
+                let Some(id) = xml_attribute_value(tag.raw, "id").and_then(parse_trimmed::<usize>)
                 else {
                     cursor = tag.end;
                     continue;
@@ -769,8 +767,7 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                 cursor = border_end;
             }
             "bullet" => {
-                let Some(id) =
-                    xml_attribute_value(tag.raw, "id").and_then(|value| value.parse::<u32>().ok())
+                let Some(id) = xml_attribute_value(tag.raw, "id").and_then(parse_trimmed::<u32>)
                 else {
                     cursor = tag.end;
                     continue;
@@ -787,8 +784,7 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                 cursor = bullet_end;
             }
             "paraPr" => {
-                let Some(id) = xml_attribute_value(tag.raw, "id")
-                    .and_then(|value| value.parse::<usize>().ok())
+                let Some(id) = xml_attribute_value(tag.raw, "id").and_then(parse_trimmed::<usize>)
                 else {
                     cursor = tag.end;
                     continue;
@@ -1016,8 +1012,7 @@ fn extract_hwpx_font_face(fontface_xml: &str) -> Vec<String> {
     while let Some(tag) = next_xml_tag(fontface_xml, cursor) {
         if tag.name == "font"
             && !tag.is_closing
-            && let Some(id) =
-                xml_attribute_value(tag.raw, "id").and_then(|value| value.parse::<usize>().ok())
+            && let Some(id) = xml_attribute_value(tag.raw, "id").and_then(parse_trimmed::<usize>)
             && let Some(face) = xml_attribute_value(tag.raw, "face")
         {
             if fonts.len() <= id {
@@ -1114,8 +1109,8 @@ fn font_ref_family(font_ref_tag: &str, font_faces: &[Vec<String>]) -> Option<Str
     .iter()
     .enumerate()
     {
-        let Some(font_id) = xml_attribute_value(font_ref_tag, attribute)
-            .and_then(|value| value.parse::<usize>().ok())
+        let Some(font_id) =
+            xml_attribute_value(font_ref_tag, attribute).and_then(parse_trimmed::<usize>)
         else {
             continue;
         };
@@ -1142,7 +1137,7 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
                     let heading_type =
                         xml_attribute_value(tag.raw, "type").map(str::to_ascii_uppercase);
                     paragraph_style.level = xml_attribute_value(tag.raw, "level")
-                        .and_then(|value| value.parse::<u8>().ok())
+                        .and_then(parse_trimmed::<u8>)
                         .unwrap_or(0);
                     paragraph_style.kind = match heading_type.as_deref() {
                         Some("NUMBER") => Some(ListKind::Ordered),
@@ -1158,7 +1153,7 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
                     };
                     paragraph_style.list_id =
                         xml_attribute_value_any(tag.raw, &["idRef", "idref", "idREF"])
-                            .and_then(|value| value.parse().ok());
+                            .and_then(parse_trimmed);
                 }
                 "align" => {
                     paragraph_style.style.alignment =
@@ -1350,7 +1345,7 @@ fn hwpx_table_row_addr(row_xml: &str) -> Option<u32> {
             if tag.name == "tc" && !tag.is_closing {
                 return xml_attribute_value(tag.raw, "rowAddr")
                     .or_else(|| xml_attribute_value(tag.raw, "rowaddr"))
-                    .and_then(|value| value.parse().ok());
+                    .and_then(parse_trimmed);
             }
             cursor = tag.end;
         }
@@ -2615,6 +2610,10 @@ fn non_empty_string_owned(value: String) -> Option<String> {
     }
 }
 
+fn parse_trimmed<T: std::str::FromStr>(value: &str) -> Option<T> {
+    value.trim().parse().ok()
+}
+
 fn is_hwpx_url_like(value: &str) -> bool {
     let trimmed = value.trim();
     trimmed.starts_with('#')
@@ -2672,7 +2671,7 @@ fn trim_trailing_empty_break_inlines(inlines: &mut Vec<Inline>) {
 fn root_xml_attribute_u32(xml: &str, tag_name: &str, attribute_name: &str) -> Option<u32> {
     let tag = next_xml_tag(xml, 0)?;
     if tag.name == tag_name && !tag.is_closing {
-        xml_attribute_value(tag.raw, attribute_name)?.parse().ok()
+        xml_attribute_value(tag.raw, attribute_name).and_then(parse_trimmed)
     } else {
         None
     }
@@ -2708,9 +2707,7 @@ fn root_or_direct_child_xml_attribute_u32(
     if root.name != root_name || root.is_closing {
         return None;
     }
-    if let Some(value) =
-        xml_attribute_value(root.raw, attribute_name).and_then(|value| value.parse().ok())
-    {
+    if let Some(value) = xml_attribute_value(root.raw, attribute_name).and_then(parse_trimmed) {
         return Some(value);
     }
     if root.is_self_closing {
@@ -2729,7 +2726,7 @@ fn root_or_direct_child_xml_attribute_u32(
         }
         if child_names.contains(&tag.name)
             && let Some(value) =
-                xml_attribute_value(tag.raw, attribute_name).and_then(|value| value.parse().ok())
+                xml_attribute_value(tag.raw, attribute_name).and_then(parse_trimmed)
         {
             return Some(value);
         }
@@ -2771,7 +2768,7 @@ fn map_hwpx_alignment(value: &str) -> Option<Alignment> {
 
 fn xml_attribute_hwp_units_to_pt(tag: &str, attribute_name: &str) -> Option<LengthPt> {
     xml_attribute_value(tag, attribute_name)
-        .and_then(|value| value.parse::<i32>().ok())
+        .and_then(parse_trimmed::<i32>)
         .and_then(hwp_units_to_pt_option)
 }
 
@@ -3534,7 +3531,7 @@ mod tests {
         let xml = r#"
             <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:tr>
-                <hp:tc rowSpan="3" colSpan="2">
+                <hp:tc rowSpan=" 3 " colSpan=" 2 ">
                   <hp:subList>
                     <hp:p><hp:run><hp:t>merged cell</hp:t></hp:run></hp:p>
                   </hp:subList>
