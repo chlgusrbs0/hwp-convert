@@ -2890,7 +2890,14 @@ pub(crate) fn read_preview_text_from_archive(bytes: &[u8]) -> io::Result<Vec<Str
         )
     })?;
 
-    let preview_text = read_zip_text_entry(&mut archive, PREVIEW_TEXT_PATH)?;
+    let preview_text =
+        read_optional_zip_text_entry_case_insensitive(&mut archive, PREVIEW_TEXT_PATH)?
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("{PREVIEW_TEXT_PATH} entry was not found"),
+                )
+            })?;
     Ok(split_preview_text_to_paragraphs(&preview_text))
 }
 
@@ -5228,6 +5235,24 @@ mod tests {
     fn falls_back_to_preview_archive_entry_for_hwpx_parse_failure() -> Result<(), Box<dyn Error>> {
         let path = temp_fixture_path("preview-fallback", "hwpx");
         write_preview_archive(&path, "first line\r\nsecond line")?;
+
+        let paragraphs = read_paragraphs(&path)?;
+        fs::remove_file(&path)?;
+
+        assert_eq!(
+            paragraphs,
+            vec!["first line".to_string(), "second line".to_string()]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn falls_back_to_case_variant_preview_archive_entry_for_hwpx_parse_failure()
+    -> Result<(), Box<dyn Error>> {
+        let path = temp_fixture_path("preview-fallback-case", "hwpx");
+        let bytes = create_archive_bytes(&[("preview/PRVTEXT.TXT", "first line\r\nsecond line")])?;
+        fs::write(&path, bytes)?;
 
         let paragraphs = read_paragraphs(&path)?;
         fs::remove_file(&path)?;
