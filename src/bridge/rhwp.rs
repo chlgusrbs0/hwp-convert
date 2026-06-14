@@ -319,6 +319,15 @@ impl<'a> BridgeContext<'a> {
                             control_idx: index,
                             inline: Inline::Link(mapped),
                         });
+                    } else if let Some(inline) = self.map_field_fallback(field) {
+                        self.add_warning_once(
+                            "rhwp hyperlink field command was not URL-like; hwp-convert preserved it as unknown inline fallback text.",
+                        );
+                        insertions.push(InlineInsertion {
+                            position: None,
+                            control_idx: index,
+                            inline,
+                        });
                     }
                 }
                 Control::Field(field) => {
@@ -679,7 +688,7 @@ impl<'a> BridgeContext<'a> {
 
         let url = match control {
             Control::Field(field) if field.field_type == RhwpFieldType::Hyperlink => {
-                non_empty_string(&field.command)
+                non_empty_url_like_string(&field.command)
             }
             Control::Hyperlink(link) => non_empty_string(&link.url),
             _ => None,
@@ -761,7 +770,7 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn map_field_hyperlink(&self, field: &RhwpField) -> Option<Link> {
-        let url = non_empty_string(&field.command)?;
+        let url = non_empty_url_like_string(&field.command)?;
         let label = field
             .guide_text()
             .or_else(|| field.field_name())
@@ -1978,6 +1987,21 @@ fn non_empty_string(value: &str) -> Option<String> {
     }
 }
 
+fn non_empty_url_like_string(value: &str) -> Option<String> {
+    let value = non_empty_string(value)?;
+    let lower = value.to_ascii_lowercase();
+    if value.starts_with('#')
+        || lower.starts_with("mailto:")
+        || lower.starts_with("tel:")
+        || lower.starts_with("www.")
+        || lower.contains("://")
+    {
+        Some(value)
+    } else {
+        None
+    }
+}
+
 fn style_name(style: &rhwp::model::style::Style) -> Option<String> {
     non_empty_string(&style.local_name).or_else(|| non_empty_string(&style.english_name))
 }
@@ -2887,6 +2911,56 @@ mod tests {
             }
             other => panic!("expected paragraph block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn preserves_non_url_hyperlink_field_command_as_unknown_inline() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "Visit Example now".to_string(),
+                    field_ranges: vec![FieldRange {
+                        start_char_idx: 6,
+                        end_char_idx: 13,
+                        control_idx: 0,
+                    }],
+                    controls: vec![Control::Field(RhwpField {
+                        field_type: RhwpFieldType::Hyperlink,
+                        command: "not a url".to_string(),
+                        ..Default::default()
+                    })],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => {
+                assert!(
+                    !paragraph
+                        .inlines
+                        .iter()
+                        .any(|inline| matches!(inline, Inline::Link(_)))
+                );
+                assert!(matches!(
+                    paragraph.inlines.last(),
+                    Some(Inline::Unknown(unknown))
+                        if unknown.kind == "field:hyperlink"
+                            && unknown.fallback_text.as_deref()
+                                == Some("[field:hyperlink: not a url]")
+                ));
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("hyperlink field command was not URL-like")
+        }));
     }
 
     #[test]
