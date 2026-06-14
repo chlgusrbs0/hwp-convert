@@ -2860,7 +2860,29 @@ fn xml_tag_end_exclusive(xml: &str, start: usize) -> Option<usize> {
     if rest.starts_with("<!") {
         return xml_markup_declaration_end_exclusive(xml, start);
     }
-    rest.find('>').map(|relative| start + relative + 1)
+    xml_normal_tag_end_exclusive(xml, start)
+}
+
+fn xml_normal_tag_end_exclusive(xml: &str, start: usize) -> Option<usize> {
+    let rest = xml.get(start..)?;
+    let mut quote = None;
+
+    for (relative, ch) in rest.char_indices() {
+        if let Some(quote_ch) = quote {
+            if ch == quote_ch {
+                quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '>' => return Some(start + relative + ch.len_utf8()),
+            _ => {}
+        }
+    }
+
+    None
 }
 
 fn xml_markup_declaration_end_exclusive(xml: &str, start: usize) -> Option<usize> {
@@ -3394,7 +3416,7 @@ mod tests {
               <hp:p>
                 <?ignore value="a > b"?>
                 <!-- paragraph comment with > marker -->
-                <hp:run><hp:t>Hello</hp:t></hp:run>
+                <hp:run title="a > b"><hp:t>Hello</hp:t></hp:run>
               </hp:p>
             </hs:sec>
         "#;
