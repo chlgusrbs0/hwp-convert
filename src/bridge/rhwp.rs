@@ -773,10 +773,8 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn map_hyperlink_fallback(&self, link: &RhwpHyperlink) -> Option<Inline> {
-        let fallback_text = first_non_empty_string([
-            non_empty_string(&link.text),
-            non_empty_string(&link.url),
-        ])?;
+        let fallback_text =
+            first_non_empty_string([non_empty_string(&link.text), non_empty_string(&link.url)])?;
 
         Some(Inline::Unknown(UnknownInline {
             kind: "hyperlink".to_string(),
