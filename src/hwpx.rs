@@ -1425,23 +1425,31 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
 
     let is_header = root_xml_attribute_value(cell_xml, "header")
         .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    let cell_size = |attribute: &str| {
+        root_or_direct_child_xml_attribute_u32(cell_xml, "tc", &["cellSz"], attribute)
+            .and_then(hwp_units_to_px_option)
+    };
+    let cell_margin = |attribute: &str| {
+        root_or_direct_child_xml_attribute_u32(cell_xml, "tc", &["cellMargin"], attribute)
+            .and_then(hwp_units_to_px_option)
+    };
 
     TableCell {
         row_span: hwpx_table_cell_span(cell_xml, &["rowSpan", "rowspan"]),
         col_span: hwpx_table_cell_span(cell_xml, &["colSpan", "colspan"]),
         is_header,
         blocks: extract_section_xml_blocks(cell_xml, context),
-        // Section XML fallback does not yet recover cell vertical alignment,
-        // size, or padding.
+        // Section XML fallback does not yet recover cell vertical alignment or
+        // borders.
         style: TableCellStyle {
             background_color,
             vertical_align: None,
-            width: None,
-            height: None,
-            padding_top: None,
-            padding_right: None,
-            padding_bottom: None,
-            padding_left: None,
+            width: cell_size("width"),
+            height: cell_size("height"),
+            padding_top: cell_margin("top"),
+            padding_right: cell_margin("right"),
+            padding_bottom: cell_margin("bottom"),
+            padding_left: cell_margin("left"),
             border_top: None,
             border_right: None,
             border_bottom: None,
@@ -3573,6 +3581,33 @@ mod tests {
 
         assert_eq!(table.rows[0].cells[0].row_span, 3);
         assert_eq!(table.rows[0].cells[0].col_span, 2);
+    }
+
+    #[test]
+    fn extracts_table_cell_size_and_padding_from_tc() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tr>
+                <hp:tc header="1">
+                  <hp:cellSz width="7500" height="1500"/>
+                  <hp:cellMargin left="150" right="150" top="75" bottom="75"/>
+                  <hp:subList>
+                    <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+        let cell = &table.rows[0].cells[0];
+
+        assert!(cell.is_header);
+        assert_eq!(cell.style.width, Some(LengthPx(100.0)));
+        assert_eq!(cell.style.height, Some(LengthPx(20.0)));
+        assert_eq!(cell.style.padding_left, Some(LengthPx(2.0)));
+        assert_eq!(cell.style.padding_top, Some(LengthPx(1.0)));
     }
 
     #[test]
