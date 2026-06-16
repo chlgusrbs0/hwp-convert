@@ -9,11 +9,11 @@ use serde::{Deserialize, Serialize};
 use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
 use crate::ir::{
-    Alignment, Block, Chart, Color, Document, Equation, EquationKind, HeaderFooter,
-    HeaderFooterPlacement, Image, Inline, Link, ListInfo, ListKind, Note, NoteId, NoteKind,
-    Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape,
-    Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
-    UnknownInline, VerticalAlign,
+    Alignment, Block, BorderStyle, CellBorder, Chart, Color, Document, Equation, EquationKind,
+    HeaderFooter, HeaderFooterPlacement, Image, Inline, Link, ListInfo, ListKind, Note, NoteId,
+    NoteKind, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore,
+    Section, Shape, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
+    UnknownBlock, UnknownInline, VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -1180,8 +1180,31 @@ fn render_html_table_cell_style(style: &TableCellStyle) -> String {
             declarations.push(format!("{property}: {}px", value.0));
         }
     }
+    for (border, property) in [
+        (&style.border_top, "border-top"),
+        (&style.border_right, "border-right"),
+        (&style.border_bottom, "border-bottom"),
+        (&style.border_left, "border-left"),
+    ] {
+        if let Some(border) = border {
+            declarations.push(format!("{property}: {}", render_css_border(border)));
+        }
+    }
 
     declarations.join("; ")
+}
+
+fn render_css_border(border: &CellBorder) -> String {
+    let style = match border.style {
+        BorderStyle::Solid => "solid",
+        BorderStyle::Dashed => "dashed",
+        BorderStyle::Dotted => "dotted",
+        BorderStyle::Double => "double",
+    };
+    match border.color {
+        Some(color) => format!("{}px {} {}", border.width.0, style, render_css_color(color)),
+        None => format!("{}px {}", border.width.0, style),
+    }
 }
 
 fn vertical_align_to_css(vertical_align: &VerticalAlign) -> &'static str {
@@ -3358,6 +3381,16 @@ mod tests {
                         width: Some(LengthPx(100.0)),
                         height: Some(LengthPx(20.0)),
                         padding_left: Some(LengthPx(2.0)),
+                        border_top: Some(CellBorder {
+                            width: LengthPx(2.0),
+                            style: BorderStyle::Solid,
+                            color: Some(Color {
+                                r: 17,
+                                g: 34,
+                                b: 51,
+                                a: 255,
+                            }),
+                        }),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -3373,6 +3406,7 @@ mod tests {
         assert!(html.contains("width: 100px"));
         assert!(html.contains("height: 20px"));
         assert!(html.contains("padding-left: 2px"));
+        assert!(html.contains("border-top: 2px solid #112233"));
         assert!(!html.contains("<td"));
     }
 

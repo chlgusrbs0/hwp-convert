@@ -25,9 +25,10 @@ use rhwp::model::shape::{
     Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection, ShapeObject,
 };
 use rhwp::model::style::{
-    Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, CharShape as RhwpCharShape,
-    FillType as RhwpFillType, HeadType as RhwpHeadType, Numbering as RhwpNumbering,
-    ParaShape as RhwpParaShape, UnderlineType as RhwpUnderlineType,
+    Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, BorderLine as RhwpBorderLine,
+    BorderLineType as RhwpBorderLineType, CharShape as RhwpCharShape, FillType as RhwpFillType,
+    HeadType as RhwpHeadType, Numbering as RhwpNumbering, ParaShape as RhwpParaShape,
+    UnderlineType as RhwpUnderlineType,
 };
 use rhwp::model::table::{
     Cell as RhwpCell, Table as RhwpTable, VerticalAlign as RhwpVerticalAlign,
@@ -35,12 +36,13 @@ use rhwp::model::table::{
 
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
-    Block, Color, ConversionWarning, Document, Equation, EquationKind, HeaderFooter,
-    HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt, LengthPx, Link, ListInfo,
-    ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore, Paragraph,
-    ParagraphRole, ParagraphStyle, ParagraphStyleId, Resource, ResourceId, ResourceStore, Section,
-    Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
-    TextRun, TextStyle, TextStyleId, UnknownInline, VerticalAlign, WarningCode,
+    Block, BorderStyle, CellBorder, Color, ConversionWarning, Document, Equation, EquationKind,
+    HeaderFooter, HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt, LengthPx, Link,
+    ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore,
+    Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Resource, ResourceId,
+    ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell,
+    TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, TextStyleId, UnknownInline,
+    VerticalAlign, WarningCode,
 };
 
 /// Map rhwp cell vertical alignment to the IR. `Top` is rhwp's default, so it is
@@ -1240,6 +1242,9 @@ impl<'a> BridgeContext<'a> {
             );
         }
 
+        let [border_left, border_right, border_top, border_bottom] =
+            self.map_cell_borders(cell.border_fill_id);
+
         TableCell {
             row_span: (cell.row_span as u32).max(1),
             col_span: (cell.col_span as u32).max(1),
@@ -1254,6 +1259,10 @@ impl<'a> BridgeContext<'a> {
                 padding_right: i16_hwp_units_to_px_option(cell.padding.right),
                 padding_bottom: i16_hwp_units_to_px_option(cell.padding.bottom),
                 padding_left: i16_hwp_units_to_px_option(cell.padding.left),
+                border_top,
+                border_right,
+                border_bottom,
+                border_left,
             },
         }
     }
@@ -1626,6 +1635,20 @@ impl<'a> BridgeContext<'a> {
             .and_then(border_fill_background_color)
     }
 
+    /// Map a border fill's four sides to IR cell borders, in rhwp order
+    /// `[left, right, top, bottom]`.
+    fn map_cell_borders(&self, border_fill_id: u16) -> [Option<CellBorder>; 4] {
+        match self.lookup_border_fill(border_fill_id) {
+            Some(border_fill) => [
+                map_border_line(&border_fill.borders[0]),
+                map_border_line(&border_fill.borders[1]),
+                map_border_line(&border_fill.borders[2]),
+                map_border_line(&border_fill.borders[3]),
+            ],
+            None => [None, None, None, None],
+        }
+    }
+
     fn lookup_border_fill(&self, border_fill_id: u16) -> Option<&RhwpBorderFill> {
         if let Some(border_fill) = border_fill_id
             .checked_sub(1)
@@ -1796,6 +1819,49 @@ fn i16_hwp_units_to_px_option(value: i16) -> Option<LengthPx> {
     } else {
         hwp_units_to_px_option(value as u32)
     }
+}
+
+/// Map a single rhwp border line to an IR cell border. `None` line type means
+/// the side has no border.
+fn map_border_line(line: &RhwpBorderLine) -> Option<CellBorder> {
+    if line.line_type == RhwpBorderLineType::None {
+        return None;
+    }
+
+    Some(CellBorder {
+        width: border_width_index_to_px(line.width),
+        style: map_border_line_type(line.line_type),
+        color: color_ref_to_color_option(line.color),
+    })
+}
+
+fn map_border_line_type(line_type: RhwpBorderLineType) -> BorderStyle {
+    match line_type {
+        RhwpBorderLineType::Dash
+        | RhwpBorderLineType::LongDash
+        | RhwpBorderLineType::DashDot
+        | RhwpBorderLineType::DashDotDot => BorderStyle::Dashed,
+        RhwpBorderLineType::Dot | RhwpBorderLineType::Circle => BorderStyle::Dotted,
+        RhwpBorderLineType::Double
+        | RhwpBorderLineType::ThinThickDouble
+        | RhwpBorderLineType::ThickThinDouble
+        | RhwpBorderLineType::ThinThickThinTriple
+        | RhwpBorderLineType::DoubleWave => BorderStyle::Double,
+        // Solid, Wave, and the 3D line types have no direct CSS equivalent and
+        // fall back to a solid line.
+        _ => BorderStyle::Solid,
+    }
+}
+
+/// Convert an HWP border width index to px. The 0-7 thresholds match rhwp's own
+/// `css_border_width_to_hwp` table; 8-15 use the standard HWP preset widths.
+/// 1mm ≈ 3.7795px at 96dpi.
+fn border_width_index_to_px(index: u8) -> LengthPx {
+    const WIDTHS_MM: [f32; 16] = [
+        0.1, 0.12, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0,
+    ];
+    let mm = WIDTHS_MM[(index as usize).min(WIDTHS_MM.len() - 1)];
+    LengthPx(mm * 96.0 / 25.4)
 }
 
 fn i32_hwp_units_to_pt_option(value: i32) -> Option<LengthPt> {
@@ -2388,6 +2454,81 @@ mod tests {
                 assert!(!plain.is_header);
                 assert_eq!(plain.style.vertical_align, None);
                 assert_eq!(plain.style.width, None);
+            }
+            other => panic!("expected table block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_table_cell_borders_from_border_fill() {
+        let border = |line_type, width, color| RhwpBorderLine {
+            line_type,
+            width,
+            color,
+        };
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                border_fills: vec![RhwpBorderFill {
+                    // rhwp order: left, right, top, bottom
+                    borders: [
+                        border(RhwpBorderLineType::Solid, 7, 0x00112233),
+                        border(RhwpBorderLineType::Dash, 1, 0),
+                        border(RhwpBorderLineType::None, 0, 0),
+                        border(RhwpBorderLineType::Dot, 1, 0),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Table(Box::new(RhwpTable {
+                        row_count: 1,
+                        col_count: 1,
+                        cells: vec![RhwpCell {
+                            row: 0,
+                            col: 0,
+                            border_fill_id: 1,
+                            paragraphs: vec![RhwpParagraph {
+                                text: "c".to_string(),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Table(table) => {
+                let style = &table.rows[0].cells[0].style;
+                let left = style.border_left.as_ref().expect("left border");
+                assert_eq!(left.style, BorderStyle::Solid);
+                assert_eq!(
+                    left.color,
+                    Some(Color {
+                        r: 0x33,
+                        g: 0x22,
+                        b: 0x11,
+                        a: 255,
+                    })
+                );
+                assert_eq!(
+                    style.border_right.as_ref().expect("right border").style,
+                    BorderStyle::Dashed
+                );
+                assert!(style.border_top.is_none());
+                assert_eq!(
+                    style.border_bottom.as_ref().expect("bottom border").style,
+                    BorderStyle::Dotted
+                );
             }
             other => panic!("expected table block, got {other:?}"),
         }

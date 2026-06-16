@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 /// v10: added `TextStyle::{underline_color, strike_color}` and
 /// `TableCellStyle::{width, height}`. Additive and `#[serde(default)]`.
 /// v11: added `TableCellStyle` padding fields. Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 11;
+/// v12: added `TableCellStyle` per-side borders (`CellBorder`/`BorderStyle`).
+/// Additive and `#[serde(default)]`.
+pub const IR_VERSION: u16 = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -632,6 +634,27 @@ pub struct TableCellStyle {
     pub padding_right: Option<LengthPx>,
     pub padding_bottom: Option<LengthPx>,
     pub padding_left: Option<LengthPx>,
+    pub border_top: Option<CellBorder>,
+    pub border_right: Option<CellBorder>,
+    pub border_bottom: Option<CellBorder>,
+    pub border_left: Option<CellBorder>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct CellBorder {
+    pub width: LengthPx,
+    pub style: BorderStyle,
+    pub color: Option<Color>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BorderStyle {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -788,6 +811,8 @@ mod tests {
         assert_eq!(cell.style.height, None);
         assert_eq!(cell.style.padding_top, None);
         assert_eq!(cell.style.padding_left, None);
+        assert_eq!(cell.style.border_top, None);
+        assert_eq!(cell.style.border_left, None);
     }
 
     #[test]

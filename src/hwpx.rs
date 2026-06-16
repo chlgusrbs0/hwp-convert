@@ -1442,6 +1442,10 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
             padding_right: None,
             padding_bottom: None,
             padding_left: None,
+            border_top: None,
+            border_right: None,
+            border_bottom: None,
+            border_left: None,
         },
     }
 }
