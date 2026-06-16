@@ -1,6 +1,6 @@
 # hwp-convert Architecture
 
-This document fixes the current architecture boundaries for the first Document IR roadmap pass.
+This document fixes the current architecture boundaries and is the single home for the Document IR roadmap milestones (`v0`-`v7.4`). Baseline facts (crate version, rHWP pin, `IR_VERSION`, test counts, fixtures) live in `AGENTS.md`; current per-element support lives in `docs/STATUS.md`.
 
 The project now has two separate output paths:
 

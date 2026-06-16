@@ -1,26 +1,21 @@
-# Fixture Test Plan
+# Fixture 계획과 관리 (Fixtures)
 
-## Current HWPX paired fixture rule
+이 문서는 HWP/HWPX bridge coverage를 검증하기 위한 fixture의 계획, 관리 규칙, 검증 방법을 한곳에 정리한다. 목표는 새 기능을 먼저 만드는 것이 아니라, 현재 동작과 한계를 문서화하고 회귀 테스트 기반을 만드는 것이다.
 
-Before adding `input.hwpx` to an existing fixture, read `docs/HWPX_FIXTURE_FINDINGS.md`.
-
-At the current rHWP pin, `basic_text` and `list` have accepted HWPX paired fixtures. Synthetic HWP to HWPX attempts for `table`, `style`, `equation`, `shape`, `footnote`, `header_footer`, and `image` were rejected because they did not preserve the same structure as the matching HWP fixture.
-
-Do not weaken fixture assertions to accept partial HWPX output. Add a HWPX paired fixture only when the same feature-level assertions pass, or document it as a known limitation outside the official fixture inputs.
-
-이 문서는 HWP/HWPX bridge coverage를 올리기 위한 실제 fixture 테스트 계획이다.
-목표는 새 기능을 먼저 만드는 것이 아니라, 현재 동작과 현재 한계를 문서화하고 회귀 테스트 기반을 만드는 것이다.
+현재 채택된 fixture 목록과 HWPX 쌍 현황은 `docs/STATUS.md`의 "HWPX fixture 현황"을 본다. fixture 입력 파일 인벤토리는 `AGENTS.md`의 "현재 프로젝트 사실"에 있다.
 
 ## 원칙
 
-1. 모든 fixture는 가능하면 `HWP`와 `HWPX`를 같은 의미 내용으로 한 쌍으로 둔다.
-2. 기대값은 "이상적인 미래 상태"가 아니라 "현재 코드가 보장해야 하는 상태"를 먼저 고정한다.
-3. 이미지 bytes 전체, HWP 내부 ID, warning 순서처럼 흔들릴 수 있는 값은 전체 비교보다 부분 비교를 우선한다.
-4. 기본 SVG fixture는 현재 CLI의 `--to svg` 결과, 즉 semantic/plain-text 기반 SVG exporter 출력을 기준으로 다룬다.
-5. RenderSnapshot 기반 visual SVG와 visual-check artifact는 기본 SVG golden과 섞지 않고 별도 fixture 또는 diagnostics smoke로 분리한다.
-6. `equation_shape_chart`와 `kitchen_sink`는 누락 영역을 드러내는 smoke/regression fixture 역할도 해야 한다.
+1. 공식 fixture는 `tests/fixtures/<fixture_name>/` 아래에서만 관리한다.
+2. 저장소 루트의 `sample.hwp`, `sample.hwpx`, `sample.*` 출력물은 로컬 개발/수동 확인용이며 커밋하지 않는다.
+3. 가능하면 같은 의미 내용의 `input.hwp`와 `input.hwpx`를 쌍으로 둔다.
+4. 기대값은 "이상적 미래 상태"가 아니라 "현재 코드가 보장해야 하는 상태"부터 고정한다.
+5. 이미지 bytes 전체, HWP 내부 ID, warning 순서처럼 흔들리는 값은 전체 비교보다 부분 비교를 우선한다.
+6. 기본 SVG fixture는 현재 CLI `--to svg`(semantic/plain-text exporter) 결과를 기준으로 한다.
+7. RenderSnapshot 기반 visual SVG와 visual-check artifact는 기본 SVG golden과 섞지 않고 `diagnostics/` 또는 별도 smoke로 분리한다.
+8. HWPX paired fixture는 매칭 HWP fixture와 같은 feature-level assertion을 통과할 때만 추가한다. 부분 통과를 위해 assertion을 약화하지 않는다. (배경: `docs/STATUS.md`의 거부된 synthetic HWPX 시도)
 
-## 권장 fixture 구조
+## 권장 구조
 
 ```text
 tests/fixtures/<fixture_name>/
@@ -38,111 +33,49 @@ tests/fixtures/<fixture_name>/
     render-snapshot-summary.json
 ```
 
-`diagnostics/`는 RenderSnapshot 경로를 검증하는 fixture에만 둔다. 일반 exporter golden의 `svg.svg`는 계속 CLI `--to svg` 결과를 의미한다.
+`expected/svg.svg`는 CLI `--to svg` 결과(semantic SVG)를 의미한다. `diagnostics/`는 RenderSnapshot 경로를 검증하는 fixture에만 둔다.
 
-권장 비교 레이어:
+`tests/fixture_smoke.rs`는 `input.hwp`/`input.hwpx`를 자동 발견해 기본 smoke를 실행한다. 입력 파일이 없으면 테스트는 준비 상태로 통과한다.
 
-1. `bridge smoke`
-   - 두 입력 형식 모두 `bridge::rhwp::read_document`가 성공하는지 확인
-2. `bridge assert`
-   - 전체 JSON dump 비교보다 필요한 필드 subset 비교
-3. `export smoke`
-   - `txt/json/markdown/html/svg` export가 모두 성공하는지 확인
-4. `export golden`
-   - 결정적인 fixture만 golden file 비교
+## Assertion 우선순위
 
-현재 `tests/fixture_smoke.rs`는 full golden 비교 대신 feature-level exporter assertion을 우선한다.
-`basic_text`, `table`, `merged_table`, `style`, `image`, `list`, `footnote`, `header_footer`, `equation`, `shape` fixture는 현재 CLI 출력 형식의 핵심 문자열, 구조, asset 존재 여부를 부분 검증한다.
-이 검증은 "완벽한 출력 동일성"이 아니라 "중요 정보가 조용히 사라지지 않는다"는 최소 보장이다.
+1. `bridge smoke`: `bridge::rhwp::read_document`가 HWP/HWPX에서 성공하는지.
+2. `feature assertion`: 핵심 IR field만 비교 (전체 JSON dump 비교 지양).
+3. `export smoke`: `txt/json/markdown/html/svg` export가 모두 성공하는지.
+4. `golden comparison`: 출력이 결정적인 fixture에 한해 제한적으로.
+5. `diagnostics`: visual/render path만 별도 비교.
+
+현재 `tests/fixture_smoke.rs`는 full golden 대신 feature-level assertion을 우선한다. "완벽한 출력 동일성"이 아니라 "중요 정보가 조용히 사라지지 않는다"는 최소 보장이다.
 
 ## Fixture별 계획
 
-| Fixture | 우선순위 | 포함 요소 | 문서 내용 | bridge 핵심 assert | exporter 핵심 assert | 비고 |
-| --- | --- | --- | --- | --- | --- | --- |
-| `basic_text` | P0 | text, paragraph | 3~5개 문단, 빈 문단 1개, 문단 내부 줄바꿈, 탭, 한글/영문/숫자 혼합 | section 1개, 비어 있지 않은 문단만 block으로 남는 현재 동작, `Inline::Text/LineBreak/Tab`, warning 없음 | TXT/JSON/Markdown/HTML/SVG에 텍스트가 모두 보이는지 확인 | 가장 먼저 만들 fixture. 테스트 harness 기준점 역할 |
-| `style` | P0 | style | bold, italic, underline, strike, font family, font size, text color, background color, 정렬, before/after spacing, indent | `TextStyle`, `ParagraphStyle`, `style_ref`, `StyleSheet.text_styles`, `StyleSheet.paragraph_styles` | JSON/HTML golden, Markdown에는 bold/italic/strike만 유지되는 현재 동작 확인 | table/cell 배경색은 table fixture와 중복되지 않게 최소만 포함 |
-| `table` | P0 | table | 2x2 또는 3x2 단순 표, 각 셀은 단일 문단 텍스트 | `Block::Table`, row/cell count, 각 cell의 nested paragraph | HTML `<table>` 구조, Markdown simple table 유지, TXT/SVG fallback 텍스트 확인 | Markdown 표 경로를 살리려면 병합/복합 block 없이 단순 셀 유지 |
-| `merged_table` | P0 | merged table cell | row span 1개, col span 1개가 모두 있는 표 | 해당 cell의 `row_span`/`col_span` 값 고정 | HTML `rowspan`/`colspan` 확인, Markdown은 plain text fallback으로 내려가는 현재 동작 확인 | 표 병합 지원이 깨지면 바로 잡을 수 있는 fixture |
-| `image` | P0 | image, resource | png 또는 jpg 1개, description 기반 alt, 가능하면 caption 1개 | `Block::Image`, `ImageResource`, resource id, extension/media type, bytes 비어 있지 않음, width/height 힌트 | JSON resource 보존, HTML/Markdown `<stem>_assets/images/<id>.<ext>` 참조 문자열과 asset 파일 존재, TXT/SVG fallback 문구 확인 | HTML/Markdown 문서별 asset writer의 기본 회귀 fixture |
-| `link_list` | P1 | link, list | hyperlink field 1개, hyperlink control 1개, bullet list, ordered list, nested list, numbering restart | `Inline::Link`, URL/label, `ListInfo.kind/level/number`, bullet marker 비어 있지 않음 | HTML/Markdown URL 유지, TXT/SVG prefix/fallback 확인 | list와 link가 같은 문서에서 같이 깨지기 쉬워 묶는 편이 효율적 |
-| `note_header_footer` | P1 | header/footer, footnote/endnote | header 1개, footer 1개, 본문 문단 안 footnote/endnote 각각 1개 | `Section.headers/footers`, `NoteStore`, note kind/id, trailing note ref append warning 발생 | HTML/Markdown note section, TXT/SVG 선형화 결과 확인 | note ref 위치가 정확하지 않다는 현재 제약을 fixture에 명시 |
-| `equation_shape_chart` | P2 | equation, shape, chart | equation 1개, 대표 shape 2~3개, chart 1개 | equation은 `Block::Equation`과 script/fallback 확인, shape는 placeholder 수준 정보 확인, chart는 우선 smoke/current-behavior 기록 | HTML/Markdown/TXT/SVG의 `[equation: ...]`, `[shape: ...]`, `[chart: ...]` fallback 출력을 현재 상태로 기록 | chart는 bridge 미지원이라 초기에는 "지원 안 됨"을 드러내는 fixture로 사용 |
-| `kitchen_sink` | P2 | unknown element 포함 전체 | text/style/table/image/link/list/header/footer/note/equation/shape/unknown을 한 문서에 혼합 | block 종류 존재 여부, note/resource/warning 존재 여부, silent drop 후보가 있는지 점검 | 모든 exporter smoke, 일부 핵심 문자열만 부분 assert | 세부 golden보다 통합 회귀 감시용 |
+| Fixture | 우선순위 | 포함 요소 | 문서 내용 | bridge 핵심 assert | exporter 핵심 assert |
+| --- | --- | --- | --- | --- | --- |
+| `basic_text` | P0 | text, paragraph | 3~5문단, 빈 문단 1개, 줄바꿈, 탭, 한글/영문/숫자 혼합 | section 1개, 비어있지 않은 문단만 block, `Inline::Text/LineBreak/Tab`, warning 없음 | 모든 형식에 텍스트가 보이는지 |
+| `style` | P0 | style | bold/italic/underline/strike, font family/size, 전경/배경색, 정렬, spacing, indent | `TextStyle`, `ParagraphStyle`, `style_ref`, `StyleSheet` | JSON/HTML golden, Markdown은 bold/italic/strike만 |
+| `table` | P0 | table | 2x2~3x2 단순 표, 각 셀 단일 문단 | `Block::Table`, row/cell count, nested paragraph | HTML `<table>`, Markdown simple table, TXT/SVG fallback |
+| `merged_table` | P0 | merged cell | row span 1개, col span 1개 | 해당 cell의 `row_span`/`col_span` | HTML `rowspan`/`colspan`, Markdown plain text fallback |
+| `image` | P0 | image, resource | png/jpg 1개, alt, 가능하면 caption | `Block::Image`, `ImageResource`, id, extension/media type, bytes 비어있지 않음, dimensions | JSON resource 보존, HTML/Markdown `<stem>_assets/images/<id>.<ext>` 참조와 asset 파일 존재, TXT/SVG fallback |
+| `link_list` | P1 | link, list | hyperlink field 1개 + control 1개, bullet/ordered/nested/restart | `Inline::Link`, URL/label, `ListInfo.kind/level/number`, marker 비어있지 않음 | HTML/Markdown URL 유지, TXT/SVG prefix/fallback |
+| `note_header_footer` | P1 | header/footer, note | header/footer 각 1개, 본문 footnote/endnote 각 1개 | `Section.headers/footers`, `NoteStore`, kind/id, trailing note ref append warning | HTML/Markdown note section, TXT/SVG 선형화 |
+| `equation_shape_chart` | P2 | equation, shape, chart | equation 1개, shape 2~3개, chart 1개 | equation `Block::Equation`+script/fallback, shape placeholder, chart smoke | `[equation: ...]`/`[shape: ...]`/`[chart: ...]` fallback 현재 상태 기록 |
+| `kitchen_sink` | P2 | unknown 포함 전체 | 모든 요소 혼합 | block 종류/note/resource/warning 존재, silent drop 후보 점검 | 모든 exporter smoke + 일부 핵심 문자열 |
 
 ## Fixture별 세부 메모
 
-### `basic_text`
-
-- 반드시 `HWP`와 `HWPX`를 같은 내용으로 저장한다.
-- 빈 문단은 "현재는 bridge에서 drop된다"는 사실을 테스트 이름과 기대값에 명시한다.
-- preview fallback fixture와 목적이 다르므로 정상 parse 경로만 다룬다.
-
-### `style`
-
-- 글꼴명은 테스트 환경에서 저장 시 흔들리지 않는 기본 글꼴을 쓴다.
-- 색상은 전경/배경이 분명히 다른 값으로 둔다.
-- HTML golden은 inline style 문자열 전체 비교보다 핵심 declaration 포함 여부 비교가 더 안정적이다.
-
-### `table`
-
-- 첫 표는 Markdown path를 검증하려고 단순 구조로 유지한다.
-- 셀 안 다중 문단이나 이미지 같은 복합 내용은 `kitchen_sink`로 미룬다.
-
-### `merged_table`
-
-- row span, col span을 각각 최소 1회씩 포함한다.
-- Markdown은 "표 렌더링"이 아니라 "fallback 문자열"이 현재 기대값이다.
-
-### `image`
-
-- resource bytes 전체를 golden file로 박제하지 말고, `resource_id`, `extension`, `media_type`, `bytes.len() > 0` 정도만 확인한다.
-- HTML/Markdown export는 출력 파일 stem 기준 `<stem>_assets/images/` 디렉터리에 image asset을 쓰고 `<stem>_assets/images/<resource_file_name>`로 참조하는 것을 현재 기대값으로 둔다. 예: `out/sample.html`과 `out/sample.md`는 `out/sample_assets/images/image-1.png`를 쓰고 문서에서는 `sample_assets/images/image-1.png`로 참조한다.
-
-### `link_list`
-
-- hyperlink는 field-range 기반 1개와 trailing control 기반 1개를 둘 다 넣는다.
-- ordered list는 restart가 보이는 최소 케이스 3개 정도로 만든다.
-- bullet glyph는 저작 도구가 private-use 문자로 저장할 수 있으므로 exact char 전체 비교보다 non-empty marker 또는 normalized marker 비교가 안전하다.
-
-### `note_header_footer`
-
-- note ref는 현재 문단 끝 append 경고가 핵심이므로 warning assert를 꼭 넣는다.
-- header/footer는 odd/even placement가 있으면 둘 다 포함한다.
-
-### `equation_shape_chart`
-
-- equation은 bridge가 `PlainText`로만 넣는 현재 상태를 그대로 고정한다.
-- shape는 description 또는 fallback text가 있는 대표 예제를 사용한다.
-- chart는 현재 bridge 미지원이므로, 처음부터 강한 구조 assert를 걸지 말고 "smoke + 현재 관찰 결과 기록"으로 시작한다.
-
-### `kitchen_sink`
-
-- 이 fixture는 한 요소씩 엄격히 비교하기보다 "전체 문서가 끝까지 parse/export 되는가"를 보는 통합 회귀 용도다.
-- unknown/ignored control 후보가 포함되면 `notes.md`에 현재 관찰된 손실을 적어 둔다.
-
-## 추천 구현 순서
-
-1. `basic_text`
-2. `table`
-3. `merged_table`
-4. `style`
-5. `image`
-6. `link_list`
-7. `note_header_footer`
-8. `equation_shape_chart`
-9. `kitchen_sink`
-
-## 완료 기준
-
-- 최소 P0 fixture 다섯 개가 `HWP`/`HWPX` 쌍으로 준비된다.
-- 각 fixture마다 bridge assert 1세트와 exporter smoke 1세트가 있다.
-- `equation_shape_chart`와 `kitchen_sink`는 미지원 영역을 숨기지 않고 현재 동작을 기록한다.
+- `basic_text`: HWP/HWPX를 같은 내용으로 저장. 빈 문단이 현재 bridge에서 drop된다는 사실을 테스트 이름/기대값에 명시. 정상 parse 경로만 다룸.
+- `style`: 환경에서 흔들리지 않는 기본 글꼴 사용. 전경/배경색은 분명히 다른 값. HTML golden은 전체 비교보다 핵심 declaration 포함 여부.
+- `table`: Markdown path 검증 위해 단순 구조 유지. 셀 안 다중 문단/이미지는 `kitchen_sink`로.
+- `merged_table`: row/col span 각 최소 1회. Markdown은 fallback 문자열이 현재 기대값.
+- `image`: resource bytes 전체를 golden으로 박제하지 말고 id/extension/media_type/`bytes.len() > 0`만. HTML/Markdown은 `<stem>_assets/images/`에 쓰고 `<stem>_assets/images/<resource_file_name>`로 참조.
+- `link_list`: field-range 1개 + trailing control 1개 둘 다. ordered list는 restart 보이는 최소 케이스. bullet glyph는 exact char보다 non-empty/normalized marker 비교.
+- `note_header_footer`: note ref는 문단 끝 append 경고가 핵심이므로 warning assert 필수. odd/even placement 있으면 둘 다.
+- `equation_shape_chart`: equation은 bridge가 `PlainText`로만 넣는 현재 상태 고정. chart는 bridge 미지원이므로 처음엔 smoke + 현재 관찰 기록.
+- `kitchen_sink`: 한 요소씩 엄격 비교보다 "전체 문서가 끝까지 parse/export 되는가" 통합 회귀용. unknown/ignored control 후보가 있으면 `notes.md`에 관찰된 손실 기록.
 
 ## Bridge stats expectation
 
-`tests/fixture_smoke.rs`는 선택적으로 bridge stats expectation을 비교할 수 있다.
-
-파일 위치:
+fixture별로 안정적인 개수 지표를 고정하려면 `expected/` 아래에 bridge stats expectation을 둔다.
 
 ```text
 tests/fixtures/<fixture_name>/expected/bridge-stats.json
@@ -150,40 +83,28 @@ tests/fixtures/<fixture_name>/expected/bridge-stats.hwp.json
 tests/fixtures/<fixture_name>/expected/bridge-stats.hwpx.json
 ```
 
-우선순위:
+우선순위: 확장자별 파일이 있으면 그것을, 없고 `bridge-stats.json`이 있으면 공통 기대값으로, 둘 다 없으면 준비 상태로 넘어간다.
 
-1. 입력 확장자별 파일이 있으면 그것을 사용한다.
-2. 확장자별 파일이 없고 `bridge-stats.json`이 있으면 공통 기대값으로 사용한다.
-3. 둘 다 없으면 bridge stats comparison은 준비 상태로 넘어간다.
+포함 지표 예: section/body block/header/footer/note count, paragraph/table/row/cell count, image/equation/shape/chart/unknown block count, text run/line break/tab/link/note ref count, resource/image resource/binary resource count, warning count.
 
-이 파일은 전체 IR golden이 아니라 안정적인 개수 지표를 고정하기 위한 장치다.
+원칙: 실제 문서 fixture가 추가된 뒤 작성한다. stats가 바뀌면 즉시 expected를 고치지 말고 개선인지 회귀인지 먼저 판단한다. 복잡한 fixture는 전체 JSON golden보다 stats + feature assertion을 우선한다.
 
-포함되는 지표 예:
-
-- section, body block, header, footer, note count
-- paragraph, table, row, cell count
-- image, equation, shape, chart, unknown block count
-- text run, line break, tab, link, note ref count
-- resource, image resource, binary resource count
-- warning count
-
-사용 원칙:
-
-- bridge stats는 실제 문서 fixture가 추가된 뒤 작성한다.
-- stats가 바뀌면 expected를 즉시 수정하지 않는다. 먼저 bridge 개선인지 회귀인지 판단한다.
-- 구조가 복잡한 fixture에서는 전체 JSON golden보다 bridge stats와 feature-level assertion을 우선한다.
-
-갱신 방법:
+갱신:
 
 ```bash
+# bash
 HWP_CONVERT_UPDATE_FIXTURE_STATS=1 cargo test --test fixture_smoke official_fixtures_match_expected_bridge_stats
 ```
 
-이 명령은 발견된 각 `input.hwp`와 `input.hwpx`에 대해 확장자별 파일을 생성하거나 갱신한다.
-
-```text
-expected/bridge-stats.hwp.json
-expected/bridge-stats.hwpx.json
+```powershell
+# PowerShell
+$env:HWP_CONVERT_UPDATE_FIXTURE_STATS='1'; cargo test --test fixture_smoke official_fixtures_match_expected_bridge_stats
 ```
 
-기본 테스트 실행에서는 expected 파일을 쓰지 않는다. expected 갱신은 위 환경변수를 명시했을 때만 수행한다.
+이 명령은 입력 확장자별 expected를 쓴다. 기본 `cargo test`는 expected 파일을 만들거나 고치지 않는다.
+
+## 완료 기준
+
+- 최소 P0 fixture 5개가 HWP/HWPX 쌍으로 준비된다.
+- 각 fixture마다 bridge assert 1세트와 exporter smoke 1세트가 있다.
+- `equation_shape_chart`와 `kitchen_sink`는 미지원 영역을 숨기지 않고 현재 동작을 기록한다.
