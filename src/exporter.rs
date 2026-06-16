@@ -608,10 +608,14 @@ fn render_html_document_with_asset_prefix(
         border-collapse: collapse;\n\
         margin: 0 0 1em;\n\
       }}\n\
-      td {{\n\
+      td, th {{\n\
         border: 1px solid #e5e7eb;\n\
         padding: 12px 14px;\n\
         vertical-align: top;\n\
+      }}\n\
+      th {{\n\
+        background: #f9fafb;\n\
+        text-align: left;\n\
       }}\n\
       p {{\n\
         margin: 0 0 1em;\n\
