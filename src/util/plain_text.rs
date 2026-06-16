@@ -557,6 +557,7 @@ mod tests {
         TableCell {
             row_span: 1,
             col_span: 1,
+            is_header: false,
             blocks: vec![Block::Paragraph(Paragraph {
                 role: ParagraphRole::Body,
                 inlines: vec![crate::ir::Inline::Text(TextRun {

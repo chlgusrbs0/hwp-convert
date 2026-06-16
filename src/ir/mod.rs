@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 /// v8: added `TextStyle` decoration fields (superscript, subscript,
 /// emphasis_dot, emboss, engrave, outline, shadow). All are additive and
 /// `#[serde(default)]`, so older JSON still deserializes.
-pub const IR_VERSION: u16 = 8;
+/// v9: added `TableCell::is_header` and `TableCellStyle::vertical_align`.
+/// Additive and `#[serde(default)]`.
+pub const IR_VERSION: u16 = 9;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -261,6 +263,14 @@ pub enum Alignment {
     Center,
     Right,
     Justify,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VerticalAlign {
+    Top,
+    Middle,
+    Bottom,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -582,6 +592,8 @@ pub struct TableRow {
 pub struct TableCell {
     pub row_span: u32,
     pub col_span: u32,
+    #[serde(default)]
+    pub is_header: bool,
     pub blocks: Vec<Block>,
     pub style: TableCellStyle,
 }
@@ -591,6 +603,7 @@ impl Default for TableCell {
         Self {
             row_span: 1,
             col_span: 1,
+            is_header: false,
             blocks: Vec::new(),
             style: TableCellStyle::default(),
         }
@@ -607,6 +620,7 @@ pub struct TableStyle {
 #[serde(default)]
 pub struct TableCellStyle {
     pub background_color: Option<Color>,
+    pub vertical_align: Option<VerticalAlign>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -749,6 +763,16 @@ mod tests {
         let document = Document::default();
 
         assert!(document.notes.notes.is_empty());
+    }
+
+    #[test]
+    fn deserializes_table_cell_without_new_fields() {
+        let cell: TableCell =
+            serde_json::from_str(r#"{ "row_span": 1, "col_span": 1, "blocks": [], "style": {} }"#)
+                .expect("older table cell JSON should deserialize");
+
+        assert!(!cell.is_header);
+        assert_eq!(cell.style.vertical_align, None);
     }
 
     #[test]

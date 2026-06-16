@@ -29,7 +29,9 @@ use rhwp::model::style::{
     FillType as RhwpFillType, HeadType as RhwpHeadType, Numbering as RhwpNumbering,
     ParaShape as RhwpParaShape, UnderlineType as RhwpUnderlineType,
 };
-use rhwp::model::table::{Cell as RhwpCell, Table as RhwpTable};
+use rhwp::model::table::{
+    Cell as RhwpCell, Table as RhwpTable, VerticalAlign as RhwpVerticalAlign,
+};
 
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
@@ -38,8 +40,18 @@ use crate::ir::{
     ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore, Paragraph,
     ParagraphRole, ParagraphStyle, ParagraphStyleId, Resource, ResourceId, ResourceStore, Section,
     Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
-    TextRun, TextStyle, TextStyleId, UnknownInline, WarningCode,
+    TextRun, TextStyle, TextStyleId, UnknownInline, VerticalAlign, WarningCode,
 };
+
+/// Map rhwp cell vertical alignment to the IR. `Top` is rhwp's default, so it is
+/// represented as `None` to keep the IR and JSON output free of redundant data.
+fn map_vertical_align(value: RhwpVerticalAlign) -> Option<VerticalAlign> {
+    match value {
+        RhwpVerticalAlign::Top => None,
+        RhwpVerticalAlign::Center => Some(VerticalAlign::Middle),
+        RhwpVerticalAlign::Bottom => Some(VerticalAlign::Bottom),
+    }
+}
 
 /// Parse a source document with `rhwp` and bridge the resulting model into the
 /// local `Document` IR. For `.hwpx`, section XML fallback remains available
@@ -1231,9 +1243,11 @@ impl<'a> BridgeContext<'a> {
         TableCell {
             row_span: (cell.row_span as u32).max(1),
             col_span: (cell.col_span as u32).max(1),
+            is_header: cell.is_header,
             blocks,
             style: TableCellStyle {
                 background_color: self.border_fill_background_color(cell.border_fill_id),
+                vertical_align: map_vertical_align(cell.vertical_align),
             },
         }
     }
@@ -2141,7 +2155,9 @@ mod tests {
         ParaShape as RhwpParaShape, SolidFill, Style as RhwpStyle,
         UnderlineType as RhwpUnderlineType,
     };
-    use rhwp::model::table::{Cell as RhwpCell, Table as RhwpTable};
+    use rhwp::model::table::{
+        Cell as RhwpCell, Table as RhwpTable, VerticalAlign as RhwpVerticalAlign,
+    };
 
     #[test]
     fn maps_table_control_into_table_block() {
@@ -2284,6 +2300,68 @@ mod tests {
                 .iter()
                 .any(|warning| { warning.message.contains("table cell field names") })
         );
+    }
+
+    #[test]
+    fn maps_table_cell_header_and_vertical_align() {
+        let header_cell = RhwpCell {
+            row: 0,
+            col: 0,
+            row_span: 1,
+            col_span: 1,
+            is_header: true,
+            vertical_align: RhwpVerticalAlign::Center,
+            paragraphs: vec![RhwpParagraph {
+                text: "h".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let plain_cell = RhwpCell {
+            row: 0,
+            col: 1,
+            row_span: 1,
+            col_span: 1,
+            paragraphs: vec![RhwpParagraph {
+                text: "p".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let table = RhwpTable {
+            row_count: 1,
+            col_count: 2,
+            cells: vec![header_cell, plain_cell],
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Table(Box::new(table))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Table(table) => {
+                let header = &table.rows[0].cells[0];
+                assert!(header.is_header);
+                assert_eq!(
+                    header.style.vertical_align,
+                    Some(crate::ir::VerticalAlign::Middle)
+                );
+
+                let plain = &table.rows[0].cells[1];
+                assert!(!plain.is_header);
+                assert_eq!(plain.style.vertical_align, None);
+            }
+            other => panic!("expected table block, got {other:?}"),
+        }
     }
 
     #[test]

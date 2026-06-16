@@ -13,7 +13,7 @@ use crate::ir::{
     HeaderFooterPlacement, Image, Inline, Link, ListInfo, ListKind, Note, NoteId, NoteKind,
     Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape,
     Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
-    UnknownInline,
+    UnknownInline, VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -1137,11 +1137,30 @@ fn render_html_table_style(style: &TableStyle) -> String {
 }
 
 fn render_html_table_cell_style(style: &TableCellStyle) -> String {
-    style
-        .background_color
-        .map(render_css_color)
-        .map(|color| format!("background-color: {color}"))
-        .unwrap_or_default()
+    let mut declarations = Vec::new();
+
+    if let Some(background_color) = style.background_color {
+        declarations.push(format!(
+            "background-color: {}",
+            render_css_color(background_color)
+        ));
+    }
+    if let Some(vertical_align) = &style.vertical_align {
+        declarations.push(format!(
+            "vertical-align: {}",
+            vertical_align_to_css(vertical_align)
+        ));
+    }
+
+    declarations.join("; ")
+}
+
+fn vertical_align_to_css(vertical_align: &VerticalAlign) -> &'static str {
+    match vertical_align {
+        VerticalAlign::Top => "top",
+        VerticalAlign::Middle => "middle",
+        VerticalAlign::Bottom => "bottom",
+    }
 }
 
 fn render_html_style_attr(style: &str) -> String {
@@ -1398,8 +1417,9 @@ fn render_html_table_cell(
     };
     let content = render_html_table_cell_blocks(&cell.blocks, resources, image_asset_prefix);
     let style = render_html_style_attr(&render_html_table_cell_style(&cell.style));
+    let tag = if cell.is_header { "th" } else { "td" };
 
-    format!("<td{rowspan}{colspan}{style}>{content}</td>\n")
+    format!("<{tag}{rowspan}{colspan}{style}>{content}</{tag}>\n")
 }
 
 fn render_html_table_cell_blocks(
@@ -3289,6 +3309,32 @@ mod tests {
     }
 
     #[test]
+    fn renders_table_header_cell_and_vertical_align() {
+        let document = document_with_blocks(vec![Block::Table(Table {
+            rows: vec![TableRow {
+                cells: vec![TableCell {
+                    is_header: true,
+                    blocks: vec![Block::Paragraph(Paragraph::from_plain_text(
+                        "H".to_string(),
+                    ))],
+                    style: TableCellStyle {
+                        vertical_align: Some(VerticalAlign::Middle),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+            }],
+            style: TableStyle::default(),
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("<th"));
+        assert!(html.contains("vertical-align: middle"));
+        assert!(!html.contains("<td"));
+    }
+
+    #[test]
     fn renders_html_text_style_visual_properties() {
         let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
             role: ParagraphRole::Body,
@@ -3958,6 +4004,7 @@ mod tests {
         TableCell {
             row_span: 1,
             col_span: 1,
+            is_header: false,
             blocks: vec![Block::Paragraph(Paragraph {
                 role: ParagraphRole::Body,
                 inlines: vec![Inline::Text(TextRun {
