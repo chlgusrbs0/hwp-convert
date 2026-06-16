@@ -27,7 +27,7 @@
 | style | 부분 | 부분 | 부분 | 부분 (JSON 보존, HTML CSS, Markdown은 bold/italic/strike/sup/sub/link, TXT/SVG 소실) | 글자 장식은 굵기/기울임/밑줄/취소선/위·아래첨자/강조점/양각/음각/외곽선/그림자, 글꼴명/크기, 전경/배경색, 밑줄·취소선 색까지 매핑. 밑줄 모양, 장평/자간/커닝, table style ref, border, padding, percent line spacing, paragraph role 추론은 아직 없음. |
 | table | 예 | 예 | 예 | 부분 (JSON/HTML 구조 유지, 헤더셀은 `<th>`, 셀 수직정렬 CSS, TXT/SVG 평문, Markdown 단순 표만) | 셀 `is_header`, 수직정렬, 폭/높이/padding, 4면 테두리(색·선종류·굵기)는 매핑됨. 표 전체 폭은 아직. 테두리 굵기 인덱스→px는 rhwp 임계값(0–7)+표준 HWP 표(8–15), 선종류 wave/3D는 solid로 근사(실문서 fixture로 검증 필요). |
 | merged table cell | 예 | 예 | 예 | 부분 (JSON/HTML `row_span`/`col_span`, Markdown fallback, TXT/SVG 평문) | 병합 셀 시각 배치/너비 계산 없음. Markdown 병합 표현 없음. |
-| image | 예 | 부분 | 예 | 부분 (JSON bytes 포함, HTML/Markdown asset 파일, TXT/SVG 대체 텍스트) | 배치/wrap/crop/anchor 없음. bin data 없으면 `UnknownBlock`. `Resource::Binary`는 asset으로 안 씀. |
+| image | 예 | 부분 | 예 | 부분 (JSON bytes 포함, HTML/Markdown asset 파일, TXT/SVG 대체 텍스트) | 이미지 테두리(색·굵기, 선종류는 solid 가정)와 흑백(grayscale) 효과는 매핑됨. crop, 밝기/대비, opacity, 내부 padding, wrap, anchor, 배치는 아직(미지원은 warning). bin data 없으면 `UnknownBlock`. `Resource::Binary`는 asset으로 안 씀. |
 | resource | 부분 | 부분 | 부분 | 부분 (JSON store 보존, HTML/Markdown `Resource::Image`만 파일로) | 현재 image bin data만 `ImageResource`로. `BinaryResource` 미사용. |
 | header/footer | 예 | 예 | 예 | 부분 (모두 선형화 출력) | 페이지 반복 레이아웃이 아니라 본문 앞뒤 block 묶음. `FirstPage` 미생성. |
 | footnote/endnote | 예 | 부분 | 예 | 부분 (note ref + body 출력) | rHWP가 정확한 inline 위치를 안 줘 note ref가 문단 끝에 append. 페이지 하단 배치/separator 없음. |

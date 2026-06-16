@@ -36,7 +36,7 @@ use rhwp::model::table::{
 
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
-    Block, BorderStyle, CellBorder, Color, ConversionWarning, Document, Equation, EquationKind,
+    Block, Border, BorderStyle, Color, ConversionWarning, Document, Equation, EquationKind,
     HeaderFooter, HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt, LengthPx, Link,
     ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore,
     Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Resource, ResourceId,
@@ -1279,6 +1279,11 @@ impl<'a> BridgeContext<'a> {
                 ),
                 width: hwp_units_to_px_option(picture.common.width),
                 height: hwp_units_to_px_option(picture.common.height),
+                border: map_image_border(picture),
+                grayscale: matches!(
+                    picture.image_attr.effect,
+                    RhwpImageEffect::GrayScale | RhwpImageEffect::BlackWhite
+                ),
             }),
             None => {
                 self.add_warning_once(&format!(
@@ -1307,7 +1312,9 @@ impl<'a> BridgeContext<'a> {
                 picture.crop.left, picture.crop.top, picture.crop.right, picture.crop.bottom
             ));
         }
-        if picture.image_attr.effect != RhwpImageEffect::RealPic
+        // GrayScale/BlackWhite are now mapped to Image.grayscale; only the
+        // remaining effects and brightness/contrast adjustments are unsupported.
+        if matches!(picture.image_attr.effect, RhwpImageEffect::Pattern8x8)
             || picture.image_attr.brightness != 0
             || picture.image_attr.contrast != 0
         {
@@ -1318,18 +1325,16 @@ impl<'a> BridgeContext<'a> {
                 picture.image_attr.contrast
             ));
         }
-        if picture.border_width != 0
-            || picture.border_color != 0
-            || picture.border_opacity != 0
+        // border_width/border_color are now mapped to Image.border; opacity and
+        // inner padding are still unsupported.
+        if picture.border_opacity != 0
             || picture.padding.left != 0
             || picture.padding.right != 0
             || picture.padding.top != 0
             || picture.padding.bottom != 0
         {
             details.push(format!(
-                "border_width={},border_color={:#08x},border_opacity={},padding={}/{}/{}/{}",
-                picture.border_width,
-                picture.border_color,
+                "border_opacity={},padding={}/{}/{}/{}",
                 picture.border_opacity,
                 picture.padding.left,
                 picture.padding.right,
@@ -1637,7 +1642,7 @@ impl<'a> BridgeContext<'a> {
 
     /// Map a border fill's four sides to IR cell borders, in rhwp order
     /// `[left, right, top, bottom]`.
-    fn map_cell_borders(&self, border_fill_id: u16) -> [Option<CellBorder>; 4] {
+    fn map_cell_borders(&self, border_fill_id: u16) -> [Option<Border>; 4] {
         match self.lookup_border_fill(border_fill_id) {
             Some(border_fill) => [
                 map_border_line(&border_fill.borders[0]),
@@ -1823,15 +1828,29 @@ fn i16_hwp_units_to_px_option(value: i16) -> Option<LengthPx> {
 
 /// Map a single rhwp border line to an IR cell border. `None` line type means
 /// the side has no border.
-fn map_border_line(line: &RhwpBorderLine) -> Option<CellBorder> {
+fn map_border_line(line: &RhwpBorderLine) -> Option<Border> {
     if line.line_type == RhwpBorderLineType::None {
         return None;
     }
 
-    Some(CellBorder {
+    Some(Border {
         width: border_width_index_to_px(line.width),
         style: map_border_line_type(line.line_type),
         color: color_ref_to_color_option(line.color),
+    })
+}
+
+/// Map an rhwp picture's uniform border to an IR border. rhwp does not expose a
+/// per-edge picture border, so a single solid border is produced.
+fn map_image_border(picture: &Picture) -> Option<Border> {
+    let width = (picture.border_width > 0)
+        .then(|| hwp_units_to_px_option(picture.border_width as u32))
+        .flatten()?;
+
+    Some(Border {
+        width,
+        style: BorderStyle::Solid,
+        color: color_ref_to_color_option(picture.border_color),
     })
 }
 
@@ -2692,6 +2711,61 @@ mod tests {
                 assert_eq!(resource.media_type.as_deref(), Some("image/png"));
             }
             other => panic!("expected image resource, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maps_picture_border_and_grayscale() {
+        let picture = Picture {
+            image_attr: ImageAttr {
+                bin_data_id: 7,
+                effect: RhwpImageEffect::GrayScale,
+                ..Default::default()
+            },
+            common: rhwp::model::shape::CommonObjAttr {
+                width: 7500,
+                height: 3750,
+                ..Default::default()
+            },
+            border_width: 75,
+            border_color: 0x00112233,
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Picture(Box::new(picture))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            bin_data_content: vec![BinDataContent {
+                id: 7,
+                data: vec![137, 80, 78, 71],
+                extension: "png".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Image(image) => {
+                assert!(image.grayscale);
+                let border = image.border.as_ref().expect("image border");
+                assert_eq!(border.width, LengthPx(1.0));
+                assert_eq!(border.style, BorderStyle::Solid);
+                assert_eq!(
+                    border.color,
+                    Some(Color {
+                        r: 0x33,
+                        g: 0x22,
+                        b: 0x11,
+                        a: 255,
+                    })
+                );
+            }
+            other => panic!("expected image block, got {other:?}"),
         }
     }
 

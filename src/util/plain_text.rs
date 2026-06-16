@@ -345,8 +345,7 @@ mod tests {
                     resource_id: ResourceId("image-1".to_string()),
                     alt: Some("logo".to_string()),
                     caption: Some("company mark".to_string()),
-                    width: None,
-                    height: None,
+                    ..Default::default()
                 })],
                 ..Default::default()
             }],

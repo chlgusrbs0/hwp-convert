@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
 use crate::ir::{
-    Alignment, Block, BorderStyle, CellBorder, Chart, Color, Document, Equation, EquationKind,
+    Alignment, Block, Border, BorderStyle, Chart, Color, Document, Equation, EquationKind,
     HeaderFooter, HeaderFooterPlacement, Image, Inline, Link, ListInfo, ListKind, Note, NoteId,
     NoteKind, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore,
     Section, Shape, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
@@ -1194,7 +1194,7 @@ fn render_html_table_cell_style(style: &TableCellStyle) -> String {
     declarations.join("; ")
 }
 
-fn render_css_border(border: &CellBorder) -> String {
+fn render_css_border(border: &Border) -> String {
     let style = match border.style {
         BorderStyle::Solid => "solid",
         BorderStyle::Dashed => "dashed",
@@ -1411,7 +1411,15 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
         .height
         .map(|height| format!(" height=\"{}\"", height.0))
         .unwrap_or_default();
-    let tag = format!("<img src=\"{src}\" alt=\"{alt}\"{width}{height} />");
+    let mut declarations = Vec::new();
+    if let Some(border) = &image.border {
+        declarations.push(format!("border: {}", render_css_border(border)));
+    }
+    if image.grayscale {
+        declarations.push("filter: grayscale(100%)".to_string());
+    }
+    let style = render_html_style_attr(&declarations.join("; "));
+    let tag = format!("<img src=\"{src}\" alt=\"{alt}\"{width}{height}{style} />");
 
     if let Some(caption) = &image.caption {
         return format!(
@@ -3196,16 +3204,12 @@ mod tests {
                     Block::Image(Image {
                         resource_id: first_id.clone(),
                         alt: Some("first".to_string()),
-                        caption: None,
-                        width: None,
-                        height: None,
+                        ..Default::default()
                     }),
                     Block::Image(Image {
                         resource_id: second_id.clone(),
                         alt: Some("second".to_string()),
-                        caption: None,
-                        width: None,
-                        height: None,
+                        ..Default::default()
                     }),
                 ],
                 ..Default::default()
@@ -3381,7 +3385,7 @@ mod tests {
                         width: Some(LengthPx(100.0)),
                         height: Some(LengthPx(20.0)),
                         padding_left: Some(LengthPx(2.0)),
-                        border_top: Some(CellBorder {
+                        border_top: Some(Border {
                             width: LengthPx(2.0),
                             style: BorderStyle::Solid,
                             color: Some(Color {
@@ -3408,6 +3412,30 @@ mod tests {
         assert!(html.contains("padding-left: 2px"));
         assert!(html.contains("border-top: 2px solid #112233"));
         assert!(!html.contains("<td"));
+    }
+
+    #[test]
+    fn renders_html_image_border_and_grayscale() {
+        let document = document_with_blocks(vec![Block::Image(Image {
+            resource_id: ResourceId("img-1".to_string()),
+            border: Some(Border {
+                width: LengthPx(2.0),
+                style: BorderStyle::Solid,
+                color: Some(Color {
+                    r: 17,
+                    g: 34,
+                    b: 51,
+                    a: 255,
+                }),
+            }),
+            grayscale: true,
+            ..Default::default()
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("border: 2px solid #112233"));
+        assert!(html.contains("filter: grayscale(100%)"));
     }
 
     #[test]
@@ -4042,9 +4070,7 @@ mod tests {
                 blocks: vec![Block::Image(Image {
                     resource_id: ResourceId(resource_id.to_string()),
                     alt: alt.map(ToOwned::to_owned),
-                    caption: None,
-                    width: None,
-                    height: None,
+                    ..Default::default()
                 })],
                 ..Default::default()
             }],

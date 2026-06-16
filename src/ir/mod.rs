@@ -17,9 +17,10 @@ use serde::{Deserialize, Serialize};
 /// v10: added `TextStyle::{underline_color, strike_color}` and
 /// `TableCellStyle::{width, height}`. Additive and `#[serde(default)]`.
 /// v11: added `TableCellStyle` padding fields. Additive and `#[serde(default)]`.
-/// v12: added `TableCellStyle` per-side borders (`CellBorder`/`BorderStyle`).
+/// v12: added `TableCellStyle` per-side borders (`Border`/`BorderStyle`).
 /// Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 12;
+/// v13: added `Image::{border, grayscale}`. Additive and `#[serde(default)]`.
+pub const IR_VERSION: u16 = 13;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -538,6 +539,12 @@ pub struct Image {
     pub width: Option<LengthPx>,
     /// Display hint in px until Layout IR defines document-space units.
     pub height: Option<LengthPx>,
+    /// Uniform border around the image, if any.
+    #[serde(default)]
+    pub border: Option<Border>,
+    /// Grayscale/black-and-white rendering effect.
+    #[serde(default)]
+    pub grayscale: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -634,14 +641,15 @@ pub struct TableCellStyle {
     pub padding_right: Option<LengthPx>,
     pub padding_bottom: Option<LengthPx>,
     pub padding_left: Option<LengthPx>,
-    pub border_top: Option<CellBorder>,
-    pub border_right: Option<CellBorder>,
-    pub border_bottom: Option<CellBorder>,
-    pub border_left: Option<CellBorder>,
+    pub border_top: Option<Border>,
+    pub border_right: Option<Border>,
+    pub border_bottom: Option<Border>,
+    pub border_left: Option<Border>,
 }
 
+/// A single border edge: used by table cells (per side) and images (uniform).
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct CellBorder {
+pub struct Border {
     pub width: LengthPx,
     pub style: BorderStyle,
     pub color: Option<Color>,
@@ -846,6 +854,17 @@ mod tests {
     }
 
     #[test]
+    fn deserializes_older_image_without_new_fields() {
+        let image: Image = serde_json::from_str(
+            r#"{ "resource_id": "image-1", "alt": null, "caption": null, "width": null, "height": null }"#,
+        )
+        .expect("older image JSON should deserialize");
+
+        assert_eq!(image.border, None);
+        assert!(!image.grayscale);
+    }
+
+    #[test]
     fn image_can_reference_image_resource_by_resource_id() {
         let resource_id = ResourceId("image-1".to_string());
         let image = Image {
@@ -854,6 +873,7 @@ mod tests {
             caption: None,
             width: Some(LengthPx(128.0)),
             height: Some(LengthPx(64.0)),
+            ..Default::default()
         };
         let store = ResourceStore {
             entries: vec![Resource::Image(ImageResource {

@@ -1785,6 +1785,9 @@ fn extract_hwpx_image_from_pic_xml(
         caption: extract_hwpx_object_caption(pic_xml, context),
         width: hwpx_object_dimension_to_px(pic_xml, &["width", "w"]),
         height: hwpx_object_dimension_to_px(pic_xml, &["height", "h"]),
+        // Section XML fallback does not yet recover image border or effects.
+        border: None,
+        grayscale: false,
     })
 }
 
