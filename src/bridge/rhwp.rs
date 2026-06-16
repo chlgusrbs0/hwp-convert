@@ -1250,6 +1250,10 @@ impl<'a> BridgeContext<'a> {
                 vertical_align: map_vertical_align(cell.vertical_align),
                 width: hwp_units_to_px_option(cell.width),
                 height: hwp_units_to_px_option(cell.height),
+                padding_top: i16_hwp_units_to_px_option(cell.padding.top),
+                padding_right: i16_hwp_units_to_px_option(cell.padding.right),
+                padding_bottom: i16_hwp_units_to_px_option(cell.padding.bottom),
+                padding_left: i16_hwp_units_to_px_option(cell.padding.left),
             },
         }
     }
@@ -1786,6 +1790,14 @@ fn hwp_units_to_px_option(value: u32) -> Option<LengthPx> {
     }
 }
 
+fn i16_hwp_units_to_px_option(value: i16) -> Option<LengthPx> {
+    if value <= 0 {
+        None
+    } else {
+        hwp_units_to_px_option(value as u32)
+    }
+}
+
 fn i32_hwp_units_to_pt_option(value: i32) -> Option<LengthPt> {
     if value == 0 {
         None
@@ -2317,6 +2329,12 @@ mod tests {
             vertical_align: RhwpVerticalAlign::Center,
             width: 7500,
             height: 1500,
+            padding: rhwp::model::Padding {
+                left: 150,
+                right: 150,
+                top: 75,
+                bottom: 75,
+            },
             paragraphs: vec![RhwpParagraph {
                 text: "h".to_string(),
                 ..Default::default()
@@ -2363,6 +2381,8 @@ mod tests {
                 );
                 assert_eq!(header.style.width, Some(crate::ir::LengthPx(100.0)));
                 assert_eq!(header.style.height, Some(crate::ir::LengthPx(20.0)));
+                assert_eq!(header.style.padding_left, Some(crate::ir::LengthPx(2.0)));
+                assert_eq!(header.style.padding_top, Some(crate::ir::LengthPx(1.0)));
 
                 let plain = &table.rows[0].cells[1];
                 assert!(!plain.is_header);

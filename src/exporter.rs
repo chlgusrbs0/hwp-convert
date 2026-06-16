@@ -1170,6 +1170,16 @@ fn render_html_table_cell_style(style: &TableCellStyle) -> String {
     if let Some(height) = style.height {
         declarations.push(format!("height: {}px", height.0));
     }
+    for (value, property) in [
+        (style.padding_top, "padding-top"),
+        (style.padding_right, "padding-right"),
+        (style.padding_bottom, "padding-bottom"),
+        (style.padding_left, "padding-left"),
+    ] {
+        if let Some(value) = value {
+            declarations.push(format!("{property}: {}px", value.0));
+        }
+    }
 
     declarations.join("; ")
 }
@@ -3347,6 +3357,7 @@ mod tests {
                         vertical_align: Some(VerticalAlign::Middle),
                         width: Some(LengthPx(100.0)),
                         height: Some(LengthPx(20.0)),
+                        padding_left: Some(LengthPx(2.0)),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -3361,6 +3372,7 @@ mod tests {
         assert!(html.contains("vertical-align: middle"));
         assert!(html.contains("width: 100px"));
         assert!(html.contains("height: 20px"));
+        assert!(html.contains("padding-left: 2px"));
         assert!(!html.contains("<td"));
     }
 

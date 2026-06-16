@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 /// Additive and `#[serde(default)]`.
 /// v10: added `TextStyle::{underline_color, strike_color}` and
 /// `TableCellStyle::{width, height}`. Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 10;
+/// v11: added `TableCellStyle` padding fields. Additive and `#[serde(default)]`.
+pub const IR_VERSION: u16 = 11;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -627,6 +628,10 @@ pub struct TableCellStyle {
     pub vertical_align: Option<VerticalAlign>,
     pub width: Option<LengthPx>,
     pub height: Option<LengthPx>,
+    pub padding_top: Option<LengthPx>,
+    pub padding_right: Option<LengthPx>,
+    pub padding_bottom: Option<LengthPx>,
+    pub padding_left: Option<LengthPx>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -781,6 +786,8 @@ mod tests {
         assert_eq!(cell.style.vertical_align, None);
         assert_eq!(cell.style.width, None);
         assert_eq!(cell.style.height, None);
+        assert_eq!(cell.style.padding_top, None);
+        assert_eq!(cell.style.padding_left, None);
     }
 
     #[test]

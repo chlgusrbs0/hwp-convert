@@ -1431,12 +1431,17 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
         col_span: hwpx_table_cell_span(cell_xml, &["colSpan", "colspan"]),
         is_header,
         blocks: extract_section_xml_blocks(cell_xml, context),
-        // Section XML fallback does not yet recover cell vertical alignment or size.
+        // Section XML fallback does not yet recover cell vertical alignment,
+        // size, or padding.
         style: TableCellStyle {
             background_color,
             vertical_align: None,
             width: None,
             height: None,
+            padding_top: None,
+            padding_right: None,
+            padding_bottom: None,
+            padding_left: None,
         },
     }
 }
