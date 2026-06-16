@@ -1248,6 +1248,8 @@ impl<'a> BridgeContext<'a> {
             style: TableCellStyle {
                 background_color: self.border_fill_background_color(cell.border_fill_id),
                 vertical_align: map_vertical_align(cell.vertical_align),
+                width: hwp_units_to_px_option(cell.width),
+                height: hwp_units_to_px_option(cell.height),
             },
         }
     }
@@ -1514,6 +1516,8 @@ impl<'a> BridgeContext<'a> {
             font_size_pt: i32_hwp_units_to_pt_option(char_shape.base_size),
             color: color_ref_to_color_option(char_shape.text_color),
             background_color: color_ref_to_color_option(char_shape.shade_color),
+            underline_color: color_ref_to_color_option(char_shape.underline_color),
+            strike_color: color_ref_to_color_option(char_shape.strike_color),
         }
     }
 
@@ -2311,6 +2315,8 @@ mod tests {
             col_span: 1,
             is_header: true,
             vertical_align: RhwpVerticalAlign::Center,
+            width: 7500,
+            height: 1500,
             paragraphs: vec![RhwpParagraph {
                 text: "h".to_string(),
                 ..Default::default()
@@ -2355,10 +2361,13 @@ mod tests {
                     header.style.vertical_align,
                     Some(crate::ir::VerticalAlign::Middle)
                 );
+                assert_eq!(header.style.width, Some(crate::ir::LengthPx(100.0)));
+                assert_eq!(header.style.height, Some(crate::ir::LengthPx(20.0)));
 
                 let plain = &table.rows[0].cells[1];
                 assert!(!plain.is_header);
                 assert_eq!(plain.style.vertical_align, None);
+                assert_eq!(plain.style.width, None);
             }
             other => panic!("expected table block, got {other:?}"),
         }
@@ -2846,6 +2855,8 @@ mod tests {
                     base_size: 1200,
                     text_color: 0x00010203,
                     shade_color: 0x00040506,
+                    underline_color: 0x00112233,
+                    strike_color: 0x00445566,
                     ..Default::default()
                 }],
                 para_shapes: vec![RhwpParaShape {
@@ -2931,6 +2942,24 @@ mod tests {
                                 r: 6,
                                 g: 5,
                                 b: 4,
+                                a: 255,
+                            })
+                        );
+                        assert_eq!(
+                            run.style.underline_color,
+                            Some(Color {
+                                r: 0x33,
+                                g: 0x22,
+                                b: 0x11,
+                                a: 255,
+                            })
+                        );
+                        assert_eq!(
+                            run.style.strike_color,
+                            Some(Color {
+                                r: 0x66,
+                                g: 0x55,
+                                b: 0x44,
                                 a: 255,
                             })
                         );

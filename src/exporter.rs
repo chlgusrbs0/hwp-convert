@@ -1049,6 +1049,19 @@ fn render_html_text_style(style: &TextStyle) -> String {
     }
     if !decorations.is_empty() {
         declarations.push(format!("text-decoration: {}", decorations.join(" ")));
+        // CSS text-decoration-color is a single value, so prefer the underline
+        // color when underlined, otherwise fall back to the strike color.
+        let decoration_color = style
+            .underline
+            .then_some(style.underline_color)
+            .flatten()
+            .or_else(|| style.strike.then_some(style.strike_color).flatten());
+        if let Some(color) = decoration_color {
+            declarations.push(format!(
+                "text-decoration-color: {}",
+                render_css_color(color)
+            ));
+        }
     }
 
     if style.superscript {
@@ -1150,6 +1163,12 @@ fn render_html_table_cell_style(style: &TableCellStyle) -> String {
             "vertical-align: {}",
             vertical_align_to_css(vertical_align)
         ));
+    }
+    if let Some(width) = style.width {
+        declarations.push(format!("width: {}px", width.0));
+    }
+    if let Some(height) = style.height {
+        declarations.push(format!("height: {}px", height.0));
     }
 
     declarations.join("; ")
@@ -2175,8 +2194,8 @@ mod tests {
     use super::*;
     use crate::ir::{
         Alignment, Chart, Color, ConversionWarning, Equation, EquationKind, HeaderFooter,
-        HeaderFooterPlacement, IR_VERSION, Image, ImageResource, Indent, LengthPt, Link, ListInfo,
-        ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
+        HeaderFooterPlacement, IR_VERSION, Image, ImageResource, Indent, LengthPt, LengthPx, Link,
+        ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
         ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing,
         StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
         UnknownInline,
@@ -3264,6 +3283,12 @@ mod tests {
                     italic: true,
                     underline: true,
                     strike: true,
+                    underline_color: Some(Color {
+                        r: 17,
+                        g: 34,
+                        b: 51,
+                        a: 255,
+                    }),
                     ..Default::default()
                 },
                 style_ref: None,
@@ -3278,6 +3303,7 @@ mod tests {
         assert!(html.contains("font-weight: bold"));
         assert!(html.contains("font-style: italic"));
         assert!(html.contains("text-decoration: underline line-through"));
+        assert!(html.contains("text-decoration-color: #112233"));
     }
 
     #[test]
@@ -3319,6 +3345,8 @@ mod tests {
                     ))],
                     style: TableCellStyle {
                         vertical_align: Some(VerticalAlign::Middle),
+                        width: Some(LengthPx(100.0)),
+                        height: Some(LengthPx(20.0)),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -3331,6 +3359,8 @@ mod tests {
 
         assert!(html.contains("<th"));
         assert!(html.contains("vertical-align: middle"));
+        assert!(html.contains("width: 100px"));
+        assert!(html.contains("height: 20px"));
         assert!(!html.contains("<td"));
     }
 

@@ -24,8 +24,8 @@
 | --- | --- | --- | --- | --- | --- |
 | text | 예 | 예 | 예 | 예 (TXT/JSON/HTML/Markdown/SVG 모두) | 좌표/페이지 단위 정보 없음. unsupported control 내부 텍스트는 보존 안 될 수 있음. |
 | paragraph | 예 | 부분 | 예 | 부분 (heading/title/caption 구분 없음) | bridge가 빈 문단을 drop하고 `ParagraphRole`을 항상 `Body`로 둠. |
-| style | 부분 | 부분 | 부분 | 부분 (JSON 보존, HTML CSS, Markdown은 bold/italic/strike/sup/sub/link, TXT/SVG 소실) | 글자 장식은 굵기/기울임/밑줄/취소선/위·아래첨자/강조점/양각/음각/외곽선/그림자, 글꼴명/크기, 전경/배경색까지 매핑(IR_VERSION 8). 밑줄 색·모양, 취소선 색, 장평/자간/커닝, table style ref, border, padding, percent line spacing, paragraph role 추론은 아직 없음. |
-| table | 예 | 예 | 예 | 부분 (JSON/HTML 구조 유지, 헤더셀은 `<th>`, 셀 수직정렬 CSS, TXT/SVG 평문, Markdown 단순 표만) | 셀 `is_header`와 수직정렬(vertical_align)은 매핑됨. 표 폭, 경계선, 셀 padding, 열 폭은 아직 IR로 안 감. |
+| style | 부분 | 부분 | 부분 | 부분 (JSON 보존, HTML CSS, Markdown은 bold/italic/strike/sup/sub/link, TXT/SVG 소실) | 글자 장식은 굵기/기울임/밑줄/취소선/위·아래첨자/강조점/양각/음각/외곽선/그림자, 글꼴명/크기, 전경/배경색, 밑줄·취소선 색까지 매핑. 밑줄 모양, 장평/자간/커닝, table style ref, border, padding, percent line spacing, paragraph role 추론은 아직 없음. |
+| table | 예 | 예 | 예 | 부분 (JSON/HTML 구조 유지, 헤더셀은 `<th>`, 셀 수직정렬 CSS, TXT/SVG 평문, Markdown 단순 표만) | 셀 `is_header`, 수직정렬(vertical_align), 셀 폭/높이는 매핑됨. 표 폭, 경계선, 셀 padding은 아직 IR로 안 감. |
 | merged table cell | 예 | 예 | 예 | 부분 (JSON/HTML `row_span`/`col_span`, Markdown fallback, TXT/SVG 평문) | 병합 셀 시각 배치/너비 계산 없음. Markdown 병합 표현 없음. |
 | image | 예 | 부분 | 예 | 부분 (JSON bytes 포함, HTML/Markdown asset 파일, TXT/SVG 대체 텍스트) | 배치/wrap/crop/anchor 없음. bin data 없으면 `UnknownBlock`. `Resource::Binary`는 asset으로 안 씀. |
 | resource | 부분 | 부분 | 부분 | 부분 (JSON store 보존, HTML/Markdown `Resource::Image`만 파일로) | 현재 image bin data만 `ImageResource`로. `BinaryResource` 미사용. |

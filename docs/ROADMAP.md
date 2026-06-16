@@ -246,6 +246,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - `src/hwpx.rs` 자작 파서의 비대화를 명시적 전략 결정 사항으로 등록했다 (위 "전략적 결정 사항").
 - 글꼴 fidelity 1차 확장: rhwp `CharShape`가 주는데 버려지던 위/아래첨자, 강조점, 양각/음각, 외곽선, 그림자를 `TextStyle`로 끌어왔다. bridge 매핑 + HTML(CSS) + Markdown(sup/sub) + 테스트 포함, `IR_VERSION` 7 → 8. 남은 글꼴 항목(밑줄 색/모양, 취소선 색, 장평/자간/커닝)은 후속.
 - 표 셀 fidelity 1차 확장: rhwp `Cell`의 `is_header`(→ HTML `<th>`)와 vertical align(→ `TableCellStyle.vertical_align`, CSS `vertical-align`)을 끌어왔다. HWPX 폴백은 `header` 속성으로 헤더 여부를 복구한다. `IR_VERSION` 8 → 9. 남은 표 항목(셀 폭/높이, padding, 경계선, 열 폭)은 후속.
+- 밑줄/취소선 색 + 표 셀 폭/높이: `TextStyle.{underline_color, strike_color}`(→ CSS `text-decoration-color`)와 `TableCellStyle.{width, height}`(→ CSS, 기존 hwp-units→px 변환 재사용)를 끌어왔다. `IR_VERSION` 9 → 10. 남은 항목(밑줄 모양, 장평/자간, 셀 padding/경계선)은 후속.
 
 ## 완료 선언 기준
 

@@ -399,8 +399,13 @@ fn assert_table_export_artifacts(input: &FixtureInput, format: OutputFormat, out
 
     match format {
         OutputFormat::Html => {
+            // Cells may now carry style attributes (width/height) and header
+            // cells render as `<th>`, so match the tag prefix rather than the
+            // exact `<td><p` sequence.
             assert!(
-                output.contains("<table>") && output.contains("<td><p"),
+                output.contains("<table>")
+                    && (output.contains("<td") || output.contains("<th"))
+                    && output.contains("<p"),
                 "fixture {} should render a semantic HTML table",
                 input.label
             );

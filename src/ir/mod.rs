@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 /// `#[serde(default)]`, so older JSON still deserializes.
 /// v9: added `TableCell::is_header` and `TableCellStyle::vertical_align`.
 /// Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 9;
+/// v10: added `TextStyle::{underline_color, strike_color}` and
+/// `TableCellStyle::{width, height}`. Additive and `#[serde(default)]`.
+pub const IR_VERSION: u16 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -246,6 +248,8 @@ pub struct TextStyle {
     pub font_size_pt: Option<LengthPt>,
     pub color: Option<Color>,
     pub background_color: Option<Color>,
+    pub underline_color: Option<Color>,
+    pub strike_color: Option<Color>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -621,6 +625,8 @@ pub struct TableStyle {
 pub struct TableCellStyle {
     pub background_color: Option<Color>,
     pub vertical_align: Option<VerticalAlign>,
+    pub width: Option<LengthPx>,
+    pub height: Option<LengthPx>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -773,6 +779,8 @@ mod tests {
 
         assert!(!cell.is_header);
         assert_eq!(cell.style.vertical_align, None);
+        assert_eq!(cell.style.width, None);
+        assert_eq!(cell.style.height, None);
     }
 
     #[test]
@@ -941,6 +949,8 @@ mod tests {
         assert!(!style.engrave);
         assert!(!style.outline);
         assert!(!style.shadow);
+        assert_eq!(style.underline_color, None);
+        assert_eq!(style.strike_color, None);
         assert_eq!(style.font_family.as_deref(), Some("Noto Sans KR"));
         assert_eq!(style.font_size_pt, None);
         assert_eq!(style.color, None);
