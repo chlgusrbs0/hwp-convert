@@ -8,7 +8,11 @@ use serde::{Deserialize, Serialize};
 /// This is independent from the internal roadmap milestones (`v0`-`v7`).
 /// Bump this when JSON compatibility changes, such as new enum variants,
 /// new required fields, or other output-shape changes.
-pub const IR_VERSION: u16 = 7;
+///
+/// v8: added `TextStyle` decoration fields (superscript, subscript,
+/// emphasis_dot, emboss, engrave, outline, shadow). All are additive and
+/// `#[serde(default)]`, so older JSON still deserializes.
+pub const IR_VERSION: u16 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -226,6 +230,14 @@ pub struct TextStyle {
     pub italic: bool,
     pub underline: bool,
     pub strike: bool,
+    pub superscript: bool,
+    pub subscript: bool,
+    /// Korean emphasis dots rendered above/below glyphs (한글 강조점).
+    pub emphasis_dot: bool,
+    pub emboss: bool,
+    pub engrave: bool,
+    pub outline: bool,
+    pub shadow: bool,
     pub font_family: Option<String>,
     /// Typographic size in points (pt).
     #[serde(alias = "font_size")]
@@ -898,6 +910,13 @@ mod tests {
         assert!(!style.italic);
         assert!(!style.underline);
         assert!(!style.strike);
+        assert!(!style.superscript);
+        assert!(!style.subscript);
+        assert!(!style.emphasis_dot);
+        assert!(!style.emboss);
+        assert!(!style.engrave);
+        assert!(!style.outline);
+        assert!(!style.shadow);
         assert_eq!(style.font_family.as_deref(), Some("Noto Sans KR"));
         assert_eq!(style.font_size_pt, None);
         assert_eq!(style.color, None);

@@ -1489,6 +1489,13 @@ impl<'a> BridgeContext<'a> {
             italic: char_shape.italic,
             underline: char_shape.underline_type != RhwpUnderlineType::None,
             strike: char_shape.strikethrough,
+            superscript: char_shape.superscript,
+            subscript: char_shape.subscript,
+            emphasis_dot: char_shape.emphasis_dot != 0,
+            emboss: char_shape.emboss,
+            engrave: char_shape.engrave,
+            outline: char_shape.outline_type != 0,
+            shadow: char_shape.shadow_type != 0,
             font_family: self.lookup_font_family(char_shape),
             font_size_pt: i32_hwp_units_to_pt_option(char_shape.base_size),
             color: color_ref_to_color_option(char_shape.text_color),
@@ -2753,6 +2760,11 @@ mod tests {
                     italic: true,
                     underline_type: RhwpUnderlineType::Bottom,
                     strikethrough: true,
+                    superscript: true,
+                    emphasis_dot: 1,
+                    emboss: true,
+                    outline_type: 1,
+                    shadow_type: 1,
                     base_size: 1200,
                     text_color: 0x00010203,
                     shade_color: 0x00040506,
@@ -2817,6 +2829,13 @@ mod tests {
                         assert!(run.style.italic);
                         assert!(run.style.underline);
                         assert!(run.style.strike);
+                        assert!(run.style.superscript);
+                        assert!(!run.style.subscript);
+                        assert!(run.style.emphasis_dot);
+                        assert!(run.style.emboss);
+                        assert!(!run.style.engrave);
+                        assert!(run.style.outline);
+                        assert!(run.style.shadow);
                         assert_eq!(run.style.font_family.as_deref(), Some("Noto Sans KR"));
                         assert_eq!(run.style.font_size_pt, Some(LengthPt(12.0)));
                         assert_eq!(

@@ -244,6 +244,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 
 - 문서를 통합 정리했다: `COMPATIBILITY.md` → `STATUS.md`, `RHWP_CONVERSION_ROADMAP.md` → `ROADMAP.md`, `HWPX_FIXTURE_FINDINGS.md`는 `STATUS.md`에 병합. addendum 패턴 제거, stale 사실(HEAD 해시, 테스트 수)은 `AGENTS.md` 단일 출처로 이동.
 - `src/hwpx.rs` 자작 파서의 비대화를 명시적 전략 결정 사항으로 등록했다 (위 "전략적 결정 사항").
+- 글꼴 fidelity 1차 확장: rhwp `CharShape`가 주는데 버려지던 위/아래첨자, 강조점, 양각/음각, 외곽선, 그림자를 `TextStyle`로 끌어왔다. bridge 매핑 + HTML(CSS) + Markdown(sup/sub) + 테스트 포함, `IR_VERSION` 7 → 8. 남은 글꼴 항목(밑줄 색/모양, 취소선 색, 장평/자간/커닝)은 후속.
 
 ## 완료 선언 기준
 

@@ -1060,6 +1060,12 @@ fn extract_hwpx_text_style(
                 "italic" => style.italic = true,
                 "underline" => style.underline = true,
                 "strikeout" | "strikeOut" => style.strike = true,
+                "supscript" => style.superscript = true,
+                "subscript" => style.subscript = true,
+                "emboss" => style.emboss = true,
+                "engrave" => style.engrave = true,
+                "shadow" => style.shadow = true,
+                "outline" => style.outline = true,
                 "fontRef" => {
                     style.font_family = font_ref_family(tag.raw, font_faces);
                 }

@@ -1051,6 +1051,35 @@ fn render_html_text_style(style: &TextStyle) -> String {
         declarations.push(format!("text-decoration: {}", decorations.join(" ")));
     }
 
+    if style.superscript {
+        declarations.push("vertical-align: super".to_string());
+        declarations.push("font-size: smaller".to_string());
+    } else if style.subscript {
+        declarations.push("vertical-align: sub".to_string());
+        declarations.push("font-size: smaller".to_string());
+    }
+    if style.emphasis_dot {
+        declarations.push("text-emphasis: dot".to_string());
+    }
+    if style.outline {
+        declarations.push("-webkit-text-stroke: 1px currentColor".to_string());
+    }
+    // emboss/engrave/shadow are all approximated with text-shadow, so emit at
+    // most one to avoid conflicting declarations.
+    if style.emboss {
+        declarations.push(
+            "text-shadow: -1px -1px 0 rgba(255,255,255,0.7), 1px 1px 1px rgba(0,0,0,0.4)"
+                .to_string(),
+        );
+    } else if style.engrave {
+        declarations.push(
+            "text-shadow: 1px 1px 0 rgba(255,255,255,0.7), -1px -1px 1px rgba(0,0,0,0.4)"
+                .to_string(),
+        );
+    } else if style.shadow {
+        declarations.push("text-shadow: 1px 1px 2px rgba(0,0,0,0.5)".to_string());
+    }
+
     if let Some(font_family) = style
         .font_family
         .as_deref()
@@ -1796,10 +1825,18 @@ fn render_markdown_text_run(run: &TextRun) -> String {
     };
 
     if run.style.strike {
-        format!("~~{text}~~")
-    } else {
-        text
+        text = format!("~~{text}~~");
     }
+
+    // Markdown has no native syntax for these, but inline HTML is widely
+    // supported and keeps the distinction instead of dropping it silently.
+    if run.style.superscript {
+        text = format!("<sup>{text}</sup>");
+    } else if run.style.subscript {
+        text = format!("<sub>{text}</sub>");
+    }
+
+    text
 }
 
 fn escape_markdown_table_cell(text: &str) -> String {
@@ -3224,6 +3261,34 @@ mod tests {
     }
 
     #[test]
+    fn renders_html_advanced_text_style_decorations() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![Inline::Text(TextRun {
+                text: "x".to_string(),
+                style: TextStyle {
+                    superscript: true,
+                    emphasis_dot: true,
+                    emboss: true,
+                    outline: true,
+                    ..Default::default()
+                },
+                style_ref: None,
+            })],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: None,
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("vertical-align: super"));
+        assert!(html.contains("text-emphasis: dot"));
+        assert!(html.contains("-webkit-text-stroke: 1px currentColor"));
+        assert!(html.contains("text-shadow:"));
+    }
+
+    #[test]
     fn renders_html_text_style_visual_properties() {
         let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
             role: ParagraphRole::Body,
@@ -3362,6 +3427,39 @@ mod tests {
         assert!(markdown.contains("*italic*"));
         assert!(markdown.contains("***both***"));
         assert!(markdown.contains("~~strike~~"));
+    }
+
+    #[test]
+    fn renders_markdown_superscript_and_subscript() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![
+                Inline::Text(TextRun {
+                    text: "2".to_string(),
+                    style: TextStyle {
+                        superscript: true,
+                        ..Default::default()
+                    },
+                    style_ref: None,
+                }),
+                Inline::Text(TextRun {
+                    text: "n".to_string(),
+                    style: TextStyle {
+                        subscript: true,
+                        ..Default::default()
+                    },
+                    style_ref: None,
+                }),
+            ],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: None,
+        })]);
+
+        let markdown = render_markdown_document(&document);
+
+        assert!(markdown.contains("<sup>2</sup>"));
+        assert!(markdown.contains("<sub>n</sub>"));
     }
 
     #[test]
