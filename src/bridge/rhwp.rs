@@ -1306,14 +1306,20 @@ impl<'a> BridgeContext<'a> {
     fn warn_unsupported_picture_transform(&mut self, picture: &Picture) {
         let mut details = Vec::new();
 
+        if picture.image_attr.effect == RhwpImageEffect::BlackWhite {
+            self.add_warning_once(
+                "rhwp picture BlackWhite effect was represented as a grayscale approximation because Image IR does not distinguish threshold black-and-white.",
+            );
+        }
+
         if !picture_crop_is_empty(picture) {
             details.push(format!(
                 "crop={}/{}/{}/{}",
                 picture.crop.left, picture.crop.top, picture.crop.right, picture.crop.bottom
             ));
         }
-        // GrayScale/BlackWhite are now mapped to Image.grayscale; only the
-        // remaining effects and brightness/contrast adjustments are unsupported.
+        // GrayScale is modeled directly. BlackWhite is retained as a visible
+        // grayscale approximation with the warning above.
         if matches!(picture.image_attr.effect, RhwpImageEffect::Pattern8x8)
             || picture.image_attr.brightness != 0
             || picture.image_attr.contrast != 0
@@ -2767,6 +2773,44 @@ mod tests {
             }
             other => panic!("expected image block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn warns_when_black_white_picture_effect_is_approximated() {
+        let picture = Picture {
+            image_attr: ImageAttr {
+                bin_data_id: 7,
+                effect: RhwpImageEffect::BlackWhite,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Picture(Box::new(picture))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            bin_data_content: vec![BinDataContent {
+                id: 7,
+                data: vec![137, 80, 78, 71],
+                extension: "png".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert!(matches!(
+            &bridged.sections[0].blocks[0],
+            Block::Image(image) if image.grayscale
+        ));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("BlackWhite effect")
+                && warning.message.contains("grayscale approximation")
+        }));
     }
 
     #[test]
