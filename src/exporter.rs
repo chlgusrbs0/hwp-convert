@@ -2701,6 +2701,7 @@ mod tests {
                     cells: vec![TableCell {
                         row_span: 1,
                         col_span: 1,
+                        is_header: false,
                         blocks: vec![Block::Unknown(UnknownBlock {
                             kind: "cell_field".to_string(),
                             fallback_text: Some("[cell field]".to_string()),
