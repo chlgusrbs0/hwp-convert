@@ -7,12 +7,12 @@ use std::path::Path;
 use zip::ZipArchive;
 
 use crate::ir::{
-    Alignment, Block, Border, BorderStyle, Chart, Color, Document, Equation, EquationKind,
-    HeaderFooter, HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt, LengthPx, Link,
-    ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
-    ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind, StyleSheet,
-    Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
-    UnknownInline, VerticalAlign,
+    Alignment, Block, Border, BorderStyle, Chart, Color, ConversionWarning, Document, Equation,
+    EquationKind, HeaderFooter, HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt,
+    LengthPx, Link, ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph,
+    ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind,
+    StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
+    UnknownBlock, UnknownInline, VerticalAlign, WarningCode,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -281,6 +281,7 @@ pub(crate) fn read_section_document_from_archive(bytes: &[u8]) -> io::Result<Doc
     let mut document = document_from_sections(sections);
     document.resources = context.resources;
     document.notes = context.notes;
+    document.warnings = context.warnings;
     Ok(document)
 }
 
@@ -429,10 +430,25 @@ struct HwpxFallbackContext {
     resources: ResourceStore,
     ordered_counts: BTreeMap<(u32, u8), u32>,
     notes: NoteStore,
+    warnings: Vec<ConversionWarning>,
     next_note_ordinal: u32,
 }
 
 impl HwpxFallbackContext {
+    fn add_warning_once(&mut self, message: &str) {
+        if self
+            .warnings
+            .iter()
+            .any(|warning| warning.message == message)
+        {
+            return;
+        }
+        self.warnings.push(ConversionWarning {
+            code: WarningCode::Unknown,
+            message: message.to_string(),
+        });
+    }
+
     fn border_fill(&self, border_fill_id: u32) -> Option<&HwpxBorderFill> {
         self.border_fills.get(border_fill_id as usize).or_else(|| {
             border_fill_id
@@ -1894,6 +1910,23 @@ fn extract_hwpx_image_from_pic_xml(
 ) -> Option<Image> {
     let binary_item_id_ref = hwpx_pic_binary_item_id_ref(pic_xml)?;
     let resource_id = context.ensure_image_resource(&binary_item_id_ref)?;
+    let image_effect = hwpx_pic_image_effect(pic_xml);
+    let grayscale = match image_effect.as_deref() {
+        Some("GRAY_SCALE") => true,
+        Some("BLACK_WHITE") => {
+            context.add_warning_once(
+                "HWPX picture BLACK_WHITE effect was represented as a grayscale approximation because Image IR does not distinguish threshold black-and-white.",
+            );
+            true
+        }
+        Some("REAL_PIC" | "NONE") | None => false,
+        Some(effect) => {
+            context.add_warning_once(&format!(
+                "HWPX picture effect `{effect}` is not modeled; hwp-convert preserved the original image bytes without applying the effect."
+            ));
+            false
+        }
+    };
 
     Some(Image {
         resource_id,
@@ -1909,10 +1942,24 @@ fn extract_hwpx_image_from_pic_xml(
         caption: extract_hwpx_object_caption(pic_xml, context),
         width: hwpx_object_dimension_to_px(pic_xml, &["width", "w"]),
         height: hwpx_object_dimension_to_px(pic_xml, &["height", "h"]),
-        // Section XML fallback does not yet recover image border or effects.
+        // Section XML fallback does not yet recover image borders.
         border: None,
-        grayscale: false,
+        grayscale,
     })
+}
+
+fn hwpx_pic_image_effect(pic_xml: &str) -> Option<String> {
+    let mut cursor = 0usize;
+    while let Some(tag) = next_xml_tag(pic_xml, cursor) {
+        cursor = tag.end;
+        if !tag.is_closing
+            && matches!(tag.name, "img" | "image")
+            && let Some(effect) = xml_attribute_value(tag.raw, "effect")
+        {
+            return non_empty_string_owned(effect.trim().to_ascii_uppercase());
+        }
+    }
+    None
 }
 
 fn hwpx_pic_binary_item_id_ref(pic_xml: &str) -> Option<String> {
@@ -4963,7 +5010,7 @@ mod tests {
                       <hp:pic>
                         <hp:altText><hp:run><hp:t>sample image</hp:t></hp:run></hp:altText>
                         <hp:sz w="7500" h="3750"/>
-                        <hp:img><hc:img binaryItemIdRef="image1"/></hp:img>
+                        <hp:img><hc:img binaryItemIdRef="image1" effect="GRAY_SCALE"/></hp:img>
                         <hp:caption>
                           <hp:subList>
                             <hp:p><hp:run><hp:t>image caption</hp:t></hp:run></hp:p>
@@ -4991,6 +5038,7 @@ mod tests {
         assert_eq!(image.caption.as_deref(), Some("image caption"));
         assert_eq!(image.width, Some(LengthPx(100.0)));
         assert_eq!(image.height, Some(LengthPx(50.0)));
+        assert!(image.grayscale);
 
         match document.resources.get(&ResourceId("image1".to_string())) {
             Some(Resource::Image(resource)) => {
@@ -5002,6 +5050,31 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn warns_when_hwpx_black_white_image_effect_is_approximated() {
+        let mut context = HwpxFallbackContext::default();
+        context.image_items.insert(
+            "image1".to_string(),
+            HwpxImageItem {
+                id: "image1".to_string(),
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: b"image-bytes".to_vec(),
+            },
+        );
+        let image = extract_hwpx_image_from_pic_xml(
+            r#"<hp:pic><hc:img binaryItemIDRef="image1" effect="BLACK_WHITE"/></hp:pic>"#,
+            &mut context,
+        )
+        .expect("image should be recovered");
+
+        assert!(image.grayscale);
+        assert!(context.warnings.iter().any(|warning| {
+            warning.message.contains("BLACK_WHITE effect")
+                && warning.message.contains("grayscale approximation")
+        }));
     }
 
     #[test]
