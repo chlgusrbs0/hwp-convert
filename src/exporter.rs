@@ -1211,6 +1211,9 @@ fn render_html_paragraph_style(style: &ParagraphStyle) -> String {
     if let Some(after_pt) = style.spacing.after_pt {
         declarations.push(format!("margin-bottom: {}pt", after_pt.0));
     }
+    if let Some(line_pt) = style.spacing.line_pt {
+        declarations.push(format!("line-height: {}pt", line_pt.0));
+    }
     if let Some(first_line_pt) = style.indent.first_line_pt {
         declarations.push(format!("text-indent: {}pt", first_line_pt.0));
     }
@@ -3650,6 +3653,7 @@ mod tests {
         assert!(html.contains("text-align: center"));
         assert!(html.contains("margin-top: 6pt"));
         assert!(html.contains("margin-bottom: 8pt"));
+        assert!(html.contains("line-height: 14pt"));
         assert!(html.contains("text-indent: 18pt"));
         assert!(html.contains("margin-left: 10pt"));
         assert!(html.contains("margin-right: 12pt"));
