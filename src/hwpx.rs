@@ -7,12 +7,12 @@ use std::path::Path;
 use zip::ZipArchive;
 
 use crate::ir::{
-    Alignment, Block, Chart, Color, Document, Equation, EquationKind, HeaderFooter,
-    HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt, LengthPx, Link, ListInfo,
-    ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
+    Alignment, Block, Border, BorderStyle, Chart, Color, Document, Equation, EquationKind,
+    HeaderFooter, HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt, LengthPx, Link,
+    ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
     ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind, StyleSheet,
     Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownBlock,
-    UnknownInline,
+    UnknownInline, VerticalAlign,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -422,7 +422,7 @@ struct HwpxFallbackContext {
     paragraph_styles: Vec<HwpxParagraphStyle>,
     text_styles: Vec<TextStyle>,
     font_faces: Vec<Vec<String>>,
-    border_fill_backgrounds: Vec<Option<Color>>,
+    border_fills: Vec<HwpxBorderFill>,
     bullet_markers: BTreeMap<u32, String>,
     image_items: BTreeMap<String, HwpxImageItem>,
     image_resource_ids: BTreeMap<String, ResourceId>,
@@ -433,18 +433,22 @@ struct HwpxFallbackContext {
 }
 
 impl HwpxFallbackContext {
+    fn border_fill(&self, border_fill_id: u32) -> Option<&HwpxBorderFill> {
+        self.border_fills.get(border_fill_id as usize).or_else(|| {
+            border_fill_id
+                .checked_sub(1)
+                .and_then(|index| self.border_fills.get(index as usize))
+        })
+    }
+
     fn border_fill_background_color(&self, border_fill_id: u32) -> Option<Color> {
-        self.border_fill_backgrounds
-            .get(border_fill_id as usize)
-            .copied()
-            .flatten()
-            .or_else(|| {
-                border_fill_id
-                    .checked_sub(1)
-                    .and_then(|index| self.border_fill_backgrounds.get(index as usize))
-                    .copied()
-                    .flatten()
-            })
+        self.border_fill(border_fill_id)?.background_color
+    }
+
+    fn border_fill_borders(&self, border_fill_id: u32) -> [Option<Border>; 4] {
+        self.border_fill(border_fill_id)
+            .map(|fill| fill.borders.clone())
+            .unwrap_or_default()
     }
 
     fn text_style_for_run(&self, run_tag: &str) -> TextStyle {
@@ -603,6 +607,13 @@ impl HwpxFallbackContext {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+struct HwpxBorderFill {
+    background_color: Option<Color>,
+    /// left, right, top, bottom
+    borders: [Option<Border>; 4],
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct HwpxImageItem {
     id: String,
@@ -757,13 +768,14 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                     continue;
                 };
 
-                if context.border_fill_backgrounds.len() <= id {
-                    context.border_fill_backgrounds.resize(id + 1, None);
+                if context.border_fills.len() <= id {
+                    context
+                        .border_fills
+                        .resize_with(id + 1, HwpxBorderFill::default);
                 }
 
                 let border_xml = &header_xml[tag.start..border_end];
-                context.border_fill_backgrounds[id] =
-                    extract_hwpx_border_fill_background_color(border_xml);
+                context.border_fills[id] = extract_hwpx_border_fill(border_xml);
                 cursor = border_end;
             }
             "bullet" => {
@@ -1078,24 +1090,94 @@ fn extract_hwpx_text_style(
     style
 }
 
+fn extract_hwpx_border_fill(border_fill_xml: &str) -> HwpxBorderFill {
+    HwpxBorderFill {
+        background_color: extract_hwpx_border_fill_background_color(border_fill_xml),
+        borders: [
+            extract_hwpx_border(border_fill_xml, "leftBorder"),
+            extract_hwpx_border(border_fill_xml, "rightBorder"),
+            extract_hwpx_border(border_fill_xml, "topBorder"),
+            extract_hwpx_border(border_fill_xml, "bottomBorder"),
+        ],
+    }
+}
+
 fn extract_hwpx_border_fill_background_color(border_fill_xml: &str) -> Option<Color> {
     let mut cursor = 0usize;
 
     while let Some(tag) = next_xml_tag(border_fill_xml, cursor) {
-        if !tag.is_closing
-            && let Some(color) =
-                ["faceColor", "backgroundColor", "color"]
-                    .iter()
-                    .find_map(|attribute| {
-                        xml_attribute_value(tag.raw, attribute).and_then(parse_hwpx_hex_color)
-                    })
-        {
-            return Some(color);
+        if !tag.is_closing {
+            if let Some(color) = ["faceColor", "backgroundColor"]
+                .iter()
+                .find_map(|attribute| {
+                    xml_attribute_value(tag.raw, attribute).and_then(parse_hwpx_hex_color)
+                })
+            {
+                return Some(color);
+            }
+            if matches!(tag.name, "winBrush" | "solidFill" | "fill" | "color")
+                && let Some(color) =
+                    xml_attribute_value(tag.raw, "color").and_then(parse_hwpx_hex_color)
+            {
+                return Some(color);
+            }
         }
         cursor = tag.end;
     }
 
     None
+}
+
+fn extract_hwpx_border(border_fill_xml: &str, border_name: &str) -> Option<Border> {
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(border_fill_xml, cursor) {
+        cursor = tag.end;
+        if tag.is_closing || tag.name != border_name {
+            continue;
+        }
+
+        let border_type = xml_attribute_value(tag.raw, "type")?.trim();
+        if border_type.eq_ignore_ascii_case("none") {
+            return None;
+        }
+
+        return Some(Border {
+            width: xml_attribute_value(tag.raw, "width")
+                .and_then(parse_hwpx_border_width)
+                .unwrap_or(LengthPx(1.0)),
+            style: map_hwpx_border_style(border_type),
+            color: xml_attribute_value(tag.raw, "color").and_then(parse_hwpx_hex_color),
+        });
+    }
+
+    None
+}
+
+fn parse_hwpx_border_width(value: &str) -> Option<LengthPx> {
+    let mut parts = value.split_whitespace();
+    let amount = parts.next()?.parse::<f32>().ok()?;
+    if amount < 0.0 {
+        return None;
+    }
+
+    let px = match parts.next().map(str::to_ascii_lowercase).as_deref() {
+        Some("mm") | None => amount * 96.0 / 25.4,
+        Some("pt") => amount * 96.0 / 72.0,
+        Some("px") => amount,
+        Some(_) => return None,
+    };
+    Some(LengthPx(px))
+}
+
+fn map_hwpx_border_style(value: &str) -> BorderStyle {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "DASH" | "LONG_DASH" | "DASH_DOT" | "DASH_DOT_DOT" => BorderStyle::Dashed,
+        "DOT" | "CIRCLE" => BorderStyle::Dotted,
+        "DOUBLE" | "DOUBLE_SLIM" | "SLIM_THICK" | "THICK_SLIM" | "SLIM_THICK_SLIM"
+        | "DOUBLE_WAVE" => BorderStyle::Double,
+        _ => BorderStyle::Solid,
+    }
 }
 
 fn extract_hwpx_bullet_marker(bullet_tag: &str, bullet_xml: &str) -> Option<String> {
@@ -1419,12 +1501,18 @@ fn extract_table_cells_from_row_xml(
 }
 
 fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext) -> TableCell {
-    let background_color =
-        root_or_direct_child_xml_attribute_u32(cell_xml, "tc", &["cellPr"], "borderFillIDRef")
-            .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
+    let border_fill_id =
+        root_or_direct_child_xml_attribute_u32(cell_xml, "tc", &["cellPr"], "borderFillIDRef");
+    let background_color = border_fill_id.and_then(|id| context.border_fill_background_color(id));
+    let [border_left, border_right, border_top, border_bottom] = border_fill_id
+        .map(|id| context.border_fill_borders(id))
+        .unwrap_or_default();
 
     let is_header = root_xml_attribute_value(cell_xml, "header")
         .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    let vertical_align =
+        root_or_direct_child_xml_attribute_value(cell_xml, "tc", &["subList"], "vertAlign")
+            .and_then(map_hwpx_vertical_align);
     let cell_size = |attribute: &str| {
         root_or_direct_child_xml_attribute_u32(cell_xml, "tc", &["cellSz"], attribute)
             .and_then(hwp_units_to_px_option)
@@ -1439,21 +1527,19 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
         col_span: hwpx_table_cell_span(cell_xml, &["colSpan", "colspan"]),
         is_header,
         blocks: extract_section_xml_blocks(cell_xml, context),
-        // Section XML fallback does not yet recover cell vertical alignment or
-        // borders.
         style: TableCellStyle {
             background_color,
-            vertical_align: None,
+            vertical_align,
             width: cell_size("width"),
             height: cell_size("height"),
             padding_top: cell_margin("top"),
             padding_right: cell_margin("right"),
             padding_bottom: cell_margin("bottom"),
             padding_left: cell_margin("left"),
-            border_top: None,
-            border_right: None,
-            border_bottom: None,
-            border_left: None,
+            border_top,
+            border_right,
+            border_bottom,
+            border_left,
         },
     }
 }
@@ -2739,11 +2825,21 @@ fn root_or_direct_child_xml_attribute_u32(
     child_names: &[&str],
     attribute_name: &str,
 ) -> Option<u32> {
+    root_or_direct_child_xml_attribute_value(xml, root_name, child_names, attribute_name)
+        .and_then(parse_trimmed)
+}
+
+fn root_or_direct_child_xml_attribute_value<'a>(
+    xml: &'a str,
+    root_name: &str,
+    child_names: &[&str],
+    attribute_name: &str,
+) -> Option<&'a str> {
     let root = next_xml_tag(xml, 0)?;
     if root.name != root_name || root.is_closing {
         return None;
     }
-    if let Some(value) = xml_attribute_value(root.raw, attribute_name).and_then(parse_trimmed) {
+    if let Some(value) = xml_attribute_value(root.raw, attribute_name) {
         return Some(value);
     }
     if root.is_self_closing {
@@ -2761,8 +2857,7 @@ fn root_or_direct_child_xml_attribute_u32(
             continue;
         }
         if child_names.contains(&tag.name)
-            && let Some(value) =
-                xml_attribute_value(tag.raw, attribute_name).and_then(parse_trimmed)
+            && let Some(value) = xml_attribute_value(tag.raw, attribute_name)
         {
             return Some(value);
         }
@@ -2798,6 +2893,15 @@ fn map_hwpx_alignment(value: &str) -> Option<Alignment> {
         "CENTER" => Alignment::Center,
         "RIGHT" => Alignment::Right,
         "JUSTIFY" | "DISTRIBUTE" | "DISTRIBUTE_SPACE" => Alignment::Justify,
+        _ => return None,
+    })
+}
+
+fn map_hwpx_vertical_align(value: &str) -> Option<VerticalAlign> {
+    Some(match value.trim().to_ascii_uppercase().as_str() {
+        "TOP" => VerticalAlign::Top,
+        "CENTER" | "MIDDLE" => VerticalAlign::Middle,
+        "BOTTOM" => VerticalAlign::Bottom,
         _ => return None,
     })
 }
@@ -3591,7 +3695,7 @@ mod tests {
                 <hp:tc header="1">
                   <hp:cellSz width="7500" height="1500"/>
                   <hp:cellMargin left="150" right="150" top="75" bottom="75"/>
-                  <hp:subList>
+                  <hp:subList vertAlign="CENTER">
                     <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
                   </hp:subList>
                 </hp:tc>
@@ -3608,6 +3712,7 @@ mod tests {
         assert_eq!(cell.style.height, Some(LengthPx(20.0)));
         assert_eq!(cell.style.padding_left, Some(LengthPx(2.0)));
         assert_eq!(cell.style.padding_top, Some(LengthPx(1.0)));
+        assert_eq!(cell.style.vertical_align, Some(VerticalAlign::Middle));
     }
 
     #[test]
@@ -3725,7 +3830,17 @@ mod tests {
             a: 255,
         };
         let mut context = HwpxFallbackContext {
-            border_fill_backgrounds: vec![None, Some(table_color), Some(cell_color)],
+            border_fills: vec![
+                HwpxBorderFill::default(),
+                HwpxBorderFill {
+                    background_color: Some(table_color),
+                    ..Default::default()
+                },
+                HwpxBorderFill {
+                    background_color: Some(cell_color),
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         };
 
@@ -3747,7 +3862,13 @@ mod tests {
             a: 255,
         };
         let mut context = HwpxFallbackContext {
-            border_fill_backgrounds: vec![None, Some(nested_color)],
+            border_fills: vec![
+                HwpxBorderFill::default(),
+                HwpxBorderFill {
+                    background_color: Some(nested_color),
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         };
         let xml = r#"
@@ -4656,7 +4777,13 @@ mod tests {
                   <hh:refList>
                     <hh:borderFills>
                       <hh:borderFill id="3"><hc:fillBrush><hc:winBrush faceColor="112233"/></hc:fillBrush></hh:borderFill>
-                      <hh:borderFill id="4"><hc:fillBrush><hc:winBrush faceColor="0X445566"/></hc:fillBrush></hh:borderFill>
+                      <hh:borderFill id="4">
+                        <hh:leftBorder type="SOLID" width="0.12 mm" color="#010203"/>
+                        <hh:rightBorder type="DASH" width="1 pt" color="#040506"/>
+                        <hh:topBorder type="DOT" width="2 px" color="#070809"/>
+                        <hh:bottomBorder type="DOUBLE_SLIM" width="0.2 mm" color="#0A0B0C"/>
+                        <hc:fillBrush><hc:winBrush faceColor="0X445566"/></hc:fillBrush>
+                      </hh:borderFill>
                     </hh:borderFills>
                   </hh:refList>
                 </hh:head>
@@ -4703,6 +4830,31 @@ mod tests {
                 b: 0x66,
                 a: 255,
             })
+        );
+        let cell_style = &table.rows[0].cells[0].style;
+        let left = cell_style.border_left.as_ref().expect("left border");
+        assert!((left.width.0 - (0.12 * 96.0 / 25.4)).abs() < 0.001);
+        assert_eq!(left.style, BorderStyle::Solid);
+        assert_eq!(
+            left.color,
+            Some(Color {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 255,
+            })
+        );
+        assert_eq!(
+            cell_style.border_right.as_ref().map(|border| border.style),
+            Some(BorderStyle::Dashed)
+        );
+        assert_eq!(
+            cell_style.border_top.as_ref().map(|border| border.style),
+            Some(BorderStyle::Dotted)
+        );
+        assert_eq!(
+            cell_style.border_bottom.as_ref().map(|border| border.style),
+            Some(BorderStyle::Double)
         );
 
         Ok(())
