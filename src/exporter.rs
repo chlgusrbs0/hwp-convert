@@ -1696,11 +1696,16 @@ fn render_markdown_table(table: &Table) -> String {
         return render_markdown_text("[표]");
     }
 
-    let mut lines = Vec::with_capacity(table.rows.len() + 1);
-    lines.push(render_markdown_table_row(&table.rows[0]));
+    let has_header_row = table.rows[0].cells.iter().all(|cell| cell.is_header);
+    let mut lines = Vec::with_capacity(table.rows.len() + usize::from(!has_header_row) + 1);
+    if has_header_row {
+        lines.push(render_markdown_table_row(&table.rows[0]));
+    } else {
+        lines.push(format!("| {} |", vec![""; column_count].join(" | ")));
+    }
     lines.push(format!("| {} |", vec!["---"; column_count].join(" | ")));
 
-    for row in table.rows.iter().skip(1) {
+    for row in table.rows.iter().skip(usize::from(has_header_row)) {
         lines.push(render_markdown_table_row(row));
     }
 
@@ -1714,6 +1719,18 @@ fn can_render_markdown_table(table: &Table) -> bool {
 
     let column_count = first_row.cells.len();
     if column_count == 0 {
+        return false;
+    }
+
+    let first_row_is_header = first_row.cells.iter().all(|cell| cell.is_header);
+    let first_row_has_no_headers = first_row.cells.iter().all(|cell| !cell.is_header);
+    if (!first_row_is_header && !first_row_has_no_headers)
+        || table
+            .rows
+            .iter()
+            .skip(1)
+            .any(|row| row.cells.iter().any(|cell| cell.is_header))
+    {
         return false;
     }
 
@@ -3441,9 +3458,29 @@ mod tests {
 
         let markdown = render_markdown_document(&document);
 
-        assert!(markdown.contains("| cell1 | cell2 |"));
-        assert!(markdown.contains("| --- | --- |"));
-        assert!(markdown.contains("| cell3 | cell4 |"));
+        assert_eq!(
+            markdown,
+            "|  |  |\n| --- | --- |\n| cell1 | cell2 |\n| cell3 | cell4 |"
+        );
+    }
+
+    #[test]
+    fn renders_markdown_table_header_from_header_cells() {
+        let mut table = match simple_table_block() {
+            Block::Table(table) => table,
+            other => panic!("expected table block, got {other:?}"),
+        };
+        for cell in &mut table.rows[0].cells {
+            cell.is_header = true;
+        }
+        let document = document_with_blocks(vec![Block::Table(table)]);
+
+        let markdown = render_markdown_document(&document);
+
+        assert_eq!(
+            markdown,
+            "| cell1 | cell2 |\n| --- | --- |\n| cell3 | cell4 |"
+        );
     }
 
     #[test]
