@@ -285,11 +285,7 @@ fn export_file(
     }
 
     let document = bridge::rhwp::read_document(input_path)?;
-    let warnings = document
-        .warnings
-        .iter()
-        .map(|warning| warning.message.clone())
-        .collect::<Vec<_>>();
+    let warnings = conversion_warnings_for_document(&document);
 
     match format {
         OutputFormat::Txt => {
@@ -315,6 +311,89 @@ fn export_file(
         output_path,
         warnings,
     }))
+}
+
+fn conversion_warnings_for_document(document: &Document) -> Vec<String> {
+    let mut warnings = document
+        .warnings
+        .iter()
+        .map(|warning| warning.message.clone())
+        .collect::<Vec<_>>();
+
+    collect_ir_unknown_warnings(document, &mut warnings);
+    warnings
+}
+
+fn collect_ir_unknown_warnings(document: &Document, warnings: &mut Vec<String>) {
+    for section in &document.sections {
+        collect_block_unknown_warnings(&section.blocks, warnings);
+
+        for header in &section.headers {
+            collect_block_unknown_warnings(&header.blocks, warnings);
+        }
+
+        for footer in &section.footers {
+            collect_block_unknown_warnings(&footer.blocks, warnings);
+        }
+    }
+
+    for note in &document.notes.notes {
+        collect_block_unknown_warnings(&note.blocks, warnings);
+    }
+}
+
+fn collect_block_unknown_warnings(blocks: &[Block], warnings: &mut Vec<String>) {
+    for block in blocks {
+        match block {
+            Block::Paragraph(paragraph) => {
+                collect_inline_unknown_warnings(&paragraph.inlines, warnings);
+            }
+            Block::Table(table) => {
+                for row in &table.rows {
+                    for cell in &row.cells {
+                        collect_block_unknown_warnings(&cell.blocks, warnings);
+                    }
+                }
+            }
+            Block::Unknown(unknown) => {
+                if let Some(message) = &unknown.message {
+                    push_warning_once(
+                        warnings,
+                        format!("IR unknown block `{}`: {message}", unknown.kind),
+                    );
+                }
+            }
+            Block::Image(_) | Block::Equation(_) | Block::Shape(_) | Block::Chart(_) => {}
+        }
+    }
+}
+
+fn collect_inline_unknown_warnings(inlines: &[Inline], warnings: &mut Vec<String>) {
+    for inline in inlines {
+        match inline {
+            Inline::Link(link) => collect_inline_unknown_warnings(&link.inlines, warnings),
+            Inline::Unknown(unknown) => {
+                if let Some(message) = &unknown.message {
+                    push_warning_once(
+                        warnings,
+                        format!("IR unknown inline `{}`: {message}", unknown.kind),
+                    );
+                }
+            }
+            Inline::Text(_)
+            | Inline::LineBreak
+            | Inline::Tab
+            | Inline::Anchor { .. }
+            | Inline::FootnoteRef { .. }
+            | Inline::EndnoteRef { .. } => {}
+        }
+    }
+}
+
+fn push_warning_once(warnings: &mut Vec<String>, message: String) {
+    if !warnings.iter().any(|warning| warning == &message) {
+        warnings.push(message);
+    }
 }
 
 fn validate_input_path(input_path: &Path, recursive: bool) -> Result<(), io::Error> {
@@ -2588,6 +2667,65 @@ mod tests {
         fs::remove_dir_all(&root)?;
 
         Ok(())
+    }
+
+    #[test]
+    fn reports_ir_unknown_messages_as_conversion_warnings() {
+        let document = document_with_blocks(vec![
+            Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![
+                    Inline::Unknown(UnknownInline {
+                        kind: "field".to_string(),
+                        fallback_text: Some("[field]".to_string()),
+                        message: Some("field fallback preserved".to_string()),
+                        source: None,
+                    }),
+                    Inline::Link(Link {
+                        url: "https://example.com".to_string(),
+                        title: None,
+                        inlines: vec![Inline::Unknown(UnknownInline {
+                            kind: "field".to_string(),
+                            fallback_text: Some("[field]".to_string()),
+                            message: Some("field fallback preserved".to_string()),
+                            source: None,
+                        })],
+                    }),
+                ],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: None,
+            }),
+            Block::Table(Table {
+                rows: vec![TableRow {
+                    cells: vec![TableCell {
+                        row_span: 1,
+                        col_span: 1,
+                        blocks: vec![Block::Unknown(UnknownBlock {
+                            kind: "cell_field".to_string(),
+                            fallback_text: Some("[cell field]".to_string()),
+                            message: Some("cell field fallback preserved".to_string()),
+                            source: None,
+                        })],
+                        style: TableCellStyle::default(),
+                    }],
+                }],
+                style: TableStyle::default(),
+            }),
+        ]);
+
+        let warnings = conversion_warnings_for_document(&document);
+
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|warning| warning.contains("IR unknown inline `field`"))
+                .count(),
+            1
+        );
+        assert!(warnings.iter().any(|warning| {
+            warning.contains("IR unknown block `cell_field`: cell field fallback preserved")
+        }));
     }
 
     #[test]
