@@ -1057,6 +1057,8 @@ fn extract_hwpx_text_style(
     font_faces: &[Vec<String>],
 ) -> TextStyle {
     let mut style = TextStyle {
+        emphasis_dot: xml_attribute_value(char_pr_tag, "symMark")
+            .is_some_and(hwpx_style_value_is_enabled),
         font_size_pt: xml_attribute_hwp_units_to_pt(char_pr_tag, "height"),
         color: xml_attribute_value(char_pr_tag, "textColor").and_then(parse_hwpx_hex_color),
         background_color: xml_attribute_value(char_pr_tag, "shadeColor")
@@ -1070,14 +1072,30 @@ fn extract_hwpx_text_style(
             match tag.name {
                 "bold" => style.bold = true,
                 "italic" => style.italic = true,
-                "underline" => style.underline = true,
-                "strikeout" | "strikeOut" => style.strike = true,
+                "underline" => {
+                    style.underline = hwpx_style_tag_is_enabled(tag.raw, &["type"]);
+                    style.underline_color = style
+                        .underline
+                        .then(|| {
+                            xml_attribute_value(tag.raw, "color").and_then(parse_hwpx_hex_color)
+                        })
+                        .flatten();
+                }
+                "strikeout" | "strikeOut" => {
+                    style.strike = hwpx_style_tag_is_enabled(tag.raw, &["shape", "type"]);
+                    style.strike_color = style
+                        .strike
+                        .then(|| {
+                            xml_attribute_value(tag.raw, "color").and_then(parse_hwpx_hex_color)
+                        })
+                        .flatten();
+                }
                 "supscript" => style.superscript = true,
                 "subscript" => style.subscript = true,
                 "emboss" => style.emboss = true,
                 "engrave" => style.engrave = true,
-                "shadow" => style.shadow = true,
-                "outline" => style.outline = true,
+                "shadow" => style.shadow = hwpx_style_tag_is_enabled(tag.raw, &["type"]),
+                "outline" => style.outline = hwpx_style_tag_is_enabled(tag.raw, &["type"]),
                 "fontRef" => {
                     style.font_family = font_ref_family(tag.raw, font_faces);
                 }
@@ -1088,6 +1106,18 @@ fn extract_hwpx_text_style(
     }
 
     style
+}
+
+fn hwpx_style_tag_is_enabled(tag: &str, attribute_names: &[&str]) -> bool {
+    attribute_names
+        .iter()
+        .find_map(|attribute| xml_attribute_value(tag, attribute))
+        .is_none_or(hwpx_style_value_is_enabled)
+}
+
+fn hwpx_style_value_is_enabled(value: &str) -> bool {
+    let value = value.trim();
+    !value.eq_ignore_ascii_case("none") && value != "0"
 }
 
 fn extract_hwpx_border_fill(border_fill_xml: &str) -> HwpxBorderFill {
@@ -4706,12 +4736,14 @@ mod tests {
                       <hh:fontface lang="HANGUL"><hh:font id="0" face="Noto Sans KR"/></hh:fontface>
                     </hh:fontfaces>
                     <hh:charProperties>
-                      <hh:charPr id="7" height="1200" textColor="010203" shadeColor="0x040506">
+                      <hh:charPr id="7" height="1200" textColor="010203" shadeColor="0x040506" symMark="DOT_ABOVE">
                         <hh:fontRef hangul="0"/>
                         <hh:bold/>
                         <hh:italic/>
-                        <hh:underline/>
-                        <hh:strikeout/>
+                        <hh:underline type="BOTTOM" color="#070809"/>
+                        <hh:strikeout shape="SOLID" color="#0A0B0C"/>
+                        <hh:outline type="SOLID"/>
+                        <hh:shadow type="DROP"/>
                       </hh:charPr>
                     </hh:charProperties>
                   </hh:refList>
@@ -4762,8 +4794,53 @@ mod tests {
         assert!(text_run.style.italic);
         assert!(text_run.style.underline);
         assert!(text_run.style.strike);
+        assert!(text_run.style.emphasis_dot);
+        assert!(text_run.style.outline);
+        assert!(text_run.style.shadow);
+        assert_eq!(
+            text_run.style.underline_color,
+            Some(Color {
+                r: 7,
+                g: 8,
+                b: 9,
+                a: 255,
+            })
+        );
+        assert_eq!(
+            text_run.style.strike_color,
+            Some(Color {
+                r: 10,
+                g: 11,
+                b: 12,
+                a: 255,
+            })
+        );
 
         Ok(())
+    }
+
+    #[test]
+    fn ignores_disabled_hwpx_text_effect_tags() {
+        let style = extract_hwpx_text_style(
+            r#"hh:charPr id="0" symMark="NONE""#,
+            r##"
+              <hh:charPr id="0" symMark="NONE">
+                <hh:underline type="NONE" shape="SOLID" color="#010203"/>
+                <hh:strikeout shape="NONE" color="#040506"/>
+                <hh:outline type="NONE"/>
+                <hh:shadow type="NONE" color="#070809"/>
+              </hh:charPr>
+            "##,
+            &[],
+        );
+
+        assert!(!style.underline);
+        assert!(!style.strike);
+        assert!(!style.emphasis_dot);
+        assert!(!style.outline);
+        assert!(!style.shadow);
+        assert_eq!(style.underline_color, None);
+        assert_eq!(style.strike_color, None);
     }
 
     #[test]
