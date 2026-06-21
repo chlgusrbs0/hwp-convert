@@ -1856,16 +1856,30 @@ fn map_border_line(line: &RhwpBorderLine) -> Option<Border> {
     })
 }
 
-/// Map an rhwp picture's uniform border to an IR border. rhwp does not expose a
-/// per-edge picture border, so a single solid border is produced.
+/// Map an rhwp picture's uniform border to an IR border. The low six bits of
+/// `border_attr` contain the HWP line type; zero means no border.
 fn map_image_border(picture: &Picture) -> Option<Border> {
-    let width = (picture.border_width > 0)
-        .then(|| hwp_units_to_px_option(picture.border_width as u32))
-        .flatten()?;
+    let line_type = (picture.border_attr.attr & 0x3f) as u8;
+    if line_type == 0 {
+        return None;
+    }
+
+    let width = if picture.border_width > 0 {
+        hwp_units_to_px_option(picture.border_width as u32)?
+    } else {
+        // HWP specifies 0.1 mm as the default width for an active picture line.
+        LengthPx(96.0 / 254.0)
+    };
+    let style = match line_type {
+        2 | 4..=6 => BorderStyle::Dashed,
+        3 | 7 => BorderStyle::Dotted,
+        8..=11 | 13 => BorderStyle::Double,
+        _ => BorderStyle::Solid,
+    };
 
     Some(Border {
         width,
-        style: BorderStyle::Solid,
+        style,
         color: color_ref_to_color_option(picture.border_color),
     })
 }
@@ -2745,6 +2759,10 @@ mod tests {
             },
             border_width: 75,
             border_color: 0x00112233,
+            border_attr: rhwp::model::style::ShapeBorderLine {
+                attr: 2,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let document = RhwpDocument {
@@ -2770,7 +2788,7 @@ mod tests {
                 assert!(image.grayscale);
                 let border = image.border.as_ref().expect("image border");
                 assert_eq!(border.width, LengthPx(1.0));
-                assert_eq!(border.style, BorderStyle::Solid);
+                assert_eq!(border.style, BorderStyle::Dashed);
                 assert_eq!(
                     border.color,
                     Some(Color {
@@ -2783,6 +2801,30 @@ mod tests {
             }
             other => panic!("expected image block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn maps_picture_border_line_type_and_default_width() {
+        let dotted = Picture {
+            border_attr: rhwp::model::style::ShapeBorderLine {
+                attr: 3,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let disabled = Picture {
+            border_width: 75,
+            border_attr: rhwp::model::style::ShapeBorderLine {
+                attr: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let border = map_image_border(&dotted).expect("active picture border");
+        assert_eq!(border.style, BorderStyle::Dotted);
+        assert!((border.width.0 - (96.0 / 254.0)).abs() < f32::EPSILON);
+        assert_eq!(map_image_border(&disabled), None);
     }
 
     #[test]
