@@ -2062,6 +2062,46 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
         ));
     }
 
+    let clip = hwpx_picture_direct_child_tag(pic_xml, "imgClip").and_then(|tag| {
+        Some([
+            xml_attribute_value(tag.raw, "left")?
+                .trim()
+                .parse::<i64>()
+                .ok()?,
+            xml_attribute_value(tag.raw, "right")?
+                .trim()
+                .parse::<i64>()
+                .ok()?,
+            xml_attribute_value(tag.raw, "top")?
+                .trim()
+                .parse::<i64>()
+                .ok()?,
+            xml_attribute_value(tag.raw, "bottom")?
+                .trim()
+                .parse::<i64>()
+                .ok()?,
+        ])
+    });
+    let dimensions = hwpx_picture_direct_child_tag(pic_xml, "imgDim").and_then(|tag| {
+        Some([
+            xml_attribute_value(tag.raw, "dimwidth")?
+                .trim()
+                .parse::<i64>()
+                .ok()?,
+            xml_attribute_value(tag.raw, "dimheight")?
+                .trim()
+                .parse::<i64>()
+                .ok()?,
+        ])
+    });
+    if let (Some([left, right, top, bottom]), Some([width, height])) = (clip, dimensions)
+        && (left != 0 || top != 0 || right != width || bottom != height)
+    {
+        context.add_warning_once(&format!(
+            "HWPX picture crop (left:{left},right:{right},top:{top},bottom:{bottom},source:{width}x{height}) is not modeled; hwp-convert preserved the uncropped original image bytes."
+        ));
+    }
+
     if let Some(margin) = hwpx_picture_direct_child_tag(pic_xml, "inMargin") {
         let values = ["left", "right", "top", "bottom"].map(|name| {
             xml_attribute_value(margin.raw, name)
@@ -5463,6 +5503,8 @@ mod tests {
               <hp:flip horizontal="1" vertical="false"/>
               <hp:rotationInfo angle="9000"/>
               <hc:img binaryItemIDRef="image1"/>
+              <hp:imgClip left="10" right="900" top="20" bottom="700"/>
+              <hp:imgDim dimwidth="1000" dimheight="800"/>
               <hp:pos treatAsChar="0" vertRelTo="PAGE" vertAlign="CENTER" vertOffset="120"
                       horzRelTo="COLUMN" horzAlign="RIGHT" horzOffset="240"/>
             </hp:pic>
@@ -5482,11 +5524,29 @@ mod tests {
                 && warning.message.contains("vertical:PAGE/CENTER/120")
                 && warning.message.contains("horizontal:COLUMN/RIGHT/240")
         }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("left:10,right:900,top:20,bottom:700,source:1000x800")
+                && warning.message.contains("uncropped original image bytes")
+        }));
         assert!(
             context
                 .warnings
                 .iter()
                 .all(|warning| !warning.message.contains("1234"))
+        );
+
+        let mut full_frame_context = HwpxFallbackContext::default();
+        warn_hwpx_picture_transform(
+            r#"<hp:pic><hp:imgClip left="0" right="1000" top="0" bottom="800"/><hp:imgDim dimwidth="1000" dimheight="800"/></hp:pic>"#,
+            &mut full_frame_context,
+        );
+        assert!(
+            full_frame_context
+                .warnings
+                .iter()
+                .all(|warning| !warning.message.contains("picture crop"))
         );
     }
 
