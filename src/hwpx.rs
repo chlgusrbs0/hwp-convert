@@ -1940,6 +1940,12 @@ fn extract_hwpx_image_from_pic_xml(
             image_attributes.brightness, image_attributes.contrast
         ));
     }
+    if image_attributes.alpha.abs() > f64::EPSILON {
+        context.add_warning_once(&format!(
+            "HWPX picture alpha {} is not modeled; hwp-convert preserved the original image bytes without applying transparency.",
+            image_attributes.alpha
+        ));
+    }
     let grayscale = match image_effect.as_deref() {
         Some("GRAY_SCALE") => true,
         Some("BLACK_WHITE") => {
@@ -2020,6 +2026,20 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
             "HWPX picture transform (flip_h:{horizontal_flip},flip_v:{vertical_flip},rotation:{rotation}) is not modeled; hwp-convert preserved the original image bytes without applying the transform."
         ));
     }
+
+    if let Some(margin) = hwpx_picture_direct_child_tag(pic_xml, "inMargin") {
+        let values = ["left", "right", "top", "bottom"].map(|name| {
+            xml_attribute_value(margin.raw, name)
+                .and_then(|value| value.trim().parse::<u32>().ok())
+                .unwrap_or(0)
+        });
+        if values.iter().any(|value| *value != 0) {
+            context.add_warning_once(&format!(
+                "HWPX picture inner margin ({}/{}/{}/{}) is not modeled; hwp-convert preserved the image without applying the margin.",
+                values[0], values[1], values[2], values[3]
+            ));
+        }
+    }
 }
 
 fn xml_boolean_is_true(value: &str) -> bool {
@@ -2057,11 +2077,12 @@ fn hwpx_picture_direct_child_tag<'a>(pic_xml: &'a str, child_name: &str) -> Opti
     None
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct HwpxPictureImageAttributes {
     effect: Option<String>,
     brightness: i32,
     contrast: i32,
+    alpha: f64,
 }
 
 fn hwpx_pic_image_attributes(
@@ -2092,6 +2113,9 @@ fn hwpx_pic_image_attributes(
             contrast: xml_attribute_value(tag.raw, "contrast")
                 .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(0),
+            alpha: xml_attribute_value(tag.raw, "alpha")
+                .and_then(|value| value.trim().parse().ok())
+                .unwrap_or(0.0),
         };
     }
     HwpxPictureImageAttributes::default()
@@ -5276,6 +5300,37 @@ mod tests {
         assert!(context.warnings.iter().any(|warning| {
             warning.message.contains("brightness:12,contrast:-4")
                 && warning.message.contains("without applying the adjustment")
+        }));
+    }
+
+    #[test]
+    fn warns_when_hwpx_image_alpha_or_inner_margin_is_not_applied() {
+        let mut context = HwpxFallbackContext::default();
+        context.image_items.insert(
+            "image1".to_string(),
+            HwpxImageItem {
+                id: "image1".to_string(),
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: b"image-bytes".to_vec(),
+            },
+        );
+        let xml = r#"
+            <hp:pic>
+              <hp:inMargin left="10" right="20" top="30" bottom="40"/>
+              <hc:img binaryItemIDRef="image1" alpha="0.5"/>
+            </hp:pic>
+        "#;
+
+        extract_hwpx_image_from_pic_xml(xml, &mut context).expect("image should parse");
+
+        assert!(context.warnings.iter().any(|warning| {
+            warning.message.contains("alpha 0.5")
+                && warning.message.contains("without applying transparency")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning.message.contains("inner margin (10/20/30/40)")
+                && warning.message.contains("without applying the margin")
         }));
     }
 
