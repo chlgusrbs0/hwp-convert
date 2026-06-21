@@ -1337,6 +1337,27 @@ impl<'a> BridgeContext<'a> {
                 picture.shape_attr.render_b, picture.shape_attr.render_c
             ));
         }
+        let has_unmodeled_layout = !picture.common.treat_as_char
+            || picture.common.horizontal_offset != 0
+            || picture.common.vertical_offset != 0
+            || picture.common.text_wrap != rhwp::model::shape::TextWrap::Square
+            || picture.common.vert_rel_to != rhwp::model::shape::VertRelTo::Paper
+            || picture.common.horz_rel_to != rhwp::model::shape::HorzRelTo::Paper
+            || picture.common.vert_align != rhwp::model::shape::VertAlign::Top
+            || picture.common.horz_align != rhwp::model::shape::HorzAlign::Left;
+        if has_unmodeled_layout {
+            details.push(format!(
+                "layout=treat_as_char:{},wrap:{:?},vertical:{:?}/{:?}/{},horizontal:{:?}/{:?}/{}",
+                picture.common.treat_as_char,
+                picture.common.text_wrap,
+                picture.common.vert_rel_to,
+                picture.common.vert_align,
+                picture.common.vertical_offset,
+                picture.common.horz_rel_to,
+                picture.common.horz_align,
+                picture.common.horizontal_offset
+            ));
+        }
         // GrayScale is modeled directly. BlackWhite is retained as a visible
         // grayscale approximation with the warning above.
         if matches!(picture.image_attr.effect, RhwpImageEffect::Pattern8x8)
@@ -2996,6 +3017,16 @@ mod tests {
                 render_c: -0.25,
                 ..Default::default()
             },
+            common: rhwp::model::shape::CommonObjAttr {
+                text_wrap: rhwp::model::shape::TextWrap::TopAndBottom,
+                vert_rel_to: rhwp::model::shape::VertRelTo::Page,
+                vert_align: rhwp::model::shape::VertAlign::Center,
+                vertical_offset: 120,
+                horz_rel_to: rhwp::model::shape::HorzRelTo::Column,
+                horz_align: rhwp::model::shape::HorzAlign::Right,
+                horizontal_offset: 240,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let document = RhwpDocument {
@@ -3026,6 +3057,9 @@ mod tests {
                 && warning
                     .message
                     .contains("affine_shear_or_rotation=0.25/-0.25")
+                && warning.message.contains("treat_as_char:false")
+                && warning.message.contains("vertical:Page/Center/120")
+                && warning.message.contains("horizontal:Column/Right/240")
                 && warning.message.contains("effect:gray_scale")
                 && warning.message.contains("padding=10/20/30/40")
         }));

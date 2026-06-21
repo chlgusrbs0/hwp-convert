@@ -2027,6 +2027,41 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
         ));
     }
 
+    let root = next_xml_tag(pic_xml, 0);
+    let text_wrap = root
+        .and_then(|tag| xml_attribute_value(tag.raw, "textWrap"))
+        .unwrap_or("SQUARE")
+        .trim()
+        .to_ascii_uppercase();
+    let pos = hwpx_picture_direct_child_tag(pic_xml, "pos");
+    if let Some(pos) = pos {
+        let treat_as_char =
+            xml_attribute_value(pos.raw, "treatAsChar").is_some_and(xml_boolean_is_true);
+        let vert_rel_to = xml_attribute_value(pos.raw, "vertRelTo").unwrap_or("PAPER");
+        let vert_align = xml_attribute_value(pos.raw, "vertAlign").unwrap_or("TOP");
+        let vert_offset = xml_attribute_value(pos.raw, "vertOffset").unwrap_or("0");
+        let horz_rel_to = xml_attribute_value(pos.raw, "horzRelTo").unwrap_or("PAPER");
+        let horz_align = xml_attribute_value(pos.raw, "horzAlign").unwrap_or("LEFT");
+        let horz_offset = xml_attribute_value(pos.raw, "horzOffset").unwrap_or("0");
+        let has_layout = !treat_as_char
+            || text_wrap != "SQUARE"
+            || vert_rel_to != "PAPER"
+            || vert_align != "TOP"
+            || vert_offset != "0"
+            || horz_rel_to != "PAPER"
+            || horz_align != "LEFT"
+            || horz_offset != "0";
+        if has_layout {
+            context.add_warning_once(&format!(
+                "HWPX picture layout (treat_as_char:{treat_as_char},wrap:{text_wrap},vertical:{vert_rel_to}/{vert_align}/{vert_offset},horizontal:{horz_rel_to}/{horz_align}/{horz_offset}) is not modeled; block order and image dimensions were preserved without floating placement."
+            ));
+        }
+    } else if text_wrap != "SQUARE" {
+        context.add_warning_once(&format!(
+            "HWPX picture text wrap `{text_wrap}` is not modeled; block order and image dimensions were preserved without floating placement."
+        ));
+    }
+
     if let Some(margin) = hwpx_picture_direct_child_tag(pic_xml, "inMargin") {
         let values = ["left", "right", "top", "bottom"].map(|name| {
             xml_attribute_value(margin.raw, name)
@@ -5423,11 +5458,13 @@ mod tests {
             },
         );
         let xml = r#"
-            <hp:pic>
+            <hp:pic textWrap="TOP_AND_BOTTOM">
               <hp:caption><hp:pic><hp:rotationInfo angle="1234"/></hp:pic></hp:caption>
               <hp:flip horizontal="1" vertical="false"/>
               <hp:rotationInfo angle="9000"/>
               <hc:img binaryItemIDRef="image1"/>
+              <hp:pos treatAsChar="0" vertRelTo="PAGE" vertAlign="CENTER" vertOffset="120"
+                      horzRelTo="COLUMN" horzAlign="RIGHT" horzOffset="240"/>
             </hp:pic>
         "#;
 
@@ -5437,6 +5474,13 @@ mod tests {
             warning
                 .message
                 .contains("flip_h:true,flip_v:false,rotation:9000")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("treat_as_char:false,wrap:TOP_AND_BOTTOM")
+                && warning.message.contains("vertical:PAGE/CENTER/120")
+                && warning.message.contains("horizontal:COLUMN/RIGHT/240")
         }));
         assert!(
             context
