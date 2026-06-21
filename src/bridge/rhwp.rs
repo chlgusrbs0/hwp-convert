@@ -1171,7 +1171,7 @@ impl<'a> BridgeContext<'a> {
             rows.push(TableRow {
                 cells: row_cells
                     .into_iter()
-                    .map(|cell| self.map_table_cell(cell))
+                    .map(|cell| self.map_table_cell(cell, &table.padding))
                     .collect(),
             });
         }
@@ -1222,7 +1222,11 @@ impl<'a> BridgeContext<'a> {
         blocks
     }
 
-    fn map_table_cell(&mut self, cell: &RhwpCell) -> TableCell {
+    fn map_table_cell(
+        &mut self,
+        cell: &RhwpCell,
+        table_padding: &rhwp::model::Padding,
+    ) -> TableCell {
         let mut blocks = self.map_blocks_from_paragraphs(&cell.paragraphs, 0);
         if let Some(field_name) = cell.field_name.as_deref().and_then(non_empty_string) {
             blocks.insert(
@@ -1244,6 +1248,11 @@ impl<'a> BridgeContext<'a> {
 
         let [border_left, border_right, border_top, border_bottom] =
             self.map_cell_borders(cell.border_fill_id);
+        let padding = if cell.apply_inner_margin {
+            &cell.padding
+        } else {
+            table_padding
+        };
 
         TableCell {
             row_span: (cell.row_span as u32).max(1),
@@ -1255,10 +1264,10 @@ impl<'a> BridgeContext<'a> {
                 vertical_align: map_vertical_align(cell.vertical_align),
                 width: hwp_units_to_px_option(cell.width),
                 height: hwp_units_to_px_option(cell.height),
-                padding_top: i16_hwp_units_to_px_option(cell.padding.top),
-                padding_right: i16_hwp_units_to_px_option(cell.padding.right),
-                padding_bottom: i16_hwp_units_to_px_option(cell.padding.bottom),
-                padding_left: i16_hwp_units_to_px_option(cell.padding.left),
+                padding_top: i16_hwp_units_to_px_option(padding.top),
+                padding_right: i16_hwp_units_to_px_option(padding.right),
+                padding_bottom: i16_hwp_units_to_px_option(padding.bottom),
+                padding_left: i16_hwp_units_to_px_option(padding.left),
                 border_top,
                 border_right,
                 border_bottom,
@@ -2490,6 +2499,7 @@ mod tests {
                 top: 75,
                 bottom: 75,
             },
+            apply_inner_margin: true,
             paragraphs: vec![RhwpParagraph {
                 text: "h".to_string(),
                 ..Default::default()
@@ -2510,6 +2520,12 @@ mod tests {
         let table = RhwpTable {
             row_count: 1,
             col_count: 2,
+            padding: rhwp::model::Padding {
+                left: 300,
+                right: 300,
+                top: 225,
+                bottom: 225,
+            },
             cells: vec![header_cell, plain_cell],
             ..Default::default()
         };
@@ -2543,6 +2559,8 @@ mod tests {
                 assert!(!plain.is_header);
                 assert_eq!(plain.style.vertical_align, None);
                 assert_eq!(plain.style.width, None);
+                assert_eq!(plain.style.padding_left, Some(crate::ir::LengthPx(4.0)));
+                assert_eq!(plain.style.padding_top, Some(crate::ir::LengthPx(3.0)));
             }
             other => panic!("expected table block, got {other:?}"),
         }
