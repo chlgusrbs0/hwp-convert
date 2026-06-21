@@ -2102,6 +2102,14 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
         ));
     }
 
+    let effect_names = hwpx_picture_effect_names(pic_xml);
+    if !effect_names.is_empty() {
+        context.add_warning_once(&format!(
+            "HWPX picture visual effects ({}) are not modeled; hwp-convert preserved the original image bytes without applying the effects.",
+            effect_names.join(",")
+        ));
+    }
+
     if let Some(margin) = hwpx_picture_direct_child_tag(pic_xml, "inMargin") {
         let values = ["left", "right", "top", "bottom"].map(|name| {
             xml_attribute_value(margin.raw, name)
@@ -2115,6 +2123,38 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
             ));
         }
     }
+}
+
+fn hwpx_picture_effect_names(pic_xml: &str) -> Vec<String> {
+    let Some(effects) = hwpx_picture_direct_child_tag(pic_xml, "effects") else {
+        return Vec::new();
+    };
+    if effects.is_self_closing {
+        return Vec::new();
+    }
+    let Some(effects_end) = find_matching_element_end(pic_xml, &effects) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    let mut cursor = effects.end;
+    while let Some(tag) = next_xml_tag(pic_xml, cursor) {
+        if tag.start >= effects_end {
+            break;
+        }
+        if tag.is_closing || tag.name.is_empty() {
+            cursor = tag.end;
+            continue;
+        }
+        if !names.iter().any(|name| name == tag.name) {
+            names.push(tag.name.to_string());
+        }
+        cursor = if tag.is_self_closing {
+            tag.end
+        } else {
+            find_matching_element_end(pic_xml, &tag).unwrap_or(tag.end)
+        };
+    }
+    names
 }
 
 fn xml_boolean_is_true(value: &str) -> bool {
@@ -5505,6 +5545,7 @@ mod tests {
               <hc:img binaryItemIDRef="image1"/>
               <hp:imgClip left="10" right="900" top="20" bottom="700"/>
               <hp:imgDim dimwidth="1000" dimheight="800"/>
+              <hp:effects><hp:shadow/><hp:glow/><hp:shadow/></hp:effects>
               <hp:pos treatAsChar="0" vertRelTo="PAGE" vertAlign="CENTER" vertOffset="120"
                       horzRelTo="COLUMN" horzAlign="RIGHT" horzOffset="240"/>
             </hp:pic>
@@ -5530,6 +5571,10 @@ mod tests {
                 .contains("left:10,right:900,top:20,bottom:700,source:1000x800")
                 && warning.message.contains("uncropped original image bytes")
         }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning.message.contains("visual effects (shadow,glow)")
+                && warning.message.contains("without applying the effects")
+        }));
         assert!(
             context
                 .warnings
@@ -5539,7 +5584,7 @@ mod tests {
 
         let mut full_frame_context = HwpxFallbackContext::default();
         warn_hwpx_picture_transform(
-            r#"<hp:pic><hp:imgClip left="0" right="1000" top="0" bottom="800"/><hp:imgDim dimwidth="1000" dimheight="800"/></hp:pic>"#,
+            r#"<hp:pic><hp:imgClip left="0" right="1000" top="0" bottom="800"/><hp:imgDim dimwidth="1000" dimheight="800"/><hp:effects/></hp:pic>"#,
             &mut full_frame_context,
         );
         assert!(
@@ -5547,6 +5592,12 @@ mod tests {
                 .warnings
                 .iter()
                 .all(|warning| !warning.message.contains("picture crop"))
+        );
+        assert!(
+            full_frame_context
+                .warnings
+                .iter()
+                .all(|warning| !warning.message.contains("visual effects"))
         );
     }
 
