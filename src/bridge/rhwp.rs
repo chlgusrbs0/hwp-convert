@@ -1318,6 +1318,25 @@ impl<'a> BridgeContext<'a> {
                 picture.crop.left, picture.crop.top, picture.crop.right, picture.crop.bottom
             ));
         }
+        if picture.shape_attr.horz_flip
+            || picture.shape_attr.vert_flip
+            || picture.shape_attr.rotation_angle != 0
+        {
+            details.push(format!(
+                "transform=flip_h:{},flip_v:{},rotation:{}",
+                picture.shape_attr.horz_flip,
+                picture.shape_attr.vert_flip,
+                picture.shape_attr.rotation_angle
+            ));
+        }
+        if picture.shape_attr.render_b.abs() > f64::EPSILON
+            || picture.shape_attr.render_c.abs() > f64::EPSILON
+        {
+            details.push(format!(
+                "affine_shear_or_rotation={}/{}",
+                picture.shape_attr.render_b, picture.shape_attr.render_c
+            ));
+        }
         // GrayScale is modeled directly. BlackWhite is retained as a visible
         // grayscale approximation with the warning above.
         if matches!(picture.image_attr.effect, RhwpImageEffect::Pattern8x8)
@@ -2970,6 +2989,13 @@ mod tests {
                 top: 30,
                 bottom: 40,
             },
+            shape_attr: rhwp::model::shape::ShapeComponentAttr {
+                horz_flip: true,
+                rotation_angle: 9000,
+                render_b: 0.25,
+                render_c: -0.25,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let document = RhwpDocument {
@@ -2994,6 +3020,12 @@ mod tests {
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("picture visual transforms")
                 && warning.message.contains("crop=1/2/3/4")
+                && warning
+                    .message
+                    .contains("transform=flip_h:true,flip_v:false,rotation:9000")
+                && warning
+                    .message
+                    .contains("affine_shear_or_rotation=0.25/-0.25")
                 && warning.message.contains("effect:gray_scale")
                 && warning.message.contains("padding=10/20/30/40")
         }));

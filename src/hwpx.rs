@@ -1931,6 +1931,7 @@ fn extract_hwpx_image_from_pic_xml(
 ) -> Option<Image> {
     let binary_item_id_ref = hwpx_pic_binary_item_id_ref(pic_xml)?;
     let resource_id = context.ensure_image_resource(&binary_item_id_ref)?;
+    warn_hwpx_picture_transform(pic_xml, context);
     let image_attributes = hwpx_pic_image_attributes(pic_xml, &binary_item_id_ref);
     let image_effect = image_attributes.effect;
     if image_attributes.brightness != 0 || image_attributes.contrast != 0 {
@@ -1976,6 +1977,57 @@ fn extract_hwpx_image_from_pic_xml(
 }
 
 fn hwpx_picture_border(pic_xml: &str) -> Option<Border> {
+    let tag = hwpx_picture_direct_child_tag(pic_xml, "lineShape")?;
+    let style_name = xml_attribute_value(tag.raw, "style")
+        .unwrap_or("SOLID")
+        .trim()
+        .to_ascii_uppercase();
+    if style_name == "NONE" {
+        return None;
+    }
+    let width = xml_attribute_value(tag.raw, "width")
+        .and_then(|value| value.trim().parse().ok())
+        .and_then(hwp_units_to_px_option)?;
+    let style = match style_name.as_str() {
+        "DASH" | "LONG_DASH" | "DASH_DOT" | "DASH_DOT_DOT" => BorderStyle::Dashed,
+        "DOT" | "CIRCLE" => BorderStyle::Dotted,
+        "DOUBLE" | "DOUBLE_SLIM" | "SLIM_THICK" | "THICK_SLIM" | "SLIM_THICK_SLIM"
+        | "DOUBLE_WAVE" => BorderStyle::Double,
+        _ => BorderStyle::Solid,
+    };
+    Some(Border {
+        width,
+        style,
+        color: xml_attribute_value(tag.raw, "color").and_then(parse_hwpx_hex_color),
+    })
+}
+
+fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext) {
+    let flip = hwpx_picture_direct_child_tag(pic_xml, "flip");
+    let horizontal_flip = flip
+        .and_then(|tag| xml_attribute_value(tag.raw, "horizontal"))
+        .is_some_and(xml_boolean_is_true);
+    let vertical_flip = flip
+        .and_then(|tag| xml_attribute_value(tag.raw, "vertical"))
+        .is_some_and(xml_boolean_is_true);
+    let rotation = hwpx_picture_direct_child_tag(pic_xml, "rotationInfo")
+        .and_then(|tag| xml_attribute_value(tag.raw, "angle"))
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .unwrap_or(0);
+
+    if horizontal_flip || vertical_flip || rotation != 0 {
+        context.add_warning_once(&format!(
+            "HWPX picture transform (flip_h:{horizontal_flip},flip_v:{vertical_flip},rotation:{rotation}) is not modeled; hwp-convert preserved the original image bytes without applying the transform."
+        ));
+    }
+}
+
+fn xml_boolean_is_true(value: &str) -> bool {
+    let value = value.trim();
+    value == "1" || value.eq_ignore_ascii_case("true")
+}
+
+fn hwpx_picture_direct_child_tag<'a>(pic_xml: &'a str, child_name: &str) -> Option<XmlTag<'a>> {
     let root = next_xml_tag(pic_xml, 0)?;
     if root.name != "pic" || root.is_closing || root.is_self_closing {
         return None;
@@ -1996,29 +2048,8 @@ fn hwpx_picture_border(pic_xml: &str) -> Option<Border> {
         } else {
             find_matching_element_end(pic_xml, &tag).unwrap_or(tag.end)
         };
-        if tag.name == "lineShape" {
-            let style_name = xml_attribute_value(tag.raw, "style")
-                .unwrap_or("SOLID")
-                .trim()
-                .to_ascii_uppercase();
-            if style_name == "NONE" {
-                return None;
-            }
-            let width = xml_attribute_value(tag.raw, "width")
-                .and_then(|value| value.trim().parse().ok())
-                .and_then(hwp_units_to_px_option)?;
-            let style = match style_name.as_str() {
-                "DASH" | "LONG_DASH" | "DASH_DOT" | "DASH_DOT_DOT" => BorderStyle::Dashed,
-                "DOT" | "CIRCLE" => BorderStyle::Dotted,
-                "DOUBLE" | "DOUBLE_SLIM" | "SLIM_THICK" | "THICK_SLIM" | "SLIM_THICK_SLIM"
-                | "DOUBLE_WAVE" => BorderStyle::Double,
-                _ => BorderStyle::Solid,
-            };
-            return Some(Border {
-                width,
-                style,
-                color: xml_attribute_value(tag.raw, "color").and_then(parse_hwpx_hex_color),
-            });
+        if tag.name == child_name {
+            return Some(tag);
         }
         cursor = tag_end;
     }
@@ -5322,6 +5353,42 @@ mod tests {
 
         assert_eq!(hwpx_picture_border(disabled), None);
         assert_eq!(hwpx_picture_border(nested), None);
+    }
+
+    #[test]
+    fn warns_for_hwpx_picture_flip_and_rotation_without_nested_leakage() {
+        let mut context = HwpxFallbackContext::default();
+        context.image_items.insert(
+            "image1".to_string(),
+            HwpxImageItem {
+                id: "image1".to_string(),
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: b"image-bytes".to_vec(),
+            },
+        );
+        let xml = r#"
+            <hp:pic>
+              <hp:caption><hp:pic><hp:rotationInfo angle="1234"/></hp:pic></hp:caption>
+              <hp:flip horizontal="1" vertical="false"/>
+              <hp:rotationInfo angle="9000"/>
+              <hc:img binaryItemIDRef="image1"/>
+            </hp:pic>
+        "#;
+
+        extract_hwpx_image_from_pic_xml(xml, &mut context).expect("image should parse");
+
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("flip_h:true,flip_v:false,rotation:9000")
+        }));
+        assert!(
+            context
+                .warnings
+                .iter()
+                .all(|warning| !warning.message.contains("1234"))
+        );
     }
 
     #[test]
