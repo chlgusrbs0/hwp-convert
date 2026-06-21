@@ -829,6 +829,11 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                 }
 
                 let para_xml = &header_xml[tag.start..para_end];
+                if hwpx_xml_has_percent_line_spacing(para_xml) {
+                    context.add_warning_once(
+                        "HWPX paragraph percent line spacing is not modeled by ParagraphStyle; hwp-convert preserved other paragraph style properties.",
+                    );
+                }
                 context.paragraph_styles[id] = extract_hwpx_paragraph_style(para_xml);
                 cursor = para_end;
             }
@@ -1352,6 +1357,17 @@ fn is_hwpx_percent_line_spacing(tag: &str) -> bool {
     xml_attribute_value(tag, "type").is_some_and(|value| value.eq_ignore_ascii_case("PERCENT"))
 }
 
+fn hwpx_xml_has_percent_line_spacing(xml: &str) -> bool {
+    let mut cursor = 0usize;
+    while let Some(tag) = next_xml_tag(xml, cursor) {
+        cursor = tag.end;
+        if !tag.is_closing && tag.name == "lineSpacing" && is_hwpx_percent_line_spacing(tag.raw) {
+            return true;
+        }
+    }
+    false
+}
+
 fn document_from_sections(sections: Vec<Section>) -> Document {
     Document {
         ir_version: crate::ir::IR_VERSION,
@@ -1609,6 +1625,11 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
     let mut blocks = Vec::new();
     let mut fragment_start = 0usize;
     let mut cursor = 0usize;
+    if hwpx_xml_has_percent_line_spacing(hwpx_direct_paragraph_style_prefix(paragraph_xml)) {
+        context.add_warning_once(
+            "HWPX paragraph percent line spacing is not modeled by ParagraphStyle; hwp-convert preserved other paragraph style properties.",
+        );
+    }
     let paragraph_style = context.paragraph_style_for_paragraph(paragraph_xml);
     let paragraph_role = context.paragraph_role_for_paragraph(paragraph_xml);
     let mut pending_list = context.list_info_for_paragraph(paragraph_xml);
@@ -4604,6 +4625,48 @@ mod tests {
         assert_eq!(paragraph.style.spacing.line_pt, Some(LengthPt(6.0)));
 
         Ok(())
+    }
+
+    #[test]
+    fn warns_when_hwpx_percent_line_spacing_cannot_be_modeled() {
+        let mut context = extract_hwpx_fallback_context(
+            r#"
+            <hh:head>
+              <hh:paraPr id="1">
+                <hh:lineSpacing type="PERCENT" value="160" unit="HWPUNIT"/>
+              </hh:paraPr>
+            </hh:head>
+            "#,
+        );
+
+        assert_eq!(
+            context
+                .warnings
+                .iter()
+                .filter(|warning| warning.message.contains("percent line spacing"))
+                .count(),
+            1
+        );
+
+        extract_section_xml_blocks(
+            r#"
+            <hp:p>
+              <hp:lineSpacing type="PERCENT" value="130" unit="HWPUNIT"/>
+              <hp:run><hp:t>direct style</hp:t></hp:run>
+            </hp:p>
+            "#,
+            &mut context,
+        );
+
+        assert_eq!(
+            context
+                .warnings
+                .iter()
+                .filter(|warning| warning.message.contains("percent line spacing"))
+                .count(),
+            1,
+            "the same unsupported style should produce one deduplicated warning"
+        );
     }
 
     #[test]

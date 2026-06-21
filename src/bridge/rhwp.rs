@@ -1547,7 +1547,17 @@ impl<'a> BridgeContext<'a> {
 
     fn map_paragraph_style_by_id(&mut self, para_shape_id: u16, context: &str) -> ParagraphStyle {
         if let Some(para_shape) = self.lookup_para_shape(para_shape_id) {
-            return self.map_paragraph_style(para_shape);
+            let style = self.map_paragraph_style(para_shape);
+            let percent_line_spacing = matches!(
+                para_shape.line_spacing_type,
+                rhwp::model::style::LineSpacingType::Percent
+            );
+            if percent_line_spacing {
+                self.add_warning_once(
+                    "rhwp paragraph percent line spacing is not modeled by ParagraphStyle; hwp-convert preserved other paragraph style properties.",
+                );
+            }
+            return style;
         }
 
         if !self.source.doc_info.para_shapes.is_empty() || para_shape_id != 0 {
@@ -3301,6 +3311,36 @@ mod tests {
             warning
                 .message
                 .contains("style sheet referenced missing char shape id 9")
+        }));
+    }
+
+    #[test]
+    fn warns_when_percent_line_spacing_cannot_be_modeled() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                para_shapes: vec![RhwpParaShape {
+                    line_spacing_type: rhwp::model::style::LineSpacingType::Percent,
+                    line_spacing: 160,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "percent spacing".to_string(),
+                    para_shape_id: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("percent line spacing")
+                && warning.message.contains("not modeled")
         }));
     }
 
