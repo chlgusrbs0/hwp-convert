@@ -1931,7 +1931,14 @@ fn extract_hwpx_image_from_pic_xml(
 ) -> Option<Image> {
     let binary_item_id_ref = hwpx_pic_binary_item_id_ref(pic_xml)?;
     let resource_id = context.ensure_image_resource(&binary_item_id_ref)?;
-    let image_effect = hwpx_pic_image_effect(pic_xml);
+    let image_attributes = hwpx_pic_image_attributes(pic_xml, &binary_item_id_ref);
+    let image_effect = image_attributes.effect;
+    if image_attributes.brightness != 0 || image_attributes.contrast != 0 {
+        context.add_warning_once(&format!(
+            "HWPX picture brightness/contrast (brightness:{},contrast:{}) is not modeled; hwp-convert preserved the original image bytes without applying the adjustment.",
+            image_attributes.brightness, image_attributes.contrast
+        ));
+    }
     let grayscale = match image_effect.as_deref() {
         Some("GRAY_SCALE") => true,
         Some("BLACK_WHITE") => {
@@ -1969,18 +1976,44 @@ fn extract_hwpx_image_from_pic_xml(
     })
 }
 
-fn hwpx_pic_image_effect(pic_xml: &str) -> Option<String> {
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct HwpxPictureImageAttributes {
+    effect: Option<String>,
+    brightness: i32,
+    contrast: i32,
+}
+
+fn hwpx_pic_image_attributes(
+    pic_xml: &str,
+    binary_item_id_ref: &str,
+) -> HwpxPictureImageAttributes {
     let mut cursor = 0usize;
     while let Some(tag) = next_xml_tag(pic_xml, cursor) {
         cursor = tag.end;
-        if !tag.is_closing
-            && matches!(tag.name, "img" | "image")
-            && let Some(effect) = xml_attribute_value(tag.raw, "effect")
-        {
-            return non_empty_string_owned(effect.trim().to_ascii_uppercase());
+        if tag.is_closing || !matches!(tag.name, "img" | "image") {
+            continue;
         }
+        let Some(tag_resource_ref) =
+            decoded_xml_attribute_value_any(tag.raw, HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES)
+        else {
+            continue;
+        };
+        if !tag_resource_ref.eq_ignore_ascii_case(binary_item_id_ref) {
+            continue;
+        }
+
+        return HwpxPictureImageAttributes {
+            effect: xml_attribute_value(tag.raw, "effect")
+                .and_then(|value| non_empty_string_owned(value.trim().to_ascii_uppercase())),
+            brightness: xml_attribute_value(tag.raw, "bright")
+                .and_then(|value| value.trim().parse().ok())
+                .unwrap_or(0),
+            contrast: xml_attribute_value(tag.raw, "contrast")
+                .and_then(|value| value.trim().parse().ok())
+                .unwrap_or(0),
+        };
     }
-    None
+    HwpxPictureImageAttributes::default()
 }
 
 fn hwpx_pic_binary_item_id_ref(pic_xml: &str) -> Option<String> {
@@ -5138,6 +5171,58 @@ mod tests {
             warning.message.contains("BLACK_WHITE effect")
                 && warning.message.contains("grayscale approximation")
         }));
+    }
+
+    #[test]
+    fn warns_when_hwpx_image_brightness_or_contrast_is_not_applied() {
+        let mut context = HwpxFallbackContext::default();
+        context.image_items.insert(
+            "image1".to_string(),
+            HwpxImageItem {
+                id: "image1".to_string(),
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: b"image-bytes".to_vec(),
+            },
+        );
+        let image = extract_hwpx_image_from_pic_xml(
+            r#"<hp:pic><hp:img><hc:img binaryItemIDRef="image1" bright="12" contrast="-4" effect="REAL_PIC"/></hp:img></hp:pic>"#,
+            &mut context,
+        )
+        .expect("image should be recovered");
+
+        assert!(!image.grayscale);
+        assert!(context.warnings.iter().any(|warning| {
+            warning.message.contains("brightness:12,contrast:-4")
+                && warning.message.contains("without applying the adjustment")
+        }));
+    }
+
+    #[test]
+    fn reads_hwpx_effect_from_the_outer_picture_resource() {
+        let mut context = HwpxFallbackContext::default();
+        for id in ["outer-image", "caption-image"] {
+            context.image_items.insert(
+                id.to_string(),
+                HwpxImageItem {
+                    id: id.to_string(),
+                    media_type: Some("image/png".to_string()),
+                    extension: Some("png".to_string()),
+                    bytes: b"image-bytes".to_vec(),
+                },
+            );
+        }
+        let xml = r#"
+            <hp:pic>
+              <hp:caption><hp:pic><hc:img binaryItemIDRef="caption-image" effect="GRAY_SCALE"/></hp:pic></hp:caption>
+              <hp:img><hc:img binaryItemIDRef="outer-image" effect="REAL_PIC"/></hp:img>
+            </hp:pic>
+        "#;
+
+        let image = extract_hwpx_image_from_pic_xml(xml, &mut context).expect("image should parse");
+
+        assert_eq!(image.resource_id.as_str(), "outer-image");
+        assert!(!image.grayscale);
     }
 
     #[test]
