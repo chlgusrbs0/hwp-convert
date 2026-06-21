@@ -1973,6 +1973,7 @@ fn extract_hwpx_image_from_pic_xml(
                 pic_xml,
                 &["altText", "description", "desc", "name"],
             ),
+            first_hwpx_direct_child_element_text(pic_xml, &["shapeComment"]),
         ]),
         caption: extract_hwpx_object_caption(pic_xml, context),
         width: hwpx_object_dimension_to_px(pic_xml, &["width", "w"]),
@@ -5474,6 +5475,38 @@ mod tests {
 
         assert_eq!(image.resource_id.as_str(), "outer-image");
         assert!(!image.grayscale);
+    }
+
+    #[test]
+    fn recovers_hwpx_shape_comment_as_fallback_image_alt() {
+        let mut context = HwpxFallbackContext::default();
+        context.image_items.insert(
+            "image1".to_string(),
+            HwpxImageItem {
+                id: "image1".to_string(),
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: b"image-bytes".to_vec(),
+            },
+        );
+        let xml = r#"
+            <hp:pic description="explicit alt">
+              <hc:img binaryItemIDRef="image1"/>
+              <hp:shapeComment>fallback description</hp:shapeComment>
+            </hp:pic>
+        "#;
+        let fallback_xml = r#"
+            <hp:pic>
+              <hc:img binaryItemIDRef="image1"/>
+              <hp:shapeComment>fallback description</hp:shapeComment>
+            </hp:pic>
+        "#;
+
+        let explicit = extract_hwpx_image_from_pic_xml(xml, &mut context).expect("image");
+        let fallback = extract_hwpx_image_from_pic_xml(fallback_xml, &mut context).expect("image");
+
+        assert_eq!(explicit.alt.as_deref(), Some("explicit alt"));
+        assert_eq!(fallback.alt.as_deref(), Some("fallback description"));
     }
 
     #[test]
