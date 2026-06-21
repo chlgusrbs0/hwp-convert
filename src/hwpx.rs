@@ -1970,10 +1970,60 @@ fn extract_hwpx_image_from_pic_xml(
         caption: extract_hwpx_object_caption(pic_xml, context),
         width: hwpx_object_dimension_to_px(pic_xml, &["width", "w"]),
         height: hwpx_object_dimension_to_px(pic_xml, &["height", "h"]),
-        // Section XML fallback does not yet recover image borders.
-        border: None,
+        border: hwpx_picture_border(pic_xml),
         grayscale,
     })
+}
+
+fn hwpx_picture_border(pic_xml: &str) -> Option<Border> {
+    let root = next_xml_tag(pic_xml, 0)?;
+    if root.name != "pic" || root.is_closing || root.is_self_closing {
+        return None;
+    }
+    let root_end = find_matching_element_end(pic_xml, &root)?;
+    let mut cursor = root.end;
+
+    while let Some(tag) = next_xml_tag(pic_xml, cursor) {
+        if tag.start >= root_end {
+            break;
+        }
+        if tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+        let tag_end = if tag.is_self_closing {
+            tag.end
+        } else {
+            find_matching_element_end(pic_xml, &tag).unwrap_or(tag.end)
+        };
+        if tag.name == "lineShape" {
+            let style_name = xml_attribute_value(tag.raw, "style")
+                .unwrap_or("SOLID")
+                .trim()
+                .to_ascii_uppercase();
+            if style_name == "NONE" {
+                return None;
+            }
+            let width = xml_attribute_value(tag.raw, "width")
+                .and_then(|value| value.trim().parse().ok())
+                .and_then(hwp_units_to_px_option)?;
+            let style = match style_name.as_str() {
+                "DASH" | "LONG_DASH" | "DASH_DOT" | "DASH_DOT_DOT" => BorderStyle::Dashed,
+                "DOT" | "CIRCLE" => BorderStyle::Dotted,
+                "DOUBLE" | "DOUBLE_SLIM" | "SLIM_THICK" | "THICK_SLIM" | "SLIM_THICK_SLIM"
+                | "DOUBLE_WAVE" => BorderStyle::Double,
+                _ => BorderStyle::Solid,
+            };
+            return Some(Border {
+                width,
+                style,
+                color: xml_attribute_value(tag.raw, "color").and_then(parse_hwpx_hex_color),
+            });
+        }
+        cursor = tag_end;
+    }
+
+    None
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -5223,6 +5273,55 @@ mod tests {
 
         assert_eq!(image.resource_id.as_str(), "outer-image");
         assert!(!image.grayscale);
+    }
+
+    #[test]
+    fn recovers_hwpx_picture_line_shape_as_image_border() {
+        let mut context = HwpxFallbackContext::default();
+        context.image_items.insert(
+            "image1".to_string(),
+            HwpxImageItem {
+                id: "image1".to_string(),
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: b"image-bytes".to_vec(),
+            },
+        );
+        let xml = r##"
+            <hp:pic>
+              <hp:lineShape color="#123456" width="150" style="DASH_DOT"/>
+              <hc:img binaryItemIDRef="image1" effect="REAL_PIC"/>
+            </hp:pic>
+        "##;
+
+        let image = extract_hwpx_image_from_pic_xml(xml, &mut context).expect("image should parse");
+        let border = image.border.expect("picture border should be recovered");
+
+        assert_eq!(border.width, LengthPx(2.0));
+        assert_eq!(border.style, BorderStyle::Dashed);
+        assert_eq!(
+            border.color,
+            Some(Color {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+                a: 255,
+            })
+        );
+    }
+
+    #[test]
+    fn ignores_disabled_or_nested_hwpx_picture_line_shape() {
+        let disabled =
+            r##"<hp:pic><hp:lineShape color="#123456" width="150" style="NONE"/></hp:pic>"##;
+        let nested = r##"
+            <hp:pic>
+              <hp:caption><hp:pic><hp:lineShape color="#123456" width="150" style="SOLID"/></hp:pic></hp:caption>
+            </hp:pic>
+        "##;
+
+        assert_eq!(hwpx_picture_border(disabled), None);
+        assert_eq!(hwpx_picture_border(nested), None);
     }
 
     #[test]
