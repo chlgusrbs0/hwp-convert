@@ -6,7 +6,7 @@
 
 ## 현재 프로젝트 사실 (single source of truth)
 
-> 최종 검증: 2026-06-16. 이 블록이 "현재 상태"의 기준값이다. 다른 문서는 여기를 인용하거나 링크한다.
+> 최종 검증: 2026-06-23. 이 블록이 "현재 상태"의 기준값이다. 다른 문서는 여기를 인용하거나 링크한다.
 > 숫자(테스트 수 등)를 인용하기 전에 가능하면 `cargo test`로 다시 확인한다.
 > **저장소 HEAD 커밋 해시는 자주 바뀌므로 문서에 박지 않는다.** 필요하면 `git log --oneline`으로 확인한다.
 
@@ -16,7 +16,7 @@
 - 현재 `IR_VERSION`: `13`.
 - 입력 형식: `.hwp`, `.hwpx`.
 - 출력 형식: `txt`, `json`, `markdown`, `html`, `svg`. PDF는 미구현.
-- 테스트 상태: `cargo test` 통과 — unit test 216개 + fixture smoke 4개. `cargo clippy` 무경고.
+- 테스트 상태: `cargo test` 통과 — unit test 234개 + fixture smoke 4개. `cargo clippy --all-targets` 무경고.
 - 공식 fixture(10개), `tests/fixtures/` 아래:
   - HWP/HWPX 쌍: `basic_text`, `list`
   - HWP 단독: `equation`, `footnote`, `header_footer`, `image`, `merged_table`, `shape`, `style`, `table`
