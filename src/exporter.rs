@@ -2897,6 +2897,28 @@ mod tests {
     }
 
     #[test]
+    fn renders_empty_paragraphs_across_text_exports() {
+        let document = Document::from_paragraphs(vec![
+            "before".to_string(),
+            String::new(),
+            "after".to_string(),
+        ]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+        let markdown = render_markdown_document(&document);
+        let svg = render_svg_document(
+            Path::new("sample.hwpx"),
+            &plain_text::collect_block_texts(&document),
+        );
+
+        assert!(html.contains("<p>before</p>\n<p></p>\n<p>after</p>"));
+        assert_eq!(markdown, "before\n\n\n\nafter");
+        assert!(svg.contains(">before</text>"));
+        assert!(svg.contains("> </text>"));
+        assert!(svg.contains(">after</text>"));
+    }
+
+    #[test]
     fn serializes_json_output_as_document_ir() {
         let document = Document::from_paragraphs(vec![
             "first paragraph".to_string(),

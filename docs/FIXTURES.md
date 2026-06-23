@@ -51,7 +51,7 @@ tests/fixtures/<fixture_name>/
 
 | Fixture | 우선순위 | 포함 요소 | 문서 내용 | bridge 핵심 assert | exporter 핵심 assert |
 | --- | --- | --- | --- | --- | --- |
-| `basic_text` | P0 | text, paragraph | 3~5문단, 빈 문단 1개, 줄바꿈, 탭, 한글/영문/숫자 혼합 | section 1개, 비어있지 않은 문단만 block, `Inline::Text/LineBreak/Tab`, warning 없음 | 모든 형식에 텍스트가 보이는지 |
+| `basic_text` | P0 | text, paragraph | 3~5문단, 빈 문단 1개, 줄바꿈, 탭, 한글/영문/숫자 혼합 | section 1개, 빈 문단 포함, `Inline::Text/LineBreak/Tab` | 모든 형식에 텍스트가 보이는지 |
 | `style` | P0 | style | bold/italic/underline/strike, font family/size, 전경/배경색, 정렬, spacing, indent | `TextStyle`, `ParagraphStyle`, `style_ref`, `StyleSheet` | JSON/HTML golden, Markdown은 bold/italic/strike만 |
 | `table` | P0 | table | 2x2~3x2 단순 표, 각 셀 단일 문단 | `Block::Table`, row/cell count, nested paragraph | HTML `<table>`, Markdown simple table, TXT/SVG fallback |
 | `merged_table` | P0 | merged cell | row span 1개, col span 1개 | 해당 cell의 `row_span`/`col_span` | HTML `rowspan`/`colspan`, Markdown plain text fallback |
@@ -63,7 +63,7 @@ tests/fixtures/<fixture_name>/
 
 ## Fixture별 세부 메모
 
-- `basic_text`: HWP/HWPX를 같은 내용으로 저장. 빈 문단이 현재 bridge에서 drop된다는 사실을 테스트 이름/기대값에 명시. 정상 parse 경로만 다룸.
+- `basic_text`: HWP/HWPX를 같은 내용으로 저장. 빈 문단은 `Paragraph { inlines: [] }`로 보존한다. 정상 parse 경로만 다룸.
 - `style`: 환경에서 흔들리지 않는 기본 글꼴 사용. 전경/배경색은 분명히 다른 값. HTML golden은 전체 비교보다 핵심 declaration 포함 여부.
 - `table`: Markdown path 검증 위해 단순 구조 유지. 셀 안 다중 문단/이미지는 `kitchen_sink`로.
 - `merged_table`: row/col span 각 최소 1회. Markdown은 fallback 문자열이 현재 기대값.

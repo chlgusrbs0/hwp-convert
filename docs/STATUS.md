@@ -23,7 +23,7 @@
 | 요소 | rhwp parse | bridge mapping | Document IR | exporter 지원 | 현재 한계 |
 | --- | --- | --- | --- | --- | --- |
 | text | 예 | 예 | 예 | 예 (TXT/JSON/HTML/Markdown/SVG 모두) | 좌표/페이지 단위 정보 없음. unsupported control 내부 텍스트는 보존 안 될 수 있음. |
-| paragraph | 예 | 부분 | 예 | 부분 (heading/title/caption 구분 없음) | bridge가 빈 문단을 drop하고 `ParagraphRole`을 항상 `Body`로 둠. |
+| paragraph | 예 | 부분 | 예 | 부분 (heading/title/caption 구분 제한적) | 빈 문단은 `Paragraph { inlines: [] }`로 보존됨. outline 기반 heading은 일부 매핑되지만 title/caption 등 전체 role 추론은 아직 제한적. |
 | style | 부분 | 부분 | 부분 | 부분 (JSON 보존, HTML CSS, Markdown은 bold/italic/strike/sup/sub/link, TXT/SVG 소실) | 글자 장식은 굵기/기울임/밑줄/취소선/위·아래첨자/강조점/양각/음각/외곽선/그림자, 글꼴명/크기, 전경/배경색, 밑줄·취소선 색까지 매핑. 밑줄 모양, 장평/자간/커닝, table style ref, border, padding, percent line spacing, paragraph role 추론은 아직 없음. |
 | table | 예 | 예 | 예 | 부분 (JSON/HTML 구조 유지, 헤더셀은 `<th>`, 셀 수직정렬 CSS, TXT/SVG 평문, Markdown 단순 표만) | 셀 `is_header`, 수직정렬, 폭/높이/padding, 4면 테두리(색·선종류·굵기)는 매핑됨. 표 전체 폭은 아직. 테두리 굵기 인덱스→px는 rhwp 임계값(0–7)+표준 HWP 표(8–15), 선종류 wave/3D는 solid로 근사(실문서 fixture로 검증 필요). |
 | merged table cell | 예 | 예 | 예 | 부분 (JSON/HTML `row_span`/`col_span`, Markdown fallback, TXT/SVG 평문) | 병합 셀 시각 배치/너비 계산 없음. Markdown 병합 표현 없음. |

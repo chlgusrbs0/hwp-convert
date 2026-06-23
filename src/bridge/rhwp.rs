@@ -214,7 +214,7 @@ impl<'a> BridgeContext<'a> {
         list_state: &mut ListState,
     ) -> Option<Paragraph> {
         let inlines = self.map_paragraph_inlines(paragraph);
-        if inlines.is_empty() {
+        if inlines.is_empty() && !paragraph.controls.is_empty() {
             return None;
         }
 

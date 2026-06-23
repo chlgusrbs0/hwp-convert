@@ -23,24 +23,24 @@
 
 `tests/fixture_smoke.rs`의 `assert_basic_text_fixture`가 다음을 확인한다.
 
-- 비어 있지 않은 문단 4개가 `Block::Paragraph`로 생성된다.
+- 비어 있지 않은 문단 4개와 빈 문단 1개가 `Block::Paragraph`로 생성된다.
 - 한국어 문단 텍스트가 보존된다.
 - `English 123 mixed text`가 보존된다.
 - 문단 내부 줄바꿈이 `Inline::LineBreak`로 보존된다.
 - 문단 내부 탭이 `Inline::Tab`으로 보존된다.
-- 빈 문단은 현재 IR body block으로 만들지 않는다.
+- 빈 문단은 `Paragraph { inlines: [] }`로 보존된다.
 
 ## 현재 관찰값
 
 HWP와 HWPX 모두 현재 bridge stats가 같은 구조를 가진다.
 
 - `sections`: 1
-- `body_blocks`: 4
-- `paragraphs`: 4
+- `body_blocks`: 5
+- `paragraphs`: 5
 - `text_runs`: 6
 - `line_breaks`: 1
 - `tabs`: 1
-- `warnings`: 0
+- `warnings`: 1
 
 기대값은 다음 파일로 고정한다.
 

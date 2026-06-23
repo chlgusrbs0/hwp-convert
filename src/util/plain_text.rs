@@ -312,6 +312,17 @@ mod tests {
     }
 
     #[test]
+    fn preserves_empty_paragraphs_as_blank_lines() {
+        let document = Document::from_paragraphs(vec![
+            "before".to_string(),
+            String::new(),
+            "after".to_string(),
+        ]);
+
+        assert_eq!(to_plain_text(&document), "before\n\nafter");
+    }
+
+    #[test]
     fn renders_table_as_plain_text_fallback() {
         let document = Document {
             sections: vec![crate::ir::Section {

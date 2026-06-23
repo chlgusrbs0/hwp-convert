@@ -1738,15 +1738,50 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
         cursor = object_end;
     }
 
-    push_paragraph_text_fragment_as_block(
+    let final_list = pending_list.take();
+    let pushed_final_fragment = push_paragraph_text_fragment_as_block(
         &mut blocks,
         &paragraph_xml[fragment_start..],
-        pending_list.take(),
-        paragraph_role,
-        paragraph_style,
+        final_list.clone(),
+        paragraph_role.clone(),
+        paragraph_style.clone(),
         context,
     );
+    if !pushed_final_fragment
+        && blocks.is_empty()
+        && !hwpx_paragraph_has_block_level_content(paragraph_xml)
+    {
+        blocks.push(Block::Paragraph(Paragraph {
+            role: paragraph_role,
+            inlines: Vec::new(),
+            style: paragraph_style,
+            style_ref: None,
+            list: final_list,
+        }));
+    }
     blocks
+}
+
+fn hwpx_paragraph_has_block_level_content(paragraph_xml: &str) -> bool {
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(paragraph_xml, cursor) {
+        if tag.is_closing {
+            cursor = tag.end;
+            continue;
+        }
+
+        if tag.name == "ctrl"
+            || hwpx_fallback_object_kind(tag.name).is_some()
+            || hwpx_fallback_structural_control_kind(tag.name).is_some()
+        {
+            return true;
+        }
+
+        cursor = tag.end;
+    }
+
+    false
 }
 
 fn hwpx_fallback_object_kind(tag_name: &str) -> Option<&'static str> {
@@ -2450,10 +2485,10 @@ fn push_paragraph_text_fragment_as_block(
     role: ParagraphRole,
     style: ParagraphStyle,
     context: &mut HwpxFallbackContext,
-) {
+) -> bool {
     let inlines = extract_inlines_from_xml_fragment(xml, context);
     if inlines.is_empty() {
-        return;
+        return false;
     }
 
     blocks.push(Block::Paragraph(Paragraph {
@@ -2463,6 +2498,7 @@ fn push_paragraph_text_fragment_as_block(
         style_ref: None,
         list,
     }));
+    true
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -3942,6 +3978,38 @@ mod tests {
             &blocks[0],
             Block::Paragraph(paragraph)
                 if inlines_to_plain_text(&paragraph.inlines) == "<raw & text>"
+        ));
+    }
+
+    #[test]
+    fn preserves_empty_hwpx_paragraphs_in_section_fallback() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p><hp:run><hp:t>before</hp:t></hp:run></hp:p>
+              <hp:p/>
+              <hp:p>
+                <hp:run><hp:t>after</hp:t></hp:run>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+
+        assert_eq!(blocks.len(), 3);
+        assert!(matches!(
+            &blocks[0],
+            Block::Paragraph(paragraph)
+                if inlines_to_plain_text(&paragraph.inlines) == "before"
+        ));
+        assert!(matches!(
+            &blocks[1],
+            Block::Paragraph(paragraph) if paragraph.inlines.is_empty()
+        ));
+        assert!(matches!(
+            &blocks[2],
+            Block::Paragraph(paragraph)
+                if inlines_to_plain_text(&paragraph.inlines) == "after"
         ));
     }
 

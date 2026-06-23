@@ -669,8 +669,15 @@ fn assert_basic_text_fixture(input: &FixtureInput, document: &Document) {
     let paragraphs = collect_paragraphs(document);
     assert_eq!(
         paragraphs.len(),
-        4,
-        "fixture {} should preserve exactly four non-empty paragraphs and drop the empty paragraph",
+        5,
+        "fixture {} should preserve four text paragraphs and one empty paragraph",
+        input.label
+    );
+    assert!(
+        paragraphs
+            .iter()
+            .any(|paragraph| paragraph.inlines.is_empty()),
+        "fixture {} should preserve the empty paragraph as an empty IR paragraph",
         input.label
     );
 
