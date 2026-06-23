@@ -23,6 +23,8 @@ const HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES: &[&str] =
 const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
     &["borderFillIDRef", "borderFillIdRef", "borderFillIDREF"];
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
+const HWPX_IMAGE_ALPHA_ATTRIBUTES: &[&str] = &["alpha", "opacity"];
+const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
 const HWPX_TABLE_CELL_HEADER_ATTRIBUTES: &[&str] = &["header", "isHeader"];
 const HWPX_VERTICAL_ALIGN_ATTRIBUTES: &[&str] = &["vertAlign", "verticalAlign"];
 const MAX_HWPX_IMAGE_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
@@ -2279,13 +2281,13 @@ fn hwpx_pic_image_attributes(
         return HwpxPictureImageAttributes {
             effect: xml_attribute_value(tag.raw, "effect")
                 .and_then(|value| non_empty_string_owned(value.trim().to_ascii_uppercase())),
-            brightness: xml_attribute_value(tag.raw, "bright")
+            brightness: xml_attribute_value_any(tag.raw, HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES)
                 .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(0),
             contrast: xml_attribute_value(tag.raw, "contrast")
                 .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(0),
-            alpha: xml_attribute_value(tag.raw, "alpha")
+            alpha: xml_attribute_value_any(tag.raw, HWPX_IMAGE_ALPHA_ATTRIBUTES)
                 .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(0.0),
         };
@@ -5521,7 +5523,7 @@ mod tests {
             },
         );
         let image = extract_hwpx_image_from_pic_xml(
-            r#"<hp:pic><hp:img><hc:img binaryItemIDRef="image1" bright="12" contrast="-4" effect="REAL_PIC"/></hp:img></hp:pic>"#,
+            r#"<hp:pic><hp:img><hc:img binaryItemIDRef="image1" brightness="12" contrast="-4" effect="REAL_PIC"/></hp:img></hp:pic>"#,
             &mut context,
         )
         .expect("image should be recovered");
@@ -5548,7 +5550,7 @@ mod tests {
         let xml = r#"
             <hp:pic>
               <hp:inMargin left="10" right="20" top="30" bottom="40"/>
-              <hc:img binaryItemIDRef="image1" alpha="0.5"/>
+              <hc:img binaryItemIDRef="image1" opacity="0.5"/>
             </hp:pic>
         "#;
 
