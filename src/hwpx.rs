@@ -23,6 +23,7 @@ const HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES: &[&str] =
 const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
     &["borderFillIDRef", "borderFillIdRef", "borderFillIDREF"];
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
+const HWPX_FIELD_ID_ATTRIBUTES: &[&str] = &["id", "instId"];
 const HWPX_IMAGE_ALPHA_ATTRIBUTES: &[&str] = &["alpha", "opacity"];
 const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
 const HWPX_IMAGE_BORDER_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
@@ -2869,7 +2870,7 @@ fn extract_hwpx_field_begin(tag: &str, field_xml: &str) -> HwpxActiveField {
     ]);
 
     HwpxActiveField {
-        id: decoded_xml_attribute_value(tag, "id"),
+        id: decoded_xml_attribute_value_any(tag, HWPX_FIELD_ID_ATTRIBUTES),
         field_type,
         name,
         url,
@@ -4696,7 +4697,7 @@ mod tests {
         let xml = r#"
             <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:ctrl>
-                <hp:fieldBegin id="7" type="HYPERLINK" name="Example">
+                <hp:fieldBegin instId="7" type="HYPERLINK" name="Example">
                   <hp:parameters cnt="1">
                     <hp:stringParam name="URL">https://example.com</hp:stringParam>
                   </hp:parameters>
@@ -4847,7 +4848,7 @@ mod tests {
         let xml = r#"
             <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:ctrl>
-                <hp:fieldBegin id="9" type="DATE" name="created date"/>
+                <hp:fieldBegin instId="9" type="DATE" name="created date"/>
               </hp:ctrl>
               <hp:run><hp:t>2026-06-13</hp:t></hp:run>
               <hp:ctrl><hp:fieldEnd beginIDRef="9"/></hp:ctrl>
