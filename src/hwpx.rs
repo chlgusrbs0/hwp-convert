@@ -22,6 +22,7 @@ const HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES: &[&str] =
     &["binaryItemIDRef", "binaryItemIdRef", "binaryItemIDREF"];
 const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
     &["borderFillIDRef", "borderFillIdRef", "borderFillIDREF"];
+const HWPX_CAPTION_PLACEMENT_ATTRIBUTES: &[&str] = &["side", "position", "pos", "placement"];
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
 const HWPX_FIELD_ID_ATTRIBUTES: &[&str] = &["id", "instId"];
 const HWPX_HEADER_FOOTER_APPLY_PAGE_TYPE_ATTRIBUTES: &[&str] =
@@ -2460,11 +2461,7 @@ fn mark_blocks_as_caption(blocks: &mut [Block]) {
 }
 
 fn hwpx_caption_placement(caption_tag: &str) -> HwpxCaptionPlacement {
-    let value = first_non_empty_string([
-        decoded_xml_attribute_value(caption_tag, "side"),
-        decoded_xml_attribute_value(caption_tag, "position"),
-        decoded_xml_attribute_value(caption_tag, "pos"),
-    ]);
+    let value = decoded_xml_attribute_value_any(caption_tag, HWPX_CAPTION_PLACEMENT_ATTRIBUTES);
 
     let normalized = value.as_deref().map(str::to_ascii_uppercase);
 
@@ -4436,7 +4433,7 @@ mod tests {
         let xml = r#"
             <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:tbl>
-                <hp:caption side="TOP">
+                <hp:caption placement="TOP">
                   <hp:subList>
                     <hp:p><hp:run><hp:t>table caption</hp:t></hp:run></hp:p>
                   </hp:subList>
