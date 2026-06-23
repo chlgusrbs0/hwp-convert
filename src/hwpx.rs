@@ -25,6 +25,9 @@ const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
 const HWPX_IMAGE_ALPHA_ATTRIBUTES: &[&str] = &["alpha", "opacity"];
 const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
+const HWPX_HWP_UNIT_VALUE_ATTRIBUTES: &[&str] = &["value", "val"];
+const HWPX_PARAGRAPH_HORIZONTAL_ALIGN_ATTRIBUTES: &[&str] =
+    &["horizontal", "horizontalAlign", "horzAlign"];
 const HWPX_PICTURE_HORIZONTAL_ALIGN_ATTRIBUTES: &[&str] = &["horzAlign", "horizontalAlign"];
 const HWPX_PICTURE_HORIZONTAL_OFFSET_ATTRIBUTES: &[&str] = &["horzOffset", "horizontalOffset"];
 const HWPX_PICTURE_HORIZONTAL_REL_TO_ATTRIBUTES: &[&str] = &["horzRelTo", "horizontalRelTo"];
@@ -1313,32 +1316,35 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
                             .and_then(parse_trimmed);
                 }
                 "align" => {
-                    paragraph_style.style.alignment =
-                        xml_attribute_value(tag.raw, "horizontal").and_then(map_hwpx_alignment);
+                    paragraph_style.style.alignment = xml_attribute_value_any(
+                        tag.raw,
+                        HWPX_PARAGRAPH_HORIZONTAL_ALIGN_ATTRIBUTES,
+                    )
+                    .and_then(map_hwpx_alignment);
                 }
                 "intent" | "indent" => {
                     paragraph_style.style.indent.first_line_pt =
-                        xml_attribute_hwp_units_to_pt(tag.raw, "value");
+                        xml_attribute_hwp_units_to_pt_any(tag.raw, HWPX_HWP_UNIT_VALUE_ATTRIBUTES);
                 }
                 "left" => {
                     paragraph_style.style.indent.left_pt =
-                        xml_attribute_hwp_units_to_pt(tag.raw, "value");
+                        xml_attribute_hwp_units_to_pt_any(tag.raw, HWPX_HWP_UNIT_VALUE_ATTRIBUTES);
                 }
                 "right" => {
                     paragraph_style.style.indent.right_pt =
-                        xml_attribute_hwp_units_to_pt(tag.raw, "value");
+                        xml_attribute_hwp_units_to_pt_any(tag.raw, HWPX_HWP_UNIT_VALUE_ATTRIBUTES);
                 }
                 "prev" => {
                     paragraph_style.style.spacing.before_pt =
-                        xml_attribute_hwp_units_to_pt(tag.raw, "value");
+                        xml_attribute_hwp_units_to_pt_any(tag.raw, HWPX_HWP_UNIT_VALUE_ATTRIBUTES);
                 }
                 "next" => {
                     paragraph_style.style.spacing.after_pt =
-                        xml_attribute_hwp_units_to_pt(tag.raw, "value");
+                        xml_attribute_hwp_units_to_pt_any(tag.raw, HWPX_HWP_UNIT_VALUE_ATTRIBUTES);
                 }
                 "lineSpacing" if !is_hwpx_percent_line_spacing(tag.raw) => {
                     paragraph_style.style.spacing.line_pt =
-                        xml_attribute_hwp_units_to_pt(tag.raw, "value");
+                        xml_attribute_hwp_units_to_pt_any(tag.raw, HWPX_HWP_UNIT_VALUE_ATTRIBUTES);
                 }
                 _ => {}
             }
@@ -3365,6 +3371,12 @@ fn xml_attribute_hwp_units_to_pt(tag: &str, attribute_name: &str) -> Option<Leng
         .and_then(hwp_units_to_pt_option)
 }
 
+fn xml_attribute_hwp_units_to_pt_any(tag: &str, attribute_names: &[&str]) -> Option<LengthPt> {
+    xml_attribute_value_any(tag, attribute_names)
+        .and_then(parse_trimmed::<i32>)
+        .and_then(hwp_units_to_pt_option)
+}
+
 fn hwp_units_to_pt_option(value: i32) -> Option<LengthPt> {
     if value == 0 {
         None
@@ -4973,15 +4985,15 @@ mod tests {
                   <hh:refList>
                     <hh:paraProperties>
                       <hh:paraPr id="0">
-                        <hh:align horizontal="center"/>
+                        <hh:align horizontalAlign="center"/>
                         <hh:margin>
-                          <hh:indent unit="HWPUNIT" value="100"/>
-                          <hh:left unit="HWPUNIT" value="200"/>
-                          <hh:right unit="HWPUNIT" value="300"/>
-                          <hh:prev unit="HWPUNIT" value="400"/>
-                          <hh:next unit="HWPUNIT" value="500"/>
+                          <hh:indent unit="HWPUNIT" val="100"/>
+                          <hh:left unit="HWPUNIT" val="200"/>
+                          <hh:right unit="HWPUNIT" val="300"/>
+                          <hh:prev unit="HWPUNIT" val="400"/>
+                          <hh:next unit="HWPUNIT" val="500"/>
                         </hh:margin>
-                        <hh:lineSpacing type="fixed" value="600" unit="HWPUNIT"/>
+                        <hh:lineSpacing type="fixed" val="600" unit="HWPUNIT"/>
                       </hh:paraPr>
                     </hh:paraProperties>
                   </hh:refList>
@@ -5117,7 +5129,7 @@ mod tests {
                 <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
                   <hp:p>
                     <hp:heading type="bullet" idref="7" level="1"/>
-                    <hp:align horizontal="right"/>
+                    <hp:align horzAlign="right"/>
                     <hp:run><hp:t>direct style paragraph</hp:t></hp:run>
                   </hp:p>
                 </hs:sec>
