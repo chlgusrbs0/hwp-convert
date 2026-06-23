@@ -25,7 +25,15 @@ const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
 const HWPX_IMAGE_ALPHA_ATTRIBUTES: &[&str] = &["alpha", "opacity"];
 const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
+const HWPX_PICTURE_HORIZONTAL_ALIGN_ATTRIBUTES: &[&str] = &["horzAlign", "horizontalAlign"];
+const HWPX_PICTURE_HORIZONTAL_OFFSET_ATTRIBUTES: &[&str] = &["horzOffset", "horizontalOffset"];
+const HWPX_PICTURE_HORIZONTAL_REL_TO_ATTRIBUTES: &[&str] = &["horzRelTo", "horizontalRelTo"];
 const HWPX_TABLE_CELL_HEADER_ATTRIBUTES: &[&str] = &["header", "isHeader"];
+const HWPX_PICTURE_TEXT_WRAP_ATTRIBUTES: &[&str] = &["textWrap", "wrap"];
+const HWPX_PICTURE_TREAT_AS_CHAR_ATTRIBUTES: &[&str] = &["treatAsChar", "treat-as-char"];
+const HWPX_PICTURE_VERTICAL_ALIGN_ATTRIBUTES: &[&str] = &["vertAlign", "verticalAlign"];
+const HWPX_PICTURE_VERTICAL_OFFSET_ATTRIBUTES: &[&str] = &["vertOffset", "verticalOffset"];
+const HWPX_PICTURE_VERTICAL_REL_TO_ATTRIBUTES: &[&str] = &["vertRelTo", "verticalRelTo"];
 const HWPX_VERTICAL_ALIGN_ATTRIBUTES: &[&str] = &["vertAlign", "verticalAlign"];
 const MAX_HWPX_IMAGE_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -2088,20 +2096,28 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
 
     let root = next_xml_tag(pic_xml, 0);
     let text_wrap = root
-        .and_then(|tag| xml_attribute_value(tag.raw, "textWrap"))
+        .and_then(|tag| xml_attribute_value_any(tag.raw, HWPX_PICTURE_TEXT_WRAP_ATTRIBUTES))
         .unwrap_or("SQUARE")
         .trim()
         .to_ascii_uppercase();
     let pos = hwpx_picture_direct_child_tag(pic_xml, "pos");
     if let Some(pos) = pos {
-        let treat_as_char =
-            xml_attribute_value(pos.raw, "treatAsChar").is_some_and(xml_boolean_is_true);
-        let vert_rel_to = xml_attribute_value(pos.raw, "vertRelTo").unwrap_or("PAPER");
-        let vert_align = xml_attribute_value(pos.raw, "vertAlign").unwrap_or("TOP");
-        let vert_offset = xml_attribute_value(pos.raw, "vertOffset").unwrap_or("0");
-        let horz_rel_to = xml_attribute_value(pos.raw, "horzRelTo").unwrap_or("PAPER");
-        let horz_align = xml_attribute_value(pos.raw, "horzAlign").unwrap_or("LEFT");
-        let horz_offset = xml_attribute_value(pos.raw, "horzOffset").unwrap_or("0");
+        let treat_as_char = xml_attribute_value_any(pos.raw, HWPX_PICTURE_TREAT_AS_CHAR_ATTRIBUTES)
+            .is_some_and(xml_boolean_is_true);
+        let vert_rel_to = xml_attribute_value_any(pos.raw, HWPX_PICTURE_VERTICAL_REL_TO_ATTRIBUTES)
+            .unwrap_or("PAPER");
+        let vert_align = xml_attribute_value_any(pos.raw, HWPX_PICTURE_VERTICAL_ALIGN_ATTRIBUTES)
+            .unwrap_or("TOP");
+        let vert_offset = xml_attribute_value_any(pos.raw, HWPX_PICTURE_VERTICAL_OFFSET_ATTRIBUTES)
+            .unwrap_or("0");
+        let horz_rel_to =
+            xml_attribute_value_any(pos.raw, HWPX_PICTURE_HORIZONTAL_REL_TO_ATTRIBUTES)
+                .unwrap_or("PAPER");
+        let horz_align = xml_attribute_value_any(pos.raw, HWPX_PICTURE_HORIZONTAL_ALIGN_ATTRIBUTES)
+            .unwrap_or("LEFT");
+        let horz_offset =
+            xml_attribute_value_any(pos.raw, HWPX_PICTURE_HORIZONTAL_OFFSET_ATTRIBUTES)
+                .unwrap_or("0");
         let has_layout = !treat_as_char
             || text_wrap != "SQUARE"
             || vert_rel_to != "PAPER"
@@ -5687,7 +5703,7 @@ mod tests {
             },
         );
         let xml = r#"
-            <hp:pic textWrap="TOP_AND_BOTTOM">
+            <hp:pic wrap="TOP_AND_BOTTOM">
               <hp:caption><hp:pic><hp:rotationInfo angle="1234"/></hp:pic></hp:caption>
               <hp:flip horizontal="1" vertical="false"/>
               <hp:rotationInfo angle="9000"/>
@@ -5695,8 +5711,8 @@ mod tests {
               <hp:imgClip left="10" right="900" top="20" bottom="700"/>
               <hp:imgDim dimWidth="1000" dimHeight="800"/>
               <hp:effects><hp:shadow/><hp:glow/><hp:shadow/></hp:effects>
-              <hp:pos treatAsChar="0" vertRelTo="PAGE" vertAlign="CENTER" vertOffset="120"
-                      horzRelTo="COLUMN" horzAlign="RIGHT" horzOffset="240"/>
+              <hp:pos treat-as-char="0" verticalRelTo="PAGE" verticalAlign="CENTER" verticalOffset="120"
+                      horizontalRelTo="COLUMN" horizontalAlign="RIGHT" horizontalOffset="240"/>
             </hp:pic>
         "#;
 
