@@ -28,6 +28,10 @@ const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
 const HWPX_HWP_UNIT_VALUE_ATTRIBUTES: &[&str] = &["value", "val"];
 const HWPX_PARAGRAPH_HORIZONTAL_ALIGN_ATTRIBUTES: &[&str] =
     &["horizontal", "horizontalAlign", "horzAlign"];
+const HWPX_TEXT_BACKGROUND_COLOR_ATTRIBUTES: &[&str] = &["shadeColor", "backgroundColor"];
+const HWPX_TEXT_COLOR_ATTRIBUTES: &[&str] = &["textColor", "color"];
+const HWPX_TEXT_EMPHASIS_DOT_ATTRIBUTES: &[&str] = &["symMark", "symbolMark"];
+const HWPX_TEXT_FONT_SIZE_ATTRIBUTES: &[&str] = &["height", "fontSize"];
 const HWPX_PICTURE_HORIZONTAL_ALIGN_ATTRIBUTES: &[&str] = &["horzAlign", "horizontalAlign"];
 const HWPX_PICTURE_HORIZONTAL_OFFSET_ATTRIBUTES: &[&str] = &["horzOffset", "horizontalOffset"];
 const HWPX_PICTURE_HORIZONTAL_REL_TO_ATTRIBUTES: &[&str] = &["horzRelTo", "horizontalRelTo"];
@@ -1099,12 +1103,19 @@ fn extract_hwpx_text_style(
     font_faces: &[Vec<String>],
 ) -> TextStyle {
     let mut style = TextStyle {
-        emphasis_dot: xml_attribute_value(char_pr_tag, "symMark")
+        emphasis_dot: xml_attribute_value_any(char_pr_tag, HWPX_TEXT_EMPHASIS_DOT_ATTRIBUTES)
             .is_some_and(hwpx_style_value_is_enabled),
-        font_size_pt: xml_attribute_hwp_units_to_pt(char_pr_tag, "height"),
-        color: xml_attribute_value(char_pr_tag, "textColor").and_then(parse_hwpx_hex_color),
-        background_color: xml_attribute_value(char_pr_tag, "shadeColor")
+        font_size_pt: xml_attribute_hwp_units_to_pt_any(
+            char_pr_tag,
+            HWPX_TEXT_FONT_SIZE_ATTRIBUTES,
+        ),
+        color: xml_attribute_value_any(char_pr_tag, HWPX_TEXT_COLOR_ATTRIBUTES)
             .and_then(parse_hwpx_hex_color),
+        background_color: xml_attribute_value_any(
+            char_pr_tag,
+            HWPX_TEXT_BACKGROUND_COLOR_ATTRIBUTES,
+        )
+        .and_then(parse_hwpx_hex_color),
         ..Default::default()
     };
     let mut cursor = 0usize;
@@ -3365,12 +3376,6 @@ fn map_hwpx_vertical_align(value: &str) -> Option<VerticalAlign> {
     })
 }
 
-fn xml_attribute_hwp_units_to_pt(tag: &str, attribute_name: &str) -> Option<LengthPt> {
-    xml_attribute_value(tag, attribute_name)
-        .and_then(parse_trimmed::<i32>)
-        .and_then(hwp_units_to_pt_option)
-}
-
 fn xml_attribute_hwp_units_to_pt_any(tag: &str, attribute_names: &[&str]) -> Option<LengthPt> {
     xml_attribute_value_any(tag, attribute_names)
         .and_then(parse_trimmed::<i32>)
@@ -5246,7 +5251,7 @@ mod tests {
                       <hh:fontface lang="HANGUL"><hh:font id="0" face="Noto Sans KR"/></hh:fontface>
                     </hh:fontfaces>
                     <hh:charProperties>
-                      <hh:charPr id="7" height="1200" textColor="010203" shadeColor="0x040506" symMark="DOT_ABOVE">
+                      <hh:charPr id="7" fontSize="1200" color="010203" backgroundColor="0x040506" symbolMark="DOT_ABOVE">
                         <hh:fontRef hangul="0"/>
                         <hh:bold/>
                         <hh:italic/>
