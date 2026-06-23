@@ -2141,11 +2141,11 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
     });
     let dimensions = hwpx_picture_direct_child_tag(pic_xml, "imgDim").and_then(|tag| {
         Some([
-            xml_attribute_value(tag.raw, "dimwidth")?
+            xml_attribute_value_any(tag.raw, &["dimwidth", "dimWidth"])?
                 .trim()
                 .parse::<i64>()
                 .ok()?,
-            xml_attribute_value(tag.raw, "dimheight")?
+            xml_attribute_value_any(tag.raw, &["dimheight", "dimHeight"])?
                 .trim()
                 .parse::<i64>()
                 .ok()?,
@@ -5691,7 +5691,7 @@ mod tests {
               <hp:rotationInfo angle="9000"/>
               <hc:img binaryItemIDRef="image1"/>
               <hp:imgClip left="10" right="900" top="20" bottom="700"/>
-              <hp:imgDim dimwidth="1000" dimheight="800"/>
+              <hp:imgDim dimWidth="1000" dimHeight="800"/>
               <hp:effects><hp:shadow/><hp:glow/><hp:shadow/></hp:effects>
               <hp:pos treatAsChar="0" vertRelTo="PAGE" vertAlign="CENTER" vertOffset="120"
                       horzRelTo="COLUMN" horzAlign="RIGHT" horzOffset="240"/>
