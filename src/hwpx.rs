@@ -35,6 +35,10 @@ const HWPX_PICTURE_VERTICAL_ALIGN_ATTRIBUTES: &[&str] = &["vertAlign", "vertical
 const HWPX_PICTURE_VERTICAL_OFFSET_ATTRIBUTES: &[&str] = &["vertOffset", "verticalOffset"];
 const HWPX_PICTURE_VERTICAL_REL_TO_ATTRIBUTES: &[&str] = &["vertRelTo", "verticalRelTo"];
 const HWPX_VERTICAL_ALIGN_ATTRIBUTES: &[&str] = &["vertAlign", "verticalAlign"];
+const HWPX_TABLE_CELL_COL_ADDR_ATTRIBUTES: &[&str] = &["colAddr", "coladdr", "colIndex"];
+const HWPX_TABLE_CELL_COL_SPAN_ATTRIBUTES: &[&str] = &["colSpan", "colspan", "col-span"];
+const HWPX_TABLE_CELL_ROW_ADDR_ATTRIBUTES: &[&str] = &["rowAddr", "rowaddr", "rowIndex"];
+const HWPX_TABLE_CELL_ROW_SPAN_ATTRIBUTES: &[&str] = &["rowSpan", "rowspan", "row-span"];
 const MAX_HWPX_IMAGE_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1507,12 +1511,11 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
 }
 
 fn hwpx_table_row_addr(row_xml: &str) -> Option<u32> {
-    root_xml_attribute_u32_any(row_xml, "tr", &["rowAddr", "rowaddr"]).or_else(|| {
+    root_xml_attribute_u32_any(row_xml, "tr", HWPX_TABLE_CELL_ROW_ADDR_ATTRIBUTES).or_else(|| {
         let mut cursor = 0usize;
         while let Some(tag) = next_xml_tag(row_xml, cursor) {
             if tag.name == "tc" && !tag.is_closing {
-                return xml_attribute_value(tag.raw, "rowAddr")
-                    .or_else(|| xml_attribute_value(tag.raw, "rowaddr"))
+                return xml_attribute_value_any(tag.raw, HWPX_TABLE_CELL_ROW_ADDR_ATTRIBUTES)
                     .and_then(parse_trimmed);
             }
             cursor = tag.end;
@@ -1563,7 +1566,8 @@ fn extract_table_cells_from_row_xml(
             continue;
         };
         let cell_xml = &row_xml[tag.start..cell_end];
-        let col_addr = root_xml_attribute_u32_any(cell_xml, "tc", &["colAddr", "coladdr"]);
+        let col_addr =
+            root_xml_attribute_u32_any(cell_xml, "tc", HWPX_TABLE_CELL_COL_ADDR_ATTRIBUTES);
         cells.push((
             col_addr,
             next_order,
@@ -1616,8 +1620,8 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
     };
 
     TableCell {
-        row_span: hwpx_table_cell_span(cell_xml, &["rowSpan", "rowspan"]),
-        col_span: hwpx_table_cell_span(cell_xml, &["colSpan", "colspan"]),
+        row_span: hwpx_table_cell_span(cell_xml, HWPX_TABLE_CELL_ROW_SPAN_ATTRIBUTES),
+        col_span: hwpx_table_cell_span(cell_xml, HWPX_TABLE_CELL_COL_SPAN_ATTRIBUTES),
         is_header,
         blocks: extract_section_xml_blocks(cell_xml, context),
         style: TableCellStyle {
@@ -4152,7 +4156,7 @@ mod tests {
         let xml = r#"
             <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:tr>
-                <hp:tc rowSpan=" 3 " colSpan=" 2 ">
+                <hp:tc row-span=" 3 " col-span=" 2 ">
                   <hp:subList>
                     <hp:p><hp:run><hp:t>merged cell</hp:t></hp:run></hp:p>
                   </hp:subList>
@@ -4202,12 +4206,12 @@ mod tests {
         let xml = r#"
             <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:tr>
-                <hp:tc colAddr="1">
+                <hp:tc colIndex="1">
                   <hp:subList>
                     <hp:p><hp:run><hp:t>second cell</hp:t></hp:run></hp:p>
                   </hp:subList>
                 </hp:tc>
-                <hp:tc colAddr="0">
+                <hp:tc colIndex="0">
                   <hp:subList>
                     <hp:p><hp:run><hp:t>first cell</hp:t></hp:run></hp:p>
                   </hp:subList>
@@ -4233,14 +4237,14 @@ mod tests {
     fn orders_hwpx_table_rows_by_row_addr_when_present() {
         let xml = r#"
             <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-              <hp:tr rowAddr="1">
+              <hp:tr rowIndex="1">
                 <hp:tc>
                   <hp:subList>
                     <hp:p><hp:run><hp:t>second row</hp:t></hp:run></hp:p>
                   </hp:subList>
                 </hp:tc>
               </hp:tr>
-              <hp:tr rowAddr="0">
+              <hp:tr rowIndex="0">
                 <hp:tc>
                   <hp:subList>
                     <hp:p><hp:run><hp:t>first row</hp:t></hp:run></hp:p>
