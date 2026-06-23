@@ -18,8 +18,14 @@ use crate::ir::{
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
 const CONTENT_HPF_PATH: &str = "Contents/content.hpf";
 const HEADER_XML_PATH: &str = "Contents/header.xml";
-const HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES: &[&str] =
-    &["binaryItemIDRef", "binaryItemIdRef", "binaryItemIDREF"];
+const HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES: &[&str] = &[
+    "binaryItemIDRef",
+    "binaryItemIdRef",
+    "binaryItemIDREF",
+    "binaryItemId",
+    "binaryItemID",
+    "binItem",
+];
 const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
     &["borderFillIDRef", "borderFillIdRef", "borderFillIDREF"];
 const HWPX_CAPTION_PLACEMENT_ATTRIBUTES: &[&str] = &["side", "position", "pos", "placement"];
@@ -5493,7 +5499,7 @@ mod tests {
                       <hp:pic>
                         <hp:altText><hp:run><hp:t>sample image</hp:t></hp:run></hp:altText>
                         <hp:sz w="7500" h="3750"/>
-                        <hp:img><hc:img binaryItemIdRef="image1" effect="GRAY_SCALE"/></hp:img>
+                        <hp:img><hc:img binItem="image1" effect="GRAY_SCALE"/></hp:img>
                         <hp:caption>
                           <hp:subList>
                             <hp:p><hp:run><hp:t>image caption</hp:t></hp:run></hp:p>
