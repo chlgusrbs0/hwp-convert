@@ -24,6 +24,8 @@ const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
     &["borderFillIDRef", "borderFillIdRef", "borderFillIDREF"];
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
 const HWPX_FIELD_ID_ATTRIBUTES: &[&str] = &["id", "instId"];
+const HWPX_HEADER_FOOTER_APPLY_PAGE_TYPE_ATTRIBUTES: &[&str] =
+    &["applyPageType", "pageType", "applyTo"];
 const HWPX_IMAGE_ALPHA_ATTRIBUTES: &[&str] = &["alpha", "opacity"];
 const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
 const HWPX_IMAGE_BORDER_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
@@ -1930,8 +1932,9 @@ fn push_hwpx_structural_control(
 }
 
 fn hwpx_header_footer_placement(control_xml: &str) -> HeaderFooterPlacement {
-    let value = root_xml_attribute_value(control_xml, "applyPageType")
-        .map(|value| value.trim().to_ascii_uppercase());
+    let value =
+        root_xml_attribute_value_any(control_xml, HWPX_HEADER_FOOTER_APPLY_PAGE_TYPE_ATTRIBUTES)
+            .map(|value| value.trim().to_ascii_uppercase());
 
     match value.as_deref() {
         Some("EVEN") => HeaderFooterPlacement::EvenPage,
@@ -3266,6 +3269,12 @@ fn root_xml_attribute_value<'a>(xml: &'a str, attribute_name: &str) -> Option<&'
         return None;
     }
     xml_attribute_value(tag.raw, attribute_name)
+}
+
+fn root_xml_attribute_value_any<'a>(xml: &'a str, attribute_names: &[&str]) -> Option<&'a str> {
+    attribute_names
+        .iter()
+        .find_map(|attribute_name| root_xml_attribute_value(xml, attribute_name))
 }
 
 fn decoded_root_xml_attribute_value(xml: &str, attribute_name: &str) -> Option<String> {
@@ -6332,14 +6341,14 @@ mod tests {
                   <hp:p>
                     <hp:run><hp:t>body text</hp:t></hp:run>
                     <hp:ctrl>
-                      <hp:header applyPageType="odd">
+                      <hp:header pageType="odd">
                         <hp:subList>
                           <hp:p><hp:run><hp:t>header text</hp:t></hp:run></hp:p>
                         </hp:subList>
                       </hp:header>
                     </hp:ctrl>
                     <hp:ctrl>
-                      <hp:footer applyPageType="even">
+                      <hp:footer applyTo="even">
                         <hp:subList>
                           <hp:p><hp:run><hp:t>footer text</hp:t></hp:run></hp:p>
                         </hp:subList>
