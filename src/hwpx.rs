@@ -25,6 +25,9 @@ const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
 const HWPX_IMAGE_ALPHA_ATTRIBUTES: &[&str] = &["alpha", "opacity"];
 const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
+const HWPX_IMAGE_BORDER_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
+const HWPX_IMAGE_BORDER_STYLE_ATTRIBUTES: &[&str] = &["style", "type"];
+const HWPX_IMAGE_BORDER_WIDTH_ATTRIBUTES: &[&str] = &["width", "w"];
 const HWPX_HWP_UNIT_VALUE_ATTRIBUTES: &[&str] = &["value", "val"];
 const HWPX_PARAGRAPH_HORIZONTAL_ALIGN_ATTRIBUTES: &[&str] =
     &["horizontal", "horizontalAlign", "horzAlign"];
@@ -2072,14 +2075,14 @@ fn extract_hwpx_image_from_pic_xml(
 
 fn hwpx_picture_border(pic_xml: &str) -> Option<Border> {
     let tag = hwpx_picture_direct_child_tag(pic_xml, "lineShape")?;
-    let style_name = xml_attribute_value(tag.raw, "style")
+    let style_name = xml_attribute_value_any(tag.raw, HWPX_IMAGE_BORDER_STYLE_ATTRIBUTES)
         .unwrap_or("SOLID")
         .trim()
         .to_ascii_uppercase();
     if style_name == "NONE" {
         return None;
     }
-    let width = xml_attribute_value(tag.raw, "width")
+    let width = xml_attribute_value_any(tag.raw, HWPX_IMAGE_BORDER_WIDTH_ATTRIBUTES)
         .and_then(|value| value.trim().parse().ok())
         .and_then(hwp_units_to_px_option)?;
     let style = match style_name.as_str() {
@@ -2092,7 +2095,8 @@ fn hwpx_picture_border(pic_xml: &str) -> Option<Border> {
     Some(Border {
         width,
         style,
-        color: xml_attribute_value(tag.raw, "color").and_then(parse_hwpx_hex_color),
+        color: xml_attribute_value_any(tag.raw, HWPX_IMAGE_BORDER_COLOR_ATTRIBUTES)
+            .and_then(parse_hwpx_hex_color),
     })
 }
 
@@ -5676,7 +5680,7 @@ mod tests {
         );
         let xml = r##"
             <hp:pic>
-              <hp:lineShape color="#123456" width="150" style="DASH_DOT"/>
+              <hp:lineShape lineColor="#123456" w="150" type="DASH_DOT"/>
               <hc:img binaryItemIDRef="image1" effect="REAL_PIC"/>
             </hp:pic>
         "##;
