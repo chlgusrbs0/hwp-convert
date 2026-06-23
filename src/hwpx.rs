@@ -50,6 +50,8 @@ const HWPX_TABLE_CELL_COL_ADDR_ATTRIBUTES: &[&str] = &["colAddr", "coladdr", "co
 const HWPX_TABLE_CELL_COL_SPAN_ATTRIBUTES: &[&str] = &["colSpan", "colspan", "col-span"];
 const HWPX_TABLE_CELL_ROW_ADDR_ATTRIBUTES: &[&str] = &["rowAddr", "rowaddr", "rowIndex"];
 const HWPX_TABLE_CELL_ROW_SPAN_ATTRIBUTES: &[&str] = &["rowSpan", "rowspan", "row-span"];
+const HWPX_WIDTH_ATTRIBUTES: &[&str] = &["width", "w"];
+const HWPX_HEIGHT_ATTRIBUTES: &[&str] = &["height", "h"];
 const MAX_HWPX_IMAGE_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1631,8 +1633,8 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
         HWPX_VERTICAL_ALIGN_ATTRIBUTES,
     )
     .and_then(map_hwpx_vertical_align);
-    let cell_size = |attribute: &str| {
-        root_or_direct_child_xml_attribute_u32(cell_xml, "tc", &["cellSz"], attribute)
+    let cell_size = |attributes: &[&str]| {
+        root_or_direct_child_xml_attribute_u32_any(cell_xml, "tc", &["cellSz"], attributes)
             .and_then(hwp_units_to_px_option)
     };
     let cell_margin = |attribute: &str| {
@@ -1648,8 +1650,8 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
         style: TableCellStyle {
             background_color,
             vertical_align,
-            width: cell_size("width"),
-            height: cell_size("height"),
+            width: cell_size(HWPX_WIDTH_ATTRIBUTES),
+            height: cell_size(HWPX_HEIGHT_ATTRIBUTES),
             padding_top: cell_margin("top"),
             padding_right: cell_margin("right"),
             padding_bottom: cell_margin("bottom"),
@@ -4201,7 +4203,7 @@ mod tests {
               <hp:tr>
                 <hp:tc>
                   <hp:cellPr isHeader="true"/>
-                  <hp:cellSz width="7500" height="1500"/>
+                  <hp:cellSz w="7500" h="1500"/>
                   <hp:cellMargin left="150" right="150" top="75" bottom="75"/>
                   <hp:subList verticalAlign="CENTER">
                     <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
