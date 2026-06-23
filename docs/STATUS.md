@@ -83,7 +83,7 @@ HWPX paired fixture는 매칭되는 HWP fixture와 같은 feature-level assertio
 
 ### HWPX 폴백 파서 (`src/hwpx.rs`)
 
-rHWP 파싱이 실패하거나 HWPX를 빈 semantic document로 매핑하면, hwp-convert는 `Preview/PrvText.txt`로 떨어지기 전에 구조적 `Contents/section*.xml` 폴백을 시도한다. 이 section XML 폴백은 현재 문단 텍스트, inline line break/tab, sections, 표(셀 크기·여백·헤더 포함), caption, image resource, list 메타데이터, link, field/bookmark, header/footer, note, equation, shape, chart, unsupported-control placeholder, 일부 basic style을 복구한다. preview text 폴백은 평문만 복구한다.
+rHWP 파싱이 실패하거나 HWPX를 빈 semantic document로 매핑하면, hwp-convert는 `Preview/PrvText.txt`로 떨어지기 전에 구조적 `Contents/section*.xml` 폴백을 시도한다. 이 section XML 폴백은 현재 문단 텍스트, inline line break/tab, sections, 표(셀 크기·여백·헤더·수직정렬·borderFill 기반 배경/테두리 포함), caption, image resource, list 메타데이터, link, field/bookmark, header/footer, note, equation, shape, chart, unsupported-control placeholder, 일부 basic style을 복구한다. preview text 폴백은 평문만 복구한다.
 
 > 주의 (정직성): 이 폴백 파서의 *복구 능력*은 위처럼 넓지만, 그것이 곧 HWPX *지원*을 뜻하지 않는다. 위 "채택된 paired fixture"가 보여주듯 회귀 테스트로 parity가 검증된 HWPX 요소는 아직 `basic_text`, `list`뿐이다. 폴백이 복구한다고 fixture 없이 "지원"이라 쓰지 않는다.
 

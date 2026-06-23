@@ -20,7 +20,11 @@ const CONTENT_HPF_PATH: &str = "Contents/content.hpf";
 const HEADER_XML_PATH: &str = "Contents/header.xml";
 const HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES: &[&str] =
     &["binaryItemIDRef", "binaryItemIdRef", "binaryItemIDREF"];
+const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
+    &["borderFillIDRef", "borderFillIdRef", "borderFillIDREF"];
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
+const HWPX_TABLE_CELL_HEADER_ATTRIBUTES: &[&str] = &["header", "isHeader"];
+const HWPX_VERTICAL_ALIGN_ATTRIBUTES: &[&str] = &["vertAlign", "verticalAlign"];
 const MAX_HWPX_IMAGE_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1478,9 +1482,13 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
     }
     let rows = rows.into_iter().map(|(_, _, row)| row).collect();
 
-    let background_color =
-        root_or_direct_child_xml_attribute_u32(table_xml, "tbl", &["tblPr"], "borderFillIDRef")
-            .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
+    let background_color = root_or_direct_child_xml_attribute_u32_any(
+        table_xml,
+        "tbl",
+        &["tblPr"],
+        HWPX_BORDER_FILL_ID_REF_ATTRIBUTES,
+    )
+    .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
 
     Some(Table {
         rows,
@@ -1563,18 +1571,31 @@ fn extract_table_cells_from_row_xml(
 }
 
 fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext) -> TableCell {
-    let border_fill_id =
-        root_or_direct_child_xml_attribute_u32(cell_xml, "tc", &["cellPr"], "borderFillIDRef");
+    let border_fill_id = root_or_direct_child_xml_attribute_u32_any(
+        cell_xml,
+        "tc",
+        &["cellPr"],
+        HWPX_BORDER_FILL_ID_REF_ATTRIBUTES,
+    );
     let background_color = border_fill_id.and_then(|id| context.border_fill_background_color(id));
     let [border_left, border_right, border_top, border_bottom] = border_fill_id
         .map(|id| context.border_fill_borders(id))
         .unwrap_or_default();
 
-    let is_header = root_xml_attribute_value(cell_xml, "header")
-        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
-    let vertical_align =
-        root_or_direct_child_xml_attribute_value(cell_xml, "tc", &["subList"], "vertAlign")
-            .and_then(map_hwpx_vertical_align);
+    let is_header = root_or_direct_child_xml_attribute_value_any(
+        cell_xml,
+        "tc",
+        &["cellPr"],
+        HWPX_TABLE_CELL_HEADER_ATTRIBUTES,
+    )
+    .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    let vertical_align = root_or_direct_child_xml_attribute_value_any(
+        cell_xml,
+        "tc",
+        &["subList"],
+        HWPX_VERTICAL_ALIGN_ATTRIBUTES,
+    )
+    .and_then(map_hwpx_vertical_align);
     let cell_size = |attribute: &str| {
         root_or_direct_child_xml_attribute_u32(cell_xml, "tc", &["cellSz"], attribute)
             .and_then(hwp_units_to_px_option)
@@ -3217,6 +3238,28 @@ fn root_or_direct_child_xml_attribute_u32(
         .and_then(parse_trimmed)
 }
 
+fn root_or_direct_child_xml_attribute_u32_any(
+    xml: &str,
+    root_name: &str,
+    child_names: &[&str],
+    attribute_names: &[&str],
+) -> Option<u32> {
+    attribute_names.iter().find_map(|attribute_name| {
+        root_or_direct_child_xml_attribute_u32(xml, root_name, child_names, attribute_name)
+    })
+}
+
+fn root_or_direct_child_xml_attribute_value_any<'a>(
+    xml: &'a str,
+    root_name: &str,
+    child_names: &[&str],
+    attribute_names: &[&str],
+) -> Option<&'a str> {
+    attribute_names.iter().find_map(|attribute_name| {
+        root_or_direct_child_xml_attribute_value(xml, root_name, child_names, attribute_name)
+    })
+}
+
 fn root_or_direct_child_xml_attribute_value<'a>(
     xml: &'a str,
     root_name: &str,
@@ -4112,10 +4155,11 @@ mod tests {
         let xml = r#"
             <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:tr>
-                <hp:tc header="1">
+                <hp:tc>
+                  <hp:cellPr isHeader="true"/>
                   <hp:cellSz width="7500" height="1500"/>
                   <hp:cellMargin left="150" right="150" top="75" bottom="75"/>
-                  <hp:subList vertAlign="CENTER">
+                  <hp:subList verticalAlign="CENTER">
                     <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
                   </hp:subList>
                 </hp:tc>
@@ -5302,9 +5346,11 @@ mod tests {
                 "Contents/section0.xml",
                 r#"
                 <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-                  <hp:tbl borderFillIDRef="3">
+                  <hp:tbl>
+                    <hp:tblPr borderFillIdRef="3"/>
                     <hp:tr>
-                      <hp:tc borderFillIDRef="4">
+                      <hp:tc>
+                        <hp:cellPr borderFillIDREF="4"/>
                         <hp:subList>
                           <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
                         </hp:subList>
