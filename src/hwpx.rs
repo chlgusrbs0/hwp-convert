@@ -2020,7 +2020,7 @@ fn extract_hwpx_equation_from_xml(
 ) -> Equation {
     let content = first_non_empty_string([
         decoded_root_xml_attribute_value_any(equation_xml, HWPX_EQUATION_CONTENT_ATTRIBUTES),
-        first_hwpx_direct_child_element_text(equation_xml, &["script", "math", "text"]),
+        first_hwpx_direct_child_element_text(equation_xml, HWPX_EQUATION_CONTENT_ATTRIBUTES),
         non_empty_string_owned(inlines_to_plain_text(&extract_inlines_from_xml_fragment(
             equation_xml,
             context,
@@ -4617,7 +4617,7 @@ mod tests {
                 <hp:run><hp:t>before image</hp:t></hp:run>
                 <hp:ctrl><hp:pic><hp:imgRect/></hp:pic></hp:ctrl>
                 <hp:run><hp:t>after image</hp:t></hp:run>
-                <hp:ctrl><hp:equation formula="x + y"/></hp:ctrl>
+                <hp:ctrl><hp:equation><hp:formula>x + y</hp:formula></hp:equation></hp:ctrl>
                 <hp:ctrl><hp:chart chartTitle="Sales"/></hp:ctrl>
               </hp:p>
             </hs:sec>
