@@ -29,6 +29,7 @@ const HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES: &[&str] = &[
 const HWPX_BORDER_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
 const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
     &["borderFillIDRef", "borderFillIdRef", "borderFillIDREF"];
+const HWPX_BORDER_STYLE_ATTRIBUTES: &[&str] = &["type", "style"];
 const HWPX_BORDER_WIDTH_ATTRIBUTES: &[&str] = &["width", "w"];
 const HWPX_CAPTION_PLACEMENT_ATTRIBUTES: &[&str] = &["side", "position", "pos", "placement"];
 const HWPX_CHART_TITLE_ATTRIBUTES: &[&str] =
@@ -1271,7 +1272,7 @@ fn extract_hwpx_border(border_fill_xml: &str, border_name: &str) -> Option<Borde
             continue;
         }
 
-        let border_type = xml_attribute_value(tag.raw, "type")?.trim();
+        let border_type = xml_attribute_value_any(tag.raw, HWPX_BORDER_STYLE_ATTRIBUTES)?.trim();
         if border_type.eq_ignore_ascii_case("none") {
             return None;
         }
@@ -5502,7 +5503,7 @@ mod tests {
                         <hh:leftBorder type="SOLID" width="0.12 mm" color="#010203"/>
                         <hh:rightBorder type="DASH" w="1 pt" lineColor="#040506"/>
                         <hh:topBorder type="DOT" w="2 px" lineColor="#070809"/>
-                        <hh:bottomBorder type="DOUBLE_SLIM" width="0.2 mm" color="#0A0B0C"/>
+                        <hh:bottomBorder style="DOUBLE_SLIM" width="0.2 mm" color="#0A0B0C"/>
                         <hc:fillBrush><hc:winBrush fillColor="0X445566"/></hc:fillBrush>
                       </hh:borderFill>
                     </hh:borderFills>
