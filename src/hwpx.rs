@@ -38,6 +38,16 @@ const HWPX_DECORATION_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
 const HWPX_DESCRIPTION_ATTRIBUTES: &[&str] = &["description", "desc", "alt", "altText", "name"];
 const HWPX_EQUATION_CONTENT_ATTRIBUTES: &[&str] = &["script", "formula", "text", "equation"];
 const HWPX_FILL_COLOR_ATTRIBUTES: &[&str] = &["faceColor", "backgroundColor", "fillColor"];
+const HWPX_FALLBACK_TEXT_ATTRIBUTES: &[&str] = &[
+    "description",
+    "desc",
+    "alt",
+    "altText",
+    "name",
+    "title",
+    "text",
+    "value",
+];
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
 const HWPX_FIELD_COMMAND_ATTRIBUTES: &[&str] = &["command", "cmd"];
 const HWPX_FIELD_ID_ATTRIBUTES: &[&str] = &["id", "instId"];
@@ -2512,8 +2522,13 @@ fn unknown_hwpx_object_block(
     object_xml: &str,
     context: &mut HwpxFallbackContext,
 ) -> UnknownBlock {
-    let object_text =
-        inlines_to_plain_text(&extract_inlines_from_xml_fragment(object_xml, context));
+    let object_text = first_non_empty_string([
+        non_empty_string_owned(inlines_to_plain_text(&extract_inlines_from_xml_fragment(
+            object_xml, context,
+        ))),
+        decoded_root_xml_attribute_value_any(object_xml, HWPX_FALLBACK_TEXT_ATTRIBUTES),
+    ])
+    .unwrap_or_default();
     let fallback_text = if object_text.is_empty() {
         format!("[{object_kind}]")
     } else {
@@ -2536,8 +2551,14 @@ fn unknown_hwpx_control_block(
 ) -> UnknownBlock {
     let control_kind =
         first_hwpx_control_child_name(control_xml).unwrap_or_else(|| "unknown".to_string());
-    let control_text =
-        inlines_to_plain_text(&extract_inlines_from_xml_fragment(control_xml, context));
+    let control_text = first_non_empty_string([
+        non_empty_string_owned(inlines_to_plain_text(&extract_inlines_from_xml_fragment(
+            control_xml,
+            context,
+        ))),
+        first_hwpx_control_child_attribute_value(control_xml, HWPX_FALLBACK_TEXT_ATTRIBUTES),
+    ])
+    .unwrap_or_default();
     let fallback_text = if control_text.is_empty() {
         format!("[control: {control_kind}]")
     } else {
@@ -2560,6 +2581,22 @@ fn first_hwpx_control_child_name(control_xml: &str) -> Option<String> {
     while let Some(tag) = next_xml_tag(control_xml, cursor) {
         if !tag.is_closing && tag.name != "ctrl" {
             return Some(tag.name.to_string());
+        }
+        cursor = tag.end;
+    }
+
+    None
+}
+
+fn first_hwpx_control_child_attribute_value(
+    control_xml: &str,
+    attribute_names: &[&str],
+) -> Option<String> {
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(control_xml, cursor) {
+        if !tag.is_closing && tag.name != "ctrl" {
+            return decoded_xml_attribute_value_any(tag.raw, attribute_names);
         }
         cursor = tag.end;
     }
@@ -4735,7 +4772,7 @@ mod tests {
         let xml = r#"
             <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:p>
-                <hp:ctrl><hp:unknownControl id="7"/></hp:ctrl>
+                <hp:ctrl><hp:unknownControl id="7" title="opaque control"/></hp:ctrl>
               </hp:p>
             </hs:sec>
         "#;
@@ -4748,7 +4785,8 @@ mod tests {
             &blocks[0],
             Block::Unknown(unknown)
                 if unknown.kind == "hwpx:control:unknownControl"
-                    && unknown.fallback_text.as_deref() == Some("[control: unknownControl]")
+                    && unknown.fallback_text.as_deref()
+                        == Some("[control: unknownControl]\nopaque control")
         ));
     }
 
