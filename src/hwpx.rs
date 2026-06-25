@@ -71,7 +71,9 @@ const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
 const HWPX_IMAGE_BORDER_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
 const HWPX_IMAGE_BORDER_STYLE_ATTRIBUTES: &[&str] = &["style", "type"];
 const HWPX_IMAGE_BORDER_WIDTH_ATTRIBUTES: &[&str] = &["width", "w"];
+const HWPX_IMAGE_CONTRAST_ATTRIBUTES: &[&str] = &["contrast", "contrastValue"];
 const HWPX_IMAGE_CROP_BOTTOM_ATTRIBUTES: &[&str] = &["bottom", "b"];
+const HWPX_IMAGE_EFFECT_ATTRIBUTES: &[&str] = &["effect", "pictureEffect"];
 const HWPX_IMAGE_CROP_LEFT_ATTRIBUTES: &[&str] = &["left", "l"];
 const HWPX_IMAGE_CROP_RIGHT_ATTRIBUTES: &[&str] = &["right", "r"];
 const HWPX_IMAGE_CROP_TOP_ATTRIBUTES: &[&str] = &["top", "t"];
@@ -2363,12 +2365,12 @@ fn hwpx_pic_image_attributes(
         }
 
         return HwpxPictureImageAttributes {
-            effect: xml_attribute_value(tag.raw, "effect")
+            effect: xml_attribute_value_any(tag.raw, HWPX_IMAGE_EFFECT_ATTRIBUTES)
                 .and_then(|value| non_empty_string_owned(value.trim().to_ascii_uppercase())),
             brightness: xml_attribute_value_any(tag.raw, HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES)
                 .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(0),
-            contrast: xml_attribute_value(tag.raw, "contrast")
+            contrast: xml_attribute_value_any(tag.raw, HWPX_IMAGE_CONTRAST_ATTRIBUTES)
                 .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(0),
             alpha: xml_attribute_value_any(tag.raw, HWPX_IMAGE_ALPHA_ATTRIBUTES)
@@ -5693,7 +5695,7 @@ mod tests {
             },
         );
         let image = extract_hwpx_image_from_pic_xml(
-            r#"<hp:pic><hp:img><hc:img binaryItemIDRef="image1" brightness="12" contrast="-4" effect="REAL_PIC"/></hp:img></hp:pic>"#,
+            r#"<hp:pic><hp:img><hc:img binaryItemIDRef="image1" brightness="12" contrastValue="-4" pictureEffect="REAL_PIC"/></hp:img></hp:pic>"#,
             &mut context,
         )
         .expect("image should be recovered");
