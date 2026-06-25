@@ -75,6 +75,10 @@ const HWPX_LIST_TYPE_ATTRIBUTES: &[&str] = &["type", "kind"];
 const HWPX_MANIFEST_HREF_ATTRIBUTES: &[&str] = &["href", "full-path", "fullPath"];
 const HWPX_MANIFEST_ID_REF_ATTRIBUTES: &[&str] = &["idref", "idRef", "idREF"];
 const HWPX_MANIFEST_MEDIA_TYPE_ATTRIBUTES: &[&str] = &["media-type", "mediaType"];
+const HWPX_MARGIN_BOTTOM_ATTRIBUTES: &[&str] = &["bottom", "b"];
+const HWPX_MARGIN_LEFT_ATTRIBUTES: &[&str] = &["left", "l"];
+const HWPX_MARGIN_RIGHT_ATTRIBUTES: &[&str] = &["right", "r"];
+const HWPX_MARGIN_TOP_ATTRIBUTES: &[&str] = &["top", "t"];
 const HWPX_NOTE_ID_ATTRIBUTES: &[&str] = &["instId", "id"];
 const HWPX_PARAGRAPH_PR_ID_REF_ATTRIBUTES: &[&str] = &["paraPrIDRef", "paraPrIdRef", "paraPrIDREF"];
 const HWPX_IMAGE_ALPHA_ATTRIBUTES: &[&str] = &["alpha", "opacity"];
@@ -1697,8 +1701,8 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
         root_or_direct_child_xml_attribute_u32_any(cell_xml, "tc", &["cellSz"], attributes)
             .and_then(hwp_units_to_px_option)
     };
-    let cell_margin = |attribute: &str| {
-        root_or_direct_child_xml_attribute_u32(cell_xml, "tc", &["cellMargin"], attribute)
+    let cell_margin = |attributes: &[&str]| {
+        root_or_direct_child_xml_attribute_u32_any(cell_xml, "tc", &["cellMargin"], attributes)
             .and_then(hwp_units_to_px_option)
     };
 
@@ -1712,10 +1716,10 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
             vertical_align,
             width: cell_size(HWPX_WIDTH_ATTRIBUTES),
             height: cell_size(HWPX_HEIGHT_ATTRIBUTES),
-            padding_top: cell_margin("top"),
-            padding_right: cell_margin("right"),
-            padding_bottom: cell_margin("bottom"),
-            padding_left: cell_margin("left"),
+            padding_top: cell_margin(HWPX_MARGIN_TOP_ATTRIBUTES),
+            padding_right: cell_margin(HWPX_MARGIN_RIGHT_ATTRIBUTES),
+            padding_bottom: cell_margin(HWPX_MARGIN_BOTTOM_ATTRIBUTES),
+            padding_left: cell_margin(HWPX_MARGIN_LEFT_ATTRIBUTES),
             border_top,
             border_right,
             border_bottom,
@@ -2264,8 +2268,14 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
     }
 
     if let Some(margin) = hwpx_picture_direct_child_tag(pic_xml, "inMargin") {
-        let values = ["left", "right", "top", "bottom"].map(|name| {
-            xml_attribute_value(margin.raw, name)
+        let values = [
+            HWPX_MARGIN_LEFT_ATTRIBUTES,
+            HWPX_MARGIN_RIGHT_ATTRIBUTES,
+            HWPX_MARGIN_TOP_ATTRIBUTES,
+            HWPX_MARGIN_BOTTOM_ATTRIBUTES,
+        ]
+        .map(|attributes| {
+            xml_attribute_value_any(margin.raw, attributes)
                 .and_then(|value| value.trim().parse::<u32>().ok())
                 .unwrap_or(0)
         });
@@ -4291,7 +4301,7 @@ mod tests {
                 <hp:tc>
                   <hp:cellPr isHeader="true"/>
                   <hp:cellSz w="7500" h="1500"/>
-                  <hp:cellMargin left="150" right="150" top="75" bottom="75"/>
+                  <hp:cellMargin l="150" r="150" t="75" b="75"/>
                   <hp:subList verticalAlign="CENTER">
                     <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
                   </hp:subList>
@@ -5729,7 +5739,7 @@ mod tests {
         );
         let xml = r#"
             <hp:pic>
-              <hp:inMargin left="10" right="20" top="30" bottom="40"/>
+              <hp:inMargin l="10" r="20" t="30" b="40"/>
               <hc:img binaryItemIDRef="image1" opacity="0.5"/>
             </hp:pic>
         "#;
