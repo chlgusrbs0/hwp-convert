@@ -34,6 +34,7 @@ const HWPX_CAPTION_PLACEMENT_ATTRIBUTES: &[&str] = &["side", "position", "pos", 
 const HWPX_CHART_TITLE_ATTRIBUTES: &[&str] =
     &["title", "chartTitle", "name", "description", "desc"];
 const HWPX_CHAR_PR_ID_REF_ATTRIBUTES: &[&str] = &["charPrIDRef", "charPrIdRef", "charPrIDREF"];
+const HWPX_DECORATION_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
 const HWPX_DESCRIPTION_ATTRIBUTES: &[&str] = &["description", "desc", "alt", "altText", "name"];
 const HWPX_EQUATION_CONTENT_ATTRIBUTES: &[&str] = &["script", "formula", "text", "equation"];
 const HWPX_FILL_COLOR_ATTRIBUTES: &[&str] = &["faceColor", "backgroundColor", "fillColor"];
@@ -1171,7 +1172,8 @@ fn extract_hwpx_text_style(
                     style.underline_color = style
                         .underline
                         .then(|| {
-                            xml_attribute_value(tag.raw, "color").and_then(parse_hwpx_hex_color)
+                            xml_attribute_value_any(tag.raw, HWPX_DECORATION_COLOR_ATTRIBUTES)
+                                .and_then(parse_hwpx_hex_color)
                         })
                         .flatten();
                 }
@@ -1180,7 +1182,8 @@ fn extract_hwpx_text_style(
                     style.strike_color = style
                         .strike
                         .then(|| {
-                            xml_attribute_value(tag.raw, "color").and_then(parse_hwpx_hex_color)
+                            xml_attribute_value_any(tag.raw, HWPX_DECORATION_COLOR_ATTRIBUTES)
+                                .and_then(parse_hwpx_hex_color)
                         })
                         .flatten();
                 }
@@ -5317,8 +5320,8 @@ mod tests {
                         <hh:fontRef hangul="0"/>
                         <hh:bold/>
                         <hh:italic/>
-                        <hh:underline type="BOTTOM" color="#070809"/>
-                        <hh:strikeout shape="SOLID" color="#0A0B0C"/>
+                        <hh:underline type="BOTTOM" lineColor="#070809"/>
+                        <hh:strikeout shape="SOLID" lineColor="#0A0B0C"/>
                         <hh:outline type="SOLID"/>
                         <hh:shadow type="DROP"/>
                       </hh:charPr>
