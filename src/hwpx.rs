@@ -34,6 +34,7 @@ const HWPX_CHART_TITLE_ATTRIBUTES: &[&str] =
 const HWPX_CHAR_PR_ID_REF_ATTRIBUTES: &[&str] = &["charPrIDRef", "charPrIdRef", "charPrIDREF"];
 const HWPX_DESCRIPTION_ATTRIBUTES: &[&str] = &["description", "desc", "alt", "altText", "name"];
 const HWPX_EQUATION_CONTENT_ATTRIBUTES: &[&str] = &["script", "formula", "text", "equation"];
+const HWPX_FILL_COLOR_ATTRIBUTES: &[&str] = &["faceColor", "backgroundColor", "fillColor"];
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
 const HWPX_FIELD_COMMAND_ATTRIBUTES: &[&str] = &["command", "cmd"];
 const HWPX_FIELD_ID_ATTRIBUTES: &[&str] = &["id", "instId"];
@@ -1228,11 +1229,8 @@ fn extract_hwpx_border_fill_background_color(border_fill_xml: &str) -> Option<Co
 
     while let Some(tag) = next_xml_tag(border_fill_xml, cursor) {
         if !tag.is_closing {
-            if let Some(color) = ["faceColor", "backgroundColor"]
-                .iter()
-                .find_map(|attribute| {
-                    xml_attribute_value(tag.raw, attribute).and_then(parse_hwpx_hex_color)
-                })
+            if let Some(color) = xml_attribute_value_any(tag.raw, HWPX_FILL_COLOR_ATTRIBUTES)
+                .and_then(parse_hwpx_hex_color)
             {
                 return Some(color);
             }
@@ -5435,7 +5433,7 @@ mod tests {
                         <hh:rightBorder type="DASH" width="1 pt" color="#040506"/>
                         <hh:topBorder type="DOT" width="2 px" color="#070809"/>
                         <hh:bottomBorder type="DOUBLE_SLIM" width="0.2 mm" color="#0A0B0C"/>
-                        <hc:fillBrush><hc:winBrush faceColor="0X445566"/></hc:fillBrush>
+                        <hc:fillBrush><hc:winBrush fillColor="0X445566"/></hc:fillBrush>
                       </hh:borderFill>
                     </hh:borderFills>
                   </hh:refList>
