@@ -54,6 +54,8 @@ const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef"
 const HWPX_FIELD_COMMAND_ATTRIBUTES: &[&str] = &["command", "cmd"];
 const HWPX_FIELD_ID_ATTRIBUTES: &[&str] = &["id", "instId"];
 const HWPX_FIELD_NAME_ATTRIBUTES: &[&str] = &["name", "title", "desc", "description"];
+const HWPX_FIELD_PARAMETER_NAME_ATTRIBUTES: &[&str] = &["name", "paramName", "key"];
+const HWPX_FIELD_PARAMETER_VALUE_ATTRIBUTES: &[&str] = &["value", "val", "text"];
 const HWPX_FIELD_TYPE_ATTRIBUTES: &[&str] = &["type", "fieldType"];
 const HWPX_LINK_TITLE_ATTRIBUTES: &[&str] = &["title", "name", "desc", "description", "tooltip"];
 const HWPX_LINK_URL_ATTRIBUTES: &[&str] = &["href", "url", "target", "address", "webAddress"];
@@ -3039,7 +3041,9 @@ fn hwpx_field_parameter_value(field_xml: &str, names: &[&str]) -> Option<String>
             continue;
         }
 
-        let Some(parameter_name) = xml_attribute_value(tag.raw, "name") else {
+        let Some(parameter_name) =
+            xml_attribute_value_any(tag.raw, HWPX_FIELD_PARAMETER_NAME_ATTRIBUTES)
+        else {
             cursor = tag.end;
             continue;
         };
@@ -3051,7 +3055,8 @@ fn hwpx_field_parameter_value(field_xml: &str, names: &[&str]) -> Option<String>
             continue;
         }
 
-        if let Some(value) = decoded_xml_attribute_value(tag.raw, "value")
+        if let Some(value) =
+            decoded_xml_attribute_value_any(tag.raw, HWPX_FIELD_PARAMETER_VALUE_ATTRIBUTES)
             && !value.trim().is_empty()
         {
             return Some(value);
@@ -4827,7 +4832,7 @@ mod tests {
               <hp:ctrl>
                 <hp:fieldBegin instId="7" fieldType="HYPERLINK" title="Example">
                   <hp:parameters cnt="1">
-                    <hp:stringParam name="URL">https://example.com</hp:stringParam>
+                    <hp:stringParam paramName="URL" val="https://example.com"/>
                   </hp:parameters>
                 </hp:fieldBegin>
               </hp:ctrl>
