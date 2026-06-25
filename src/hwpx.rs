@@ -32,6 +32,14 @@ const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
     &["borderFillIDRef", "borderFillIdRef", "borderFillIDREF"];
 const HWPX_BORDER_STYLE_ATTRIBUTES: &[&str] = &["type", "style"];
 const HWPX_BORDER_WIDTH_ATTRIBUTES: &[&str] = &["width", "w"];
+const HWPX_BULLET_MARKER_ATTRIBUTES: &[&str] = &[
+    "char",
+    "bulletChar",
+    "marker",
+    "bulletMarker",
+    "mark",
+    "symbol",
+];
 const HWPX_CAPTION_PLACEMENT_ATTRIBUTES: &[&str] = &["side", "position", "pos", "placement"];
 const HWPX_CHART_TITLE_ATTRIBUTES: &[&str] =
     &["title", "chartTitle", "name", "description", "desc"];
@@ -1325,11 +1333,8 @@ fn map_hwpx_border_style(value: &str) -> BorderStyle {
 
 fn extract_hwpx_bullet_marker(bullet_tag: &str, bullet_xml: &str) -> Option<String> {
     first_non_empty_string([
-        decoded_xml_attribute_value(bullet_tag, "char"),
-        decoded_xml_attribute_value(bullet_tag, "bulletChar"),
-        decoded_xml_attribute_value(bullet_tag, "marker"),
-        decoded_xml_attribute_value(bullet_tag, "symbol"),
-        first_hwpx_child_element_text(bullet_xml, &["char", "bulletChar", "marker", "symbol"]),
+        decoded_xml_attribute_value_any(bullet_tag, HWPX_BULLET_MARKER_ATTRIBUTES),
+        first_hwpx_child_element_text(bullet_xml, HWPX_BULLET_MARKER_ATTRIBUTES),
     ])
 }
 
@@ -5009,7 +5014,7 @@ mod tests {
                 <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
                   <hh:refList>
                     <hh:bullets>
-                      <hh:bullet id="1" char="*"/>
+                      <hh:bullet id="1" bulletMarker="*"/>
                     </hh:bullets>
                     <hh:paraProperties>
                       <hh:paraPr id="0"><hh:heading type="BULLET" idREF="1" level="0"/></hh:paraPr>
