@@ -45,7 +45,8 @@ const HWPX_CHART_TITLE_ATTRIBUTES: &[&str] =
     &["title", "chartTitle", "name", "description", "desc"];
 const HWPX_CHAR_PR_ID_REF_ATTRIBUTES: &[&str] = &["charPrIDRef", "charPrIdRef", "charPrIDREF"];
 const HWPX_DECORATION_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
-const HWPX_DESCRIPTION_ATTRIBUTES: &[&str] = &["description", "desc", "alt", "altText", "name"];
+const HWPX_DESCRIPTION_ATTRIBUTES: &[&str] =
+    &["description", "desc", "alt", "altText", "name", "title"];
 const HWPX_EQUATION_CONTENT_ATTRIBUTES: &[&str] = &["script", "formula", "text", "equation"];
 const HWPX_FILL_COLOR_ATTRIBUTES: &[&str] = &["faceColor", "backgroundColor", "fillColor"];
 const HWPX_FALLBACK_TEXT_ATTRIBUTES: &[&str] = &[
@@ -2125,7 +2126,7 @@ fn extract_hwpx_image_from_pic_xml(
             decoded_root_xml_attribute_value_any(pic_xml, HWPX_DESCRIPTION_ATTRIBUTES),
             first_hwpx_direct_child_element_text(
                 pic_xml,
-                &["altText", "description", "desc", "name"],
+                &["altText", "description", "desc", "name", "title"],
             ),
             first_hwpx_direct_child_element_text(pic_xml, &["shapeComment"]),
         ]),
@@ -4717,7 +4718,7 @@ mod tests {
         let xml = r#"
             <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:p>
-                <hp:ctrl><hp:rect alt="shape alt text"/></hp:ctrl>
+                <hp:ctrl><hp:rect title="shape alt text"/></hp:ctrl>
               </hp:p>
             </hs:sec>
         "#;
