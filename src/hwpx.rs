@@ -26,6 +26,7 @@ const HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES: &[&str] = &[
     "binaryItemID",
     "binItem",
 ];
+const HWPX_BOOKMARK_NAME_ATTRIBUTES: &[&str] = &["name", "id", "title"];
 const HWPX_BORDER_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
 const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
     &["borderFillIDRef", "borderFillIdRef", "borderFillIDREF"];
@@ -2993,10 +2994,7 @@ fn finalize_hwpx_field(field: HwpxActiveField) -> Inline {
 }
 
 fn hwpx_bookmark_inline(tag: &str) -> Option<Inline> {
-    let name = first_non_empty_string([
-        decoded_xml_attribute_value(tag, "name"),
-        decoded_xml_attribute_value(tag, "id"),
-    ])?;
+    let name = decoded_xml_attribute_value_any(tag, HWPX_BOOKMARK_NAME_ATTRIBUTES)?;
     Some(Inline::Anchor {
         id: crate::util::plain_text::sanitize_anchor_id(&name),
     })
@@ -4959,7 +4957,7 @@ mod tests {
     fn preserves_hwpx_bookmark_id_as_anchor_inline() {
         let xml = r#"
             <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-              <hp:ctrl><hp:bookmark id="bookmark-7"/></hp:ctrl>
+              <hp:ctrl><hp:bookmark title="bookmark-7"/></hp:ctrl>
               <hp:run><hp:t>target text</hp:t></hp:run>
             </hp:p>
         "#;
