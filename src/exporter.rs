@@ -3269,6 +3269,24 @@ mod tests {
     }
 
     #[test]
+    fn renders_multiline_unknown_fallbacks_across_text_exports() {
+        let document = document_with_blocks(vec![Block::Unknown(UnknownBlock {
+            kind: "hwpx:image".to_string(),
+            fallback_text: Some("[image]\nmissing image alt".to_string()),
+            message: None,
+            source: None,
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+        let markdown = render_markdown_document(&document);
+        let text = plain_text::to_plain_text(&document);
+
+        assert!(html.contains("<p>[image]<br />missing image alt</p>"));
+        assert!(markdown.contains("[image]  \nmissing image alt"));
+        assert!(text.contains("[image]\nmissing image alt"));
+    }
+
+    #[test]
     fn renders_markdown_image_from_document_ir() {
         let document = document_with_image_block("image-1", Some("로고"), Some("png"));
 
