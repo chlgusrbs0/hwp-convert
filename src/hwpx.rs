@@ -4631,6 +4631,32 @@ mod tests {
     }
 
     #[test]
+    fn preserves_missing_hwpx_image_alt_as_unknown_fallback() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+                    xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+              <hp:p>
+                <hp:ctrl>
+                  <hp:pic altText="missing image alt">
+                    <hc:img binaryItemIDRef="missing-image"/>
+                  </hp:pic>
+                </hp:ctrl>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+
+        assert!(matches!(
+            &blocks[0],
+            Block::Unknown(unknown)
+                if unknown.kind == "hwpx:image"
+                    && unknown.fallback_text.as_deref() == Some("[image]\nmissing image alt")
+        ));
+    }
+
+    #[test]
     fn preserves_hwpx_shape_text_as_shape_fallback() {
         let xml = r#"
             <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
