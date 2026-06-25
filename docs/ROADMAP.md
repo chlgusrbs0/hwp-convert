@@ -251,6 +251,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - 표 셀 테두리: `TableCellStyle`에 4면 `Border{width, style, color}`(`BorderStyle` enum)를 추가, BorderFill의 `borders[4]`(좌우상하)를 매핑해 CSS border-*로 출력. `IR_VERSION` 11 → 12. **주의(근사 포함):** 굵기 인덱스→px는 rhwp 자체 함수 `css_border_width_to_hwp`의 임계값(0–7)을 역산하고 8–15는 표준 HWP 표를 썼다. 선종류는 solid/dashed/dotted/double로 매핑하고 wave/3D는 solid로 근사했다. HWPX 폴백도 borderFill 기반 셀 테두리를 복구한다. 이 근사는 실제 테두리 포함 문서 fixture로 검증해야 하며, 그게 이 기능의 다음 할 일이다.
 - HWPX 폴백 파리티(새 IR 없음): section XML `<hp:tc>`의 `cellSz`(폭/높이), `cellMargin`(padding), `subList@vertAlign`, `borderFillIDRef` 계열 속성을 읽어 rhwp 경로와 동일한 `TableCellStyle` 필드를 복구한다. 결정적 XML 속성 파싱(근사 없음). 표 전체 폭과 outer margin은 후속.
 - 이미지 테두리 + 흑백 효과: `Image.{border, grayscale}` 추가(`CellBorder`를 일반 `Border`로 리네임해 셀·이미지 공유). border_width(raw hwp단위→px)·border_color 매핑(선종류는 solid 가정), `ImageEffect::{GrayScale, BlackWhite}`→`grayscale`(→ CSS `filter: grayscale`). `IR_VERSION` 12 → 13. 이제 미지원으로 warning되는 것은 crop, 밝기/대비, opacity, 내부 padding, Pattern8x8 효과. BlackWhite는 grayscale로 근사. 실문서 fixture 검증 권장.
+- HWPX 속성 alias/fallback 보강(새 IR 없음): 이미지·링크·필드·주석·스타일 참조·manifest·borderFill·수식/도형/차트의 생성기별 속성명 차이를 일부 흡수한다. missing image와 unsupported control/object는 내부 텍스트가 없어도 alt/title/name/description/value 계열 속성을 `UnknownBlock.fallback_text`로 남긴다. exporter는 multiline unknown fallback을 HTML/Markdown/TXT에서 읽을 수 있게 출력한다.
 
 ## 완료 선언 기준
 
