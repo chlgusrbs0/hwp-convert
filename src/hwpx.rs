@@ -66,6 +66,7 @@ const HWPX_FIELD_PARAMETER_NAME_ATTRIBUTES: &[&str] = &["name", "paramName", "ke
 const HWPX_FIELD_PARAMETER_VALUE_ATTRIBUTES: &[&str] = &["value", "val", "text"];
 const HWPX_FIELD_TYPE_ATTRIBUTES: &[&str] = &["type", "fieldType"];
 const HWPX_FONT_FACE_ATTRIBUTES: &[&str] = &["face", "fontFace", "fontName", "name", "typeface"];
+const HWPX_FONT_FACE_LANG_ATTRIBUTES: &[&str] = &["lang", "type", "script", "fontType"];
 const HWPX_LINK_TITLE_ATTRIBUTES: &[&str] = &["title", "name", "desc", "description", "tooltip"];
 const HWPX_LINK_URL_ATTRIBUTES: &[&str] = &["href", "url", "target", "address", "webAddress"];
 const HWPX_HEADER_FOOTER_APPLY_PAGE_TYPE_ATTRIBUTES: &[&str] =
@@ -840,7 +841,8 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                 let fontface_xml = &header_xml[tag.start..fontface_end];
                 let fonts = extract_hwpx_font_face(fontface_xml);
                 if let Some(group_index) =
-                    xml_attribute_value(tag.raw, "lang").and_then(hwpx_font_face_group_index)
+                    xml_attribute_value_any(tag.raw, HWPX_FONT_FACE_LANG_ATTRIBUTES)
+                        .and_then(hwpx_font_face_group_index)
                 {
                     if context.font_faces.len() <= group_index {
                         context.font_faces.resize_with(group_index + 1, Vec::new);
@@ -5404,7 +5406,7 @@ mod tests {
                     <hh:refList>
                       <hh:fontfaces>
                       <hh:fontface lang="LATIN"><hh:font id="0" face="Wrong Latin"/></hh:fontface>
-                      <hh:fontface lang="HANGUL"><hh:font id="0" fontName="Noto Sans KR"/></hh:fontface>
+                      <hh:fontface script="HANGUL"><hh:font id="0" fontName="Noto Sans KR"/></hh:fontface>
                     </hh:fontfaces>
                     <hh:charProperties>
                       <hh:charPr id="7" fontSize="1200" color="010203" backgroundColor="0x040506" symbolMark="DOT_ABOVE">
