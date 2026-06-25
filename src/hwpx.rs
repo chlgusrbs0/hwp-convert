@@ -76,7 +76,9 @@ const HWPX_LIST_LEVEL_ATTRIBUTES: &[&str] = &["level", "lvl", "outlineLevel"];
 const HWPX_LIST_TYPE_ATTRIBUTES: &[&str] = &["type", "kind"];
 const HWPX_LINE_SPACING_TYPE_ATTRIBUTES: &[&str] = &["type", "kind"];
 const HWPX_MANIFEST_HREF_ATTRIBUTES: &[&str] = &["href", "full-path", "fullPath"];
-const HWPX_MANIFEST_ID_REF_ATTRIBUTES: &[&str] = &["idref", "idRef", "idREF"];
+const HWPX_MANIFEST_ID_ATTRIBUTES: &[&str] = &["id", "itemId", "itemID", "identifier"];
+const HWPX_MANIFEST_ID_REF_ATTRIBUTES: &[&str] =
+    &["idref", "idRef", "idREF", "itemIdRef", "itemIDRef"];
 const HWPX_MANIFEST_MEDIA_TYPE_ATTRIBUTES: &[&str] = &["media-type", "mediaType"];
 const HWPX_MARGIN_BOTTOM_ATTRIBUTES: &[&str] = &["bottom", "b"];
 const HWPX_MARGIN_LEFT_ATTRIBUTES: &[&str] = &["left", "l"];
@@ -450,7 +452,7 @@ fn extract_section_paths_from_content_hpf(content_xml: &str) -> Vec<String> {
 
     while let Some(tag) = next_xml_tag(content_xml, cursor) {
         if tag.name == "item" && !tag.is_closing {
-            let id = decoded_xml_attribute_value(tag.raw, "id");
+            let id = decoded_xml_attribute_value_any(tag.raw, HWPX_MANIFEST_ID_ATTRIBUTES);
             let href = decoded_xml_attribute_value_any(tag.raw, HWPX_MANIFEST_HREF_ATTRIBUTES);
 
             if let (Some(id), Some(href)) = (id, href) {
@@ -962,7 +964,7 @@ fn read_hwpx_image_items<R: Read + io::Seek>(
             continue;
         }
 
-        let id = decoded_xml_attribute_value(tag.raw, "id");
+        let id = decoded_xml_attribute_value_any(tag.raw, HWPX_MANIFEST_ID_ATTRIBUTES);
         let href = decoded_xml_attribute_value_any(tag.raw, HWPX_MANIFEST_HREF_ATTRIBUTES);
         let media_type =
             decoded_xml_attribute_value_any(tag.raw, HWPX_MANIFEST_MEDIA_TYPE_ATTRIBUTES);
@@ -6138,10 +6140,10 @@ mod tests {
                 r#"
                 <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
                   <opf:manifest>
-                    <opf:item id="image1" full-path="BinData/image1.png" mediaType="image/png"/>
-                    <opf:item id="section0" full-path="section0.xml" mediaType="application/xml"/>
+                    <opf:item itemId="image1" full-path="BinData/image1.png" mediaType="image/png"/>
+                    <opf:item itemId="section0" full-path="section0.xml" mediaType="application/xml"/>
                   </opf:manifest>
-                  <opf:spine><opf:itemref idref="section0"/></opf:spine>
+                  <opf:spine><opf:itemref itemIdRef="section0"/></opf:spine>
                 </opf:package>
                 "#,
             ),
@@ -6351,9 +6353,9 @@ mod tests {
                 r#"
                 <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
                   <opf:manifest>
-                    <opf:item id="section0" full-path="section0.xml" mediaType="application/xml"/>
+                    <opf:item itemID="section0" full-path="section0.xml" mediaType="application/xml"/>
                   </opf:manifest>
-                  <opf:spine><opf:itemref idref="section0"/></opf:spine>
+                  <opf:spine><opf:itemref itemIDRef="section0"/></opf:spine>
                 </opf:package>
                 "#,
             ),
