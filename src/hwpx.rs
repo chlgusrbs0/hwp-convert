@@ -31,6 +31,7 @@ const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
 const HWPX_CAPTION_PLACEMENT_ATTRIBUTES: &[&str] = &["side", "position", "pos", "placement"];
 const HWPX_CHART_TITLE_ATTRIBUTES: &[&str] =
     &["title", "chartTitle", "name", "description", "desc"];
+const HWPX_CHAR_PR_ID_REF_ATTRIBUTES: &[&str] = &["charPrIDRef", "charPrIdRef", "charPrIDREF"];
 const HWPX_DESCRIPTION_ATTRIBUTES: &[&str] = &["description", "desc", "alt", "altText", "name"];
 const HWPX_EQUATION_CONTENT_ATTRIBUTES: &[&str] = &["script", "formula", "text", "equation"];
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
@@ -42,7 +43,9 @@ const HWPX_LINK_TITLE_ATTRIBUTES: &[&str] = &["title", "name", "desc", "descript
 const HWPX_LINK_URL_ATTRIBUTES: &[&str] = &["href", "url", "target", "address", "webAddress"];
 const HWPX_HEADER_FOOTER_APPLY_PAGE_TYPE_ATTRIBUTES: &[&str] =
     &["applyPageType", "pageType", "applyTo"];
+const HWPX_LIST_ID_REF_ATTRIBUTES: &[&str] = &["idRef", "idref", "idREF"];
 const HWPX_NOTE_ID_ATTRIBUTES: &[&str] = &["instId", "id"];
+const HWPX_PARAGRAPH_PR_ID_REF_ATTRIBUTES: &[&str] = &["paraPrIDRef", "paraPrIdRef", "paraPrIDREF"];
 const HWPX_IMAGE_ALPHA_ATTRIBUTES: &[&str] = &["alpha", "opacity"];
 const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
 const HWPX_IMAGE_BORDER_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
@@ -525,9 +528,8 @@ impl HwpxFallbackContext {
     }
 
     fn text_style_for_run(&self, run_tag: &str) -> TextStyle {
-        let Some(char_pr_id) =
-            xml_attribute_value_any(run_tag, &["charPrIDRef", "charPrIdRef", "charPrIDREF"])
-                .and_then(parse_trimmed::<usize>)
+        let Some(char_pr_id) = xml_attribute_value_any(run_tag, HWPX_CHAR_PR_ID_REF_ATTRIBUTES)
+            .and_then(parse_trimmed::<usize>)
         else {
             return TextStyle::default();
         };
@@ -581,7 +583,7 @@ impl HwpxFallbackContext {
 
     fn hwpx_paragraph_style_for_paragraph(&self, paragraph_xml: &str) -> HwpxParagraphStyle {
         let mut style =
-            root_xml_attribute_u32_any(paragraph_xml, "p", &["paraPrIDRef", "paraPrIdRef"])
+            root_xml_attribute_u32_any(paragraph_xml, "p", HWPX_PARAGRAPH_PR_ID_REF_ATTRIBUTES)
                 .map(|id| id as usize)
                 .and_then(|para_pr_id| self.paragraph_styles.get(para_pr_id).cloned())
                 .unwrap_or_default();
@@ -1354,7 +1356,7 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
                         _ => None,
                     };
                     paragraph_style.list_id =
-                        xml_attribute_value_any(tag.raw, &["idRef", "idref", "idREF"])
+                        xml_attribute_value_any(tag.raw, HWPX_LIST_ID_REF_ATTRIBUTES)
                             .and_then(parse_trimmed);
                 }
                 "align" => {
@@ -4928,7 +4930,7 @@ mod tests {
                       <hh:bullet id="1" char="*"/>
                     </hh:bullets>
                     <hh:paraProperties>
-                      <hh:paraPr id="0"><hh:heading type="BULLET" idRef="1" level="0"/></hh:paraPr>
+                      <hh:paraPr id="0"><hh:heading type="BULLET" idREF="1" level="0"/></hh:paraPr>
                       <hh:paraPr id="1"><hh:heading type="NUMBER" idRef="1" level="0"/></hh:paraPr>
                       <hh:paraPr id="2"><hh:heading type="NUMBER" idRef="2" level="0"/></hh:paraPr>
                     </hh:paraProperties>
@@ -5063,7 +5065,7 @@ mod tests {
                 "Contents/section0.xml",
                 r#"
                 <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-                  <hp:p paraPrIdRef="0"><hp:run><hp:t>styled paragraph</hp:t></hp:run></hp:p>
+                  <hp:p paraPrIDREF="0"><hp:run><hp:t>styled paragraph</hp:t></hp:run></hp:p>
                 </hs:sec>
                 "#,
             ),
@@ -5323,7 +5325,7 @@ mod tests {
                 "Contents/section0.xml",
                 r#"
                 <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-                  <hp:p><hp:run charPrIdRef="7"><hp:t>styled text</hp:t></hp:run></hp:p>
+                  <hp:p><hp:run charPrIDREF="7"><hp:t>styled text</hp:t></hp:run></hp:p>
                 </hs:sec>
                 "#,
             ),
