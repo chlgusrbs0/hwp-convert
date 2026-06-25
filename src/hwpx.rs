@@ -37,6 +37,7 @@ const HWPX_FIELD_TYPE_ATTRIBUTES: &[&str] = &["type", "fieldType"];
 const HWPX_LINK_TITLE_ATTRIBUTES: &[&str] = &["title", "name", "desc", "description", "tooltip"];
 const HWPX_HEADER_FOOTER_APPLY_PAGE_TYPE_ATTRIBUTES: &[&str] =
     &["applyPageType", "pageType", "applyTo"];
+const HWPX_NOTE_ID_ATTRIBUTES: &[&str] = &["instId", "id"];
 const HWPX_IMAGE_ALPHA_ATTRIBUTES: &[&str] = &["alpha", "opacity"];
 const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
 const HWPX_IMAGE_BORDER_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
@@ -594,8 +595,7 @@ impl HwpxFallbackContext {
             NoteKind::Footnote => "footnote",
             NoteKind::Endnote => "endnote",
         };
-        let mut requested_id = decoded_xml_attribute_value(tag, "instId")
-            .or_else(|| decoded_xml_attribute_value(tag, "id"));
+        let mut requested_id = decoded_xml_attribute_value_any(tag, HWPX_NOTE_ID_ATTRIBUTES);
         let blocks = extract_section_xml_blocks(note_xml, self);
 
         let note_id = loop {
@@ -6419,7 +6419,7 @@ mod tests {
                     </hp:ctrl>
                     <hp:run><hp:t>after</hp:t></hp:run>
                     <hp:ctrl>
-                      <hp:endNote instId="4">
+                      <hp:endNote id="4">
                         <hp:subList>
                           <hp:p><hp:run><hp:t>endnote text</hp:t></hp:run></hp:p>
                         </hp:subList>
