@@ -38,6 +38,10 @@ const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
 const HWPX_IMAGE_BORDER_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
 const HWPX_IMAGE_BORDER_STYLE_ATTRIBUTES: &[&str] = &["style", "type"];
 const HWPX_IMAGE_BORDER_WIDTH_ATTRIBUTES: &[&str] = &["width", "w"];
+const HWPX_IMAGE_CROP_BOTTOM_ATTRIBUTES: &[&str] = &["bottom", "b"];
+const HWPX_IMAGE_CROP_LEFT_ATTRIBUTES: &[&str] = &["left", "l"];
+const HWPX_IMAGE_CROP_RIGHT_ATTRIBUTES: &[&str] = &["right", "r"];
+const HWPX_IMAGE_CROP_TOP_ATTRIBUTES: &[&str] = &["top", "t"];
 const HWPX_IMAGE_FLIP_HORIZONTAL_ATTRIBUTES: &[&str] = &["horizontal", "horizontalFlip", "flipH"];
 const HWPX_IMAGE_FLIP_VERTICAL_ATTRIBUTES: &[&str] = &["vertical", "verticalFlip", "flipV"];
 const HWPX_IMAGE_ROTATION_ANGLE_ATTRIBUTES: &[&str] = &["angle", "rotateAngle", "rotation"];
@@ -2180,19 +2184,19 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
 
     let clip = hwpx_picture_direct_child_tag(pic_xml, "imgClip").and_then(|tag| {
         Some([
-            xml_attribute_value(tag.raw, "left")?
+            xml_attribute_value_any(tag.raw, HWPX_IMAGE_CROP_LEFT_ATTRIBUTES)?
                 .trim()
                 .parse::<i64>()
                 .ok()?,
-            xml_attribute_value(tag.raw, "right")?
+            xml_attribute_value_any(tag.raw, HWPX_IMAGE_CROP_RIGHT_ATTRIBUTES)?
                 .trim()
                 .parse::<i64>()
                 .ok()?,
-            xml_attribute_value(tag.raw, "top")?
+            xml_attribute_value_any(tag.raw, HWPX_IMAGE_CROP_TOP_ATTRIBUTES)?
                 .trim()
                 .parse::<i64>()
                 .ok()?,
-            xml_attribute_value(tag.raw, "bottom")?
+            xml_attribute_value_any(tag.raw, HWPX_IMAGE_CROP_BOTTOM_ATTRIBUTES)?
                 .trim()
                 .parse::<i64>()
                 .ok()?,
@@ -5751,7 +5755,7 @@ mod tests {
               <hp:flip horizontalFlip="1" verticalFlip="false"/>
               <hp:rotationInfo rotateAngle="9000"/>
               <hc:img binaryItemIDRef="image1"/>
-              <hp:imgClip left="10" right="900" top="20" bottom="700"/>
+              <hp:imgClip l="10" r="900" t="20" b="700"/>
               <hp:imgDim dimWidth="1000" dimHeight="800"/>
               <hp:effects><hp:shadow/><hp:glow/><hp:shadow/></hp:effects>
               <hp:pos treat-as-char="0" verticalRelTo="PAGE" verticalAlign="CENTER" verticalOffset="120"
