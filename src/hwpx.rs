@@ -31,6 +31,7 @@ const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
 const HWPX_CAPTION_PLACEMENT_ATTRIBUTES: &[&str] = &["side", "position", "pos", "placement"];
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
 const HWPX_FIELD_ID_ATTRIBUTES: &[&str] = &["id", "instId"];
+const HWPX_LINK_TITLE_ATTRIBUTES: &[&str] = &["title", "name", "desc", "description", "tooltip"];
 const HWPX_HEADER_FOOTER_APPLY_PAGE_TYPE_ATTRIBUTES: &[&str] =
     &["applyPageType", "pageType", "applyTo"];
 const HWPX_IMAGE_ALPHA_ATTRIBUTES: &[&str] = &["alpha", "opacity"];
@@ -2810,12 +2811,8 @@ fn extract_hwpx_direct_link(
     context: &mut HwpxFallbackContext,
 ) -> Option<Link> {
     let url = hwpx_direct_link_url(tag)?;
-    let title = first_non_empty_string([
-        decoded_xml_attribute_value(tag, "title"),
-        decoded_xml_attribute_value(tag, "name"),
-        decoded_xml_attribute_value(tag, "desc"),
-    ])
-    .filter(|value| value != &url);
+    let title = decoded_xml_attribute_value_any(tag, HWPX_LINK_TITLE_ATTRIBUTES)
+        .filter(|value| value != &url);
     let inlines = extract_inlines_from_xml_fragment(inner_xml, context);
     let label = first_non_empty_string([
         non_empty_string_owned(inlines_to_plain_text(&inlines)),
@@ -4779,7 +4776,7 @@ mod tests {
     fn recovers_hwpx_direct_hyperlink_as_link_inline() {
         let xml = r#"
             <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-              <hp:hyperlink href="https://example.com/direct" title="Direct Example">
+              <hp:hyperlink href="https://example.com/direct" tooltip="Direct Example">
                 <hp:run><hp:t>Direct Site</hp:t></hp:run>
               </hp:hyperlink>
             </hp:p>
