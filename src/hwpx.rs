@@ -59,6 +59,8 @@ const HWPX_LINK_URL_ATTRIBUTES: &[&str] = &["href", "url", "target", "address", 
 const HWPX_HEADER_FOOTER_APPLY_PAGE_TYPE_ATTRIBUTES: &[&str] =
     &["applyPageType", "pageType", "applyTo"];
 const HWPX_LIST_ID_REF_ATTRIBUTES: &[&str] = &["idRef", "idref", "idREF"];
+const HWPX_LIST_LEVEL_ATTRIBUTES: &[&str] = &["level", "lvl", "outlineLevel"];
+const HWPX_LIST_TYPE_ATTRIBUTES: &[&str] = &["type", "kind"];
 const HWPX_MANIFEST_HREF_ATTRIBUTES: &[&str] = &["href", "full-path", "fullPath"];
 const HWPX_MANIFEST_ID_REF_ATTRIBUTES: &[&str] = &["idref", "idRef", "idREF"];
 const HWPX_MANIFEST_MEDIA_TYPE_ATTRIBUTES: &[&str] = &["media-type", "mediaType"];
@@ -1358,11 +1360,12 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
         if !tag.is_closing {
             match tag.name {
                 "heading" => {
-                    let heading_type =
-                        xml_attribute_value(tag.raw, "type").map(str::to_ascii_uppercase);
-                    paragraph_style.level = xml_attribute_value(tag.raw, "level")
-                        .and_then(parse_trimmed::<u8>)
-                        .unwrap_or(0);
+                    let heading_type = xml_attribute_value_any(tag.raw, HWPX_LIST_TYPE_ATTRIBUTES)
+                        .map(str::to_ascii_uppercase);
+                    paragraph_style.level =
+                        xml_attribute_value_any(tag.raw, HWPX_LIST_LEVEL_ATTRIBUTES)
+                            .and_then(parse_trimmed::<u8>)
+                            .unwrap_or(0);
                     paragraph_style.kind = match heading_type.as_deref() {
                         Some("NUMBER") => Some(ListKind::Ordered),
                         Some("BULLET") => Some(ListKind::Unordered),
@@ -5081,7 +5084,7 @@ mod tests {
                 <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
                   <hh:refList>
                     <hh:paraProperties>
-                      <hh:paraPr id="0"><hh:heading type="OUTLINE" level="2"/></hh:paraPr>
+                      <hh:paraPr id="0"><hh:heading kind="OUTLINE" outlineLevel="2"/></hh:paraPr>
                     </hh:paraProperties>
                   </hh:refList>
                 </hh:head>
