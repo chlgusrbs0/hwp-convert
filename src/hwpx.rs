@@ -39,6 +39,7 @@ const HWPX_FIELD_ID_ATTRIBUTES: &[&str] = &["id", "instId"];
 const HWPX_FIELD_NAME_ATTRIBUTES: &[&str] = &["name", "title", "desc", "description"];
 const HWPX_FIELD_TYPE_ATTRIBUTES: &[&str] = &["type", "fieldType"];
 const HWPX_LINK_TITLE_ATTRIBUTES: &[&str] = &["title", "name", "desc", "description", "tooltip"];
+const HWPX_LINK_URL_ATTRIBUTES: &[&str] = &["href", "url", "target", "address", "webAddress"];
 const HWPX_HEADER_FOOTER_APPLY_PAGE_TYPE_ATTRIBUTES: &[&str] =
     &["applyPageType", "pageType", "applyTo"];
 const HWPX_NOTE_ID_ATTRIBUTES: &[&str] = &["instId", "id"];
@@ -2834,11 +2835,7 @@ fn extract_hwpx_direct_link(
 }
 
 fn hwpx_direct_link_url(tag: &str) -> Option<String> {
-    first_non_empty_string([
-        decoded_xml_attribute_value(tag, "href"),
-        decoded_xml_attribute_value(tag, "url"),
-        decoded_xml_attribute_value(tag, "target"),
-    ])
+    decoded_xml_attribute_value_any(tag, HWPX_LINK_URL_ATTRIBUTES)
 }
 
 fn xml_element_inner_xml<'a>(xml: &'a str, start_tag: &XmlTag<'_>, element_end: usize) -> &'a str {
@@ -2867,12 +2864,22 @@ fn extract_hwpx_field_begin(tag: &str, field_xml: &str) -> HwpxActiveField {
         ),
     ]);
     let url = first_non_empty_string([
-        decoded_xml_attribute_value(tag, "href"),
-        decoded_xml_attribute_value(tag, "url"),
+        decoded_xml_attribute_value_any(tag, HWPX_LINK_URL_ATTRIBUTES),
         command.clone().filter(|value| is_hwpx_url_like(value)),
         hwpx_field_parameter_value(
             field_xml,
-            &["url", "URL", "href", "HRef", "target", "Target"],
+            &[
+                "url",
+                "URL",
+                "href",
+                "HRef",
+                "target",
+                "Target",
+                "address",
+                "Address",
+                "webAddress",
+                "WebAddress",
+            ],
         ),
         name.clone().filter(|value| is_hwpx_url_like(value)),
     ]);
@@ -4771,7 +4778,7 @@ mod tests {
               <hp:ctrl>
                 <hp:fieldBegin id="8" type="HYPERLINK" name="Nested Example">
                   <hp:parameters cnt="1">
-                    <hp:stringParam name="URL">
+                    <hp:stringParam name="WebAddress">
                       <hp:run><hp:t>https://example.com/nested</hp:t></hp:run>
                     </hp:stringParam>
                   </hp:parameters>
@@ -4800,7 +4807,7 @@ mod tests {
     fn recovers_hwpx_direct_hyperlink_as_link_inline() {
         let xml = r#"
             <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-              <hp:hyperlink href="https://example.com/direct" tooltip="Direct Example">
+              <hp:hyperlink webAddress="https://example.com/direct" tooltip="Direct Example">
                 <hp:run><hp:t>Direct Site</hp:t></hp:run>
               </hp:hyperlink>
             </hp:p>
