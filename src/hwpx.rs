@@ -44,6 +44,9 @@ const HWPX_LINK_URL_ATTRIBUTES: &[&str] = &["href", "url", "target", "address", 
 const HWPX_HEADER_FOOTER_APPLY_PAGE_TYPE_ATTRIBUTES: &[&str] =
     &["applyPageType", "pageType", "applyTo"];
 const HWPX_LIST_ID_REF_ATTRIBUTES: &[&str] = &["idRef", "idref", "idREF"];
+const HWPX_MANIFEST_HREF_ATTRIBUTES: &[&str] = &["href", "full-path", "fullPath"];
+const HWPX_MANIFEST_ID_REF_ATTRIBUTES: &[&str] = &["idref", "idRef", "idREF"];
+const HWPX_MANIFEST_MEDIA_TYPE_ATTRIBUTES: &[&str] = &["media-type", "mediaType"];
 const HWPX_NOTE_ID_ATTRIBUTES: &[&str] = &["instId", "id"];
 const HWPX_PARAGRAPH_PR_ID_REF_ATTRIBUTES: &[&str] = &["paraPrIDRef", "paraPrIdRef", "paraPrIDREF"];
 const HWPX_IMAGE_ALPHA_ATTRIBUTES: &[&str] = &["alpha", "opacity"];
@@ -411,16 +414,17 @@ fn extract_section_paths_from_content_hpf(content_xml: &str) -> Vec<String> {
     while let Some(tag) = next_xml_tag(content_xml, cursor) {
         if tag.name == "item" && !tag.is_closing {
             let id = decoded_xml_attribute_value(tag.raw, "id");
-            let href = decoded_xml_attribute_value_any(tag.raw, &["href", "full-path", "fullPath"]);
+            let href = decoded_xml_attribute_value_any(tag.raw, HWPX_MANIFEST_HREF_ATTRIBUTES);
 
             if let (Some(id), Some(href)) = (id, href) {
                 let media_type =
-                    decoded_xml_attribute_value_any(tag.raw, &["media-type", "mediaType"]);
+                    decoded_xml_attribute_value_any(tag.raw, HWPX_MANIFEST_MEDIA_TYPE_ATTRIBUTES);
                 manifest_items.push((id, href, media_type));
             }
         } else if tag.name == "itemref"
             && !tag.is_closing
-            && let Some(idref) = decoded_xml_attribute_value_any(tag.raw, &["idref", "idRef"])
+            && let Some(idref) =
+                decoded_xml_attribute_value_any(tag.raw, HWPX_MANIFEST_ID_REF_ATTRIBUTES)
         {
             spine_order.push(idref);
         }
@@ -921,8 +925,9 @@ fn read_hwpx_image_items<R: Read + io::Seek>(
         }
 
         let id = decoded_xml_attribute_value(tag.raw, "id");
-        let href = decoded_xml_attribute_value_any(tag.raw, &["href", "full-path", "fullPath"]);
-        let media_type = decoded_xml_attribute_value_any(tag.raw, &["media-type", "mediaType"]);
+        let href = decoded_xml_attribute_value_any(tag.raw, HWPX_MANIFEST_HREF_ATTRIBUTES);
+        let media_type =
+            decoded_xml_attribute_value_any(tag.raw, HWPX_MANIFEST_MEDIA_TYPE_ATTRIBUTES);
         let Some(id) = id else {
             cursor = tag.end;
             continue;
@@ -5941,7 +5946,7 @@ mod tests {
                     <opf:item id="image1" href="../BinData/image1.png" media-type="image/png"/>
                     <opf:item id="section0" href="section0.xml" media-type="application/xml"/>
                   </opf:manifest>
-                  <opf:spine><opf:itemref idref="section0"/></opf:spine>
+                  <opf:spine><opf:itemref idREF="section0"/></opf:spine>
                 </opf:package>
                 "#,
             ),
