@@ -27,11 +27,11 @@
 | style | 부분 | 부분 | 부분 | 부분 (JSON 보존, HTML CSS, Markdown은 bold/italic/strike/sup/sub/link, TXT/SVG 소실) | 글자 장식은 굵기/기울임/밑줄/취소선/위·아래첨자/강조점/양각/음각/외곽선/그림자, 글꼴명/크기, 전경/배경색, 밑줄·취소선 색까지 매핑. 밑줄 모양, 장평/자간/커닝, table style ref, border, padding, percent line spacing, paragraph role 추론은 아직 없음. |
 | table | 예 | 예 | 예 | 부분 (JSON/HTML 구조 유지, 헤더셀은 `<th>`, 셀 수직정렬 CSS, TXT/SVG 평문, Markdown 단순 표만) | 셀 `is_header`, 수직정렬, 폭/높이/padding, 4면 테두리(색·선종류·굵기)는 매핑됨. 표 전체 폭은 아직. 테두리 굵기 인덱스→px는 rhwp 임계값(0–7)+표준 HWP 표(8–15), 선종류 wave/3D는 solid로 근사(실문서 fixture로 검증 필요). |
 | merged table cell | 예 | 예 | 예 | 부분 (JSON/HTML `row_span`/`col_span`, Markdown fallback, TXT/SVG 평문) | 병합 셀 시각 배치/너비 계산 없음. Markdown 병합 표현 없음. |
-| image | 예 | 부분 | 예 | 부분 (JSON bytes 포함, HTML/Markdown asset 파일, TXT/SVG 대체 텍스트) | 이미지 테두리(색·굵기, 선종류는 solid 가정)와 흑백(grayscale) 효과는 매핑됨. crop, 밝기/대비, opacity, 내부 padding, wrap, anchor, 배치는 아직(미지원은 warning). bin data 없으면 `UnknownBlock`. `Resource::Binary`는 asset으로 안 씀. |
+| image | 예 | 부분 | 예 | 부분 (JSON bytes 포함, HTML/Markdown asset 파일, TXT/SVG 대체 텍스트) | 이미지 테두리(색·굵기, 선종류는 solid 가정)와 흑백(grayscale) 효과는 매핑됨. crop, 밝기/대비, opacity, 내부 padding, wrap, anchor, 배치는 아직(미지원은 warning). HWPX 폴백은 이미지 참조/테두리/배치/crop 관련 속성 alias 일부를 복구한다. bin data 없으면 `UnknownBlock`. `Resource::Binary`는 asset으로 안 씀. |
 | resource | 부분 | 부분 | 부분 | 부분 (JSON store 보존, HTML/Markdown `Resource::Image`만 파일로) | 현재 image bin data만 `ImageResource`로. `BinaryResource` 미사용. |
-| header/footer | 예 | 예 | 예 | 부분 (모두 선형화 출력) | 페이지 반복 레이아웃이 아니라 본문 앞뒤 block 묶음. `FirstPage` 미생성. |
+| header/footer | 예 | 예 | 예 | 부분 (모두 선형화 출력) | 페이지 반복 레이아웃이 아니라 본문 앞뒤 block 묶음. HWPX 폴백은 `FirstPage`/odd/even placement와 관련 속성 alias 일부를 복구한다. |
 | footnote/endnote | 예 | 부분 | 예 | 부분 (note ref + body 출력) | rHWP가 정확한 inline 위치를 안 줘 note ref가 문단 끝에 append. 페이지 하단 배치/separator 없음. |
-| link | 부분 | 부분 | 예 | 부분 (JSON/HTML/Markdown URL 보존, TXT/SVG 라벨 fallback) | hyperlink field range는 inline으로, 일부 hyperlink control은 문단 끝 append. `title` 미설정. |
+| link | 부분 | 부분 | 예 | 부분 (JSON/HTML/Markdown URL 보존, TXT/SVG 라벨 fallback) | hyperlink field range는 inline으로, 일부 hyperlink control은 문단 끝 append. HWPX 폴백은 직접 link/field link의 URL과 title 계열 속성 일부를 복구한다. |
 | list | 부분 | 부분 | 예 | 부분 (JSON/TXT/Markdown prefix, HTML `<ul>/<ol>`, SVG 평문) | bullet/number/outline만 `ListInfo`로. explicit list container 구조 없음. nested/restart fixture 없음. |
 | equation | 예 | 부분 | 예 | 부분 (JSON 보존, 나머지 `[equation: ...]`, Markdown은 `Latex`일 때만 `$$`) | bridge가 `EquationKind::PlainText`만 생성. LaTeX/MathML 판별, numbering, resource 연결 없음. |
 | shape | 예 | 부분 | 부분 | 부분 (모두 `[shape: ...]` placeholder) | `kind`, `fallback_text`, `description`만 남김. geometry/border/fill/text box/caption/child shape 소실. |
@@ -83,7 +83,7 @@ HWPX paired fixture는 매칭되는 HWP fixture와 같은 feature-level assertio
 
 ### HWPX 폴백 파서 (`src/hwpx.rs`)
 
-rHWP 파싱이 실패하거나 HWPX를 빈 semantic document로 매핑하면, hwp-convert는 `Preview/PrvText.txt`로 떨어지기 전에 구조적 `Contents/section*.xml` 폴백을 시도한다. 이 section XML 폴백은 현재 문단 텍스트, inline line break/tab, sections, 표(셀 크기·여백·헤더·수직정렬·borderFill 기반 배경/테두리 포함), caption, image resource, list 메타데이터, link, field/bookmark, header/footer, note, equation, shape, chart, unsupported-control placeholder, 일부 basic style을 복구한다. preview text 폴백은 평문만 복구한다.
+rHWP 파싱이 실패하거나 HWPX를 빈 semantic document로 매핑하면, hwp-convert는 `Preview/PrvText.txt`로 떨어지기 전에 구조적 `Contents/section*.xml` 폴백을 시도한다. 이 section XML 폴백은 현재 문단 텍스트, inline line break/tab, sections, 표(셀 크기·여백·헤더·수직정렬·borderFill 기반 배경/테두리 포함), caption, image resource, list 메타데이터, link, field/bookmark, header/footer, note, equation, shape, chart, unsupported-control placeholder, 일부 basic style을 복구한다. 여러 HWPX 생성기에서 달라지는 주요 속성 alias도 일부 허용한다. preview text 폴백은 평문만 복구한다.
 
 > 주의 (정직성): 이 폴백 파서의 *복구 능력*은 위처럼 넓지만, 그것이 곧 HWPX *지원*을 뜻하지 않는다. 위 "채택된 paired fixture"가 보여주듯 회귀 테스트로 parity가 검증된 HWPX 요소는 아직 `basic_text`, `list`뿐이다. 폴백이 복구한다고 fixture 없이 "지원"이라 쓰지 않는다.
 
