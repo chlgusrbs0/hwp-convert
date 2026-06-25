@@ -38,6 +38,9 @@ const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
 const HWPX_IMAGE_BORDER_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
 const HWPX_IMAGE_BORDER_STYLE_ATTRIBUTES: &[&str] = &["style", "type"];
 const HWPX_IMAGE_BORDER_WIDTH_ATTRIBUTES: &[&str] = &["width", "w"];
+const HWPX_IMAGE_FLIP_HORIZONTAL_ATTRIBUTES: &[&str] = &["horizontal", "horizontalFlip", "flipH"];
+const HWPX_IMAGE_FLIP_VERTICAL_ATTRIBUTES: &[&str] = &["vertical", "verticalFlip", "flipV"];
+const HWPX_IMAGE_ROTATION_ANGLE_ATTRIBUTES: &[&str] = &["angle", "rotateAngle", "rotation"];
 const HWPX_HWP_UNIT_VALUE_ATTRIBUTES: &[&str] = &["value", "val"];
 const HWPX_PARAGRAPH_HORIZONTAL_ALIGN_ATTRIBUTES: &[&str] =
     &["horizontal", "horizontalAlign", "horzAlign"];
@@ -2116,13 +2119,13 @@ fn hwpx_picture_border(pic_xml: &str) -> Option<Border> {
 fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext) {
     let flip = hwpx_picture_direct_child_tag(pic_xml, "flip");
     let horizontal_flip = flip
-        .and_then(|tag| xml_attribute_value(tag.raw, "horizontal"))
+        .and_then(|tag| xml_attribute_value_any(tag.raw, HWPX_IMAGE_FLIP_HORIZONTAL_ATTRIBUTES))
         .is_some_and(xml_boolean_is_true);
     let vertical_flip = flip
-        .and_then(|tag| xml_attribute_value(tag.raw, "vertical"))
+        .and_then(|tag| xml_attribute_value_any(tag.raw, HWPX_IMAGE_FLIP_VERTICAL_ATTRIBUTES))
         .is_some_and(xml_boolean_is_true);
     let rotation = hwpx_picture_direct_child_tag(pic_xml, "rotationInfo")
-        .and_then(|tag| xml_attribute_value(tag.raw, "angle"))
+        .and_then(|tag| xml_attribute_value_any(tag.raw, HWPX_IMAGE_ROTATION_ANGLE_ATTRIBUTES))
         .and_then(|value| value.trim().parse::<i32>().ok())
         .unwrap_or(0);
 
@@ -5745,8 +5748,8 @@ mod tests {
         let xml = r#"
             <hp:pic wrap="TOP_AND_BOTTOM">
               <hp:caption><hp:pic><hp:rotationInfo angle="1234"/></hp:pic></hp:caption>
-              <hp:flip horizontal="1" vertical="false"/>
-              <hp:rotationInfo angle="9000"/>
+              <hp:flip horizontalFlip="1" verticalFlip="false"/>
+              <hp:rotationInfo rotateAngle="9000"/>
               <hc:img binaryItemIDRef="image1"/>
               <hp:imgClip left="10" right="900" top="20" bottom="700"/>
               <hp:imgDim dimWidth="1000" dimHeight="800"/>
