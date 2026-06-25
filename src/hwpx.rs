@@ -26,8 +26,10 @@ const HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES: &[&str] = &[
     "binaryItemID",
     "binItem",
 ];
+const HWPX_BORDER_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
 const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
     &["borderFillIDRef", "borderFillIdRef", "borderFillIDREF"];
+const HWPX_BORDER_WIDTH_ATTRIBUTES: &[&str] = &["width", "w"];
 const HWPX_CAPTION_PLACEMENT_ATTRIBUTES: &[&str] = &["side", "position", "pos", "placement"];
 const HWPX_CHART_TITLE_ATTRIBUTES: &[&str] =
     &["title", "chartTitle", "name", "description", "desc"];
@@ -1262,11 +1264,12 @@ fn extract_hwpx_border(border_fill_xml: &str, border_name: &str) -> Option<Borde
         }
 
         return Some(Border {
-            width: xml_attribute_value(tag.raw, "width")
+            width: xml_attribute_value_any(tag.raw, HWPX_BORDER_WIDTH_ATTRIBUTES)
                 .and_then(parse_hwpx_border_width)
                 .unwrap_or(LengthPx(1.0)),
             style: map_hwpx_border_style(border_type),
-            color: xml_attribute_value(tag.raw, "color").and_then(parse_hwpx_hex_color),
+            color: xml_attribute_value_any(tag.raw, HWPX_BORDER_COLOR_ATTRIBUTES)
+                .and_then(parse_hwpx_hex_color),
         });
     }
 
@@ -5430,8 +5433,8 @@ mod tests {
                       <hh:borderFill id="3"><hc:fillBrush><hc:winBrush faceColor="112233"/></hc:fillBrush></hh:borderFill>
                       <hh:borderFill id="4">
                         <hh:leftBorder type="SOLID" width="0.12 mm" color="#010203"/>
-                        <hh:rightBorder type="DASH" width="1 pt" color="#040506"/>
-                        <hh:topBorder type="DOT" width="2 px" color="#070809"/>
+                        <hh:rightBorder type="DASH" w="1 pt" lineColor="#040506"/>
+                        <hh:topBorder type="DOT" w="2 px" lineColor="#070809"/>
                         <hh:bottomBorder type="DOUBLE_SLIM" width="0.2 mm" color="#0A0B0C"/>
                         <hc:fillBrush><hc:winBrush fillColor="0X445566"/></hc:fillBrush>
                       </hh:borderFill>
