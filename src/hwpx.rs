@@ -30,7 +30,10 @@ const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
     &["borderFillIDRef", "borderFillIdRef", "borderFillIDREF"];
 const HWPX_CAPTION_PLACEMENT_ATTRIBUTES: &[&str] = &["side", "position", "pos", "placement"];
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
+const HWPX_FIELD_COMMAND_ATTRIBUTES: &[&str] = &["command", "cmd"];
 const HWPX_FIELD_ID_ATTRIBUTES: &[&str] = &["id", "instId"];
+const HWPX_FIELD_NAME_ATTRIBUTES: &[&str] = &["name", "title", "desc", "description"];
+const HWPX_FIELD_TYPE_ATTRIBUTES: &[&str] = &["type", "fieldType"];
 const HWPX_LINK_TITLE_ATTRIBUTES: &[&str] = &["title", "name", "desc", "description", "tooltip"];
 const HWPX_HEADER_FOOTER_APPLY_PAGE_TYPE_ATTRIBUTES: &[&str] =
     &["applyPageType", "pageType", "applyTo"];
@@ -2860,11 +2863,11 @@ fn xml_element_inner_xml<'a>(xml: &'a str, start_tag: &XmlTag<'_>, element_end: 
 }
 
 fn extract_hwpx_field_begin(tag: &str, field_xml: &str) -> HwpxActiveField {
-    let field_type =
-        decoded_xml_attribute_value(tag, "type").unwrap_or_else(|| "UNKNOWN".to_string());
-    let name = decoded_xml_attribute_value(tag, "name");
+    let field_type = decoded_xml_attribute_value_any(tag, HWPX_FIELD_TYPE_ATTRIBUTES)
+        .unwrap_or_else(|| "UNKNOWN".to_string());
+    let name = decoded_xml_attribute_value_any(tag, HWPX_FIELD_NAME_ATTRIBUTES);
     let command = first_non_empty_string([
-        decoded_xml_attribute_value(tag, "command"),
+        decoded_xml_attribute_value_any(tag, HWPX_FIELD_COMMAND_ATTRIBUTES),
         hwpx_field_parameter_value(
             field_xml,
             &["command", "Command", "cmd", "hyperlink", "Hyperlink"],
@@ -4715,7 +4718,7 @@ mod tests {
         let xml = r#"
             <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:ctrl>
-                <hp:fieldBegin instId="7" type="HYPERLINK" name="Example">
+                <hp:fieldBegin instId="7" fieldType="HYPERLINK" title="Example">
                   <hp:parameters cnt="1">
                     <hp:stringParam name="URL">https://example.com</hp:stringParam>
                   </hp:parameters>
@@ -4866,7 +4869,7 @@ mod tests {
         let xml = r#"
             <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:ctrl>
-                <hp:fieldBegin instId="9" type="DATE" name="created date"/>
+                <hp:fieldBegin instId="9" fieldType="DATE" title="created date"/>
               </hp:ctrl>
               <hp:run><hp:t>2026-06-13</hp:t></hp:run>
               <hp:ctrl><hp:fieldEnd beginIDRef="9"/></hp:ctrl>
