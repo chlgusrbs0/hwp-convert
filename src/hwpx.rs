@@ -2075,9 +2075,7 @@ fn extract_hwpx_image_from_pic_xml(
     Some(Image {
         resource_id,
         alt: first_non_empty_string([
-            decoded_root_xml_attribute_value(pic_xml, "description"),
-            decoded_root_xml_attribute_value(pic_xml, "desc"),
-            decoded_root_xml_attribute_value(pic_xml, "name"),
+            decoded_root_xml_attribute_value_any(pic_xml, HWPX_DESCRIPTION_ATTRIBUTES),
             first_hwpx_direct_child_element_text(
                 pic_xml,
                 &["altText", "description", "desc", "name"],
@@ -5692,7 +5690,7 @@ mod tests {
             },
         );
         let xml = r#"
-            <hp:pic description="explicit alt">
+            <hp:pic altText="explicit alt">
               <hc:img binaryItemIDRef="image1"/>
               <hp:shapeComment>fallback description</hp:shapeComment>
             </hp:pic>
