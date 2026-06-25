@@ -29,6 +29,10 @@ const HWPX_BINARY_ITEM_ID_REF_ATTRIBUTES: &[&str] = &[
 const HWPX_BORDER_FILL_ID_REF_ATTRIBUTES: &[&str] =
     &["borderFillIDRef", "borderFillIdRef", "borderFillIDREF"];
 const HWPX_CAPTION_PLACEMENT_ATTRIBUTES: &[&str] = &["side", "position", "pos", "placement"];
+const HWPX_CHART_TITLE_ATTRIBUTES: &[&str] =
+    &["title", "chartTitle", "name", "description", "desc"];
+const HWPX_DESCRIPTION_ATTRIBUTES: &[&str] = &["description", "desc", "alt", "altText", "name"];
+const HWPX_EQUATION_CONTENT_ATTRIBUTES: &[&str] = &["script", "formula", "text", "equation"];
 const HWPX_FIELD_BEGIN_ID_REF_ATTRIBUTES: &[&str] = &["beginIDRef", "beginIdRef", "beginIDREF"];
 const HWPX_FIELD_COMMAND_ATTRIBUTES: &[&str] = &["command", "cmd"];
 const HWPX_FIELD_ID_ATTRIBUTES: &[&str] = &["id", "instId"];
@@ -1967,9 +1971,7 @@ fn extract_hwpx_equation_from_xml(
     context: &mut HwpxFallbackContext,
 ) -> Equation {
     let content = first_non_empty_string([
-        decoded_root_xml_attribute_value(equation_xml, "script"),
-        decoded_root_xml_attribute_value(equation_xml, "text"),
-        decoded_root_xml_attribute_value(equation_xml, "equation"),
+        decoded_root_xml_attribute_value_any(equation_xml, HWPX_EQUATION_CONTENT_ATTRIBUTES),
         first_hwpx_direct_child_element_text(equation_xml, &["script", "math", "text"]),
         non_empty_string_owned(inlines_to_plain_text(&extract_inlines_from_xml_fragment(
             equation_xml,
@@ -1990,11 +1992,7 @@ fn extract_hwpx_shape_from_xml(
     shape_xml: &str,
     context: &mut HwpxFallbackContext,
 ) -> Shape {
-    let description = first_non_empty_string([
-        decoded_root_xml_attribute_value(shape_xml, "description"),
-        decoded_root_xml_attribute_value(shape_xml, "desc"),
-        decoded_root_xml_attribute_value(shape_xml, "name"),
-    ]);
+    let description = decoded_root_xml_attribute_value_any(shape_xml, HWPX_DESCRIPTION_ATTRIBUTES);
     let shape_text = non_empty_string_owned(inlines_to_plain_text(
         &extract_inlines_from_xml_fragment(shape_xml, context),
     ));
@@ -2020,10 +2018,7 @@ fn hwpx_shape_kind(tag_name: &str) -> ShapeKind {
 
 fn extract_hwpx_chart_from_xml(chart_xml: &str, context: &mut HwpxFallbackContext) -> Chart {
     let title = first_non_empty_string([
-        decoded_root_xml_attribute_value(chart_xml, "title"),
-        decoded_root_xml_attribute_value(chart_xml, "name"),
-        decoded_root_xml_attribute_value(chart_xml, "description"),
-        decoded_root_xml_attribute_value(chart_xml, "desc"),
+        decoded_root_xml_attribute_value_any(chart_xml, HWPX_CHART_TITLE_ATTRIBUTES),
         first_hwpx_direct_child_element_text(chart_xml, &["title", "caption", "name"]),
     ]);
     let chart_text = non_empty_string_owned(inlines_to_plain_text(
@@ -3293,6 +3288,12 @@ fn decoded_root_xml_attribute_value(xml: &str, attribute_name: &str) -> Option<S
         .and_then(non_empty_string_owned)
 }
 
+fn decoded_root_xml_attribute_value_any(xml: &str, attribute_names: &[&str]) -> Option<String> {
+    attribute_names
+        .iter()
+        .find_map(|attribute_name| decoded_root_xml_attribute_value(xml, attribute_name))
+}
+
 fn root_or_direct_child_xml_attribute_u32(
     xml: &str,
     root_name: &str,
@@ -4531,8 +4532,8 @@ mod tests {
                 <hp:run><hp:t>before image</hp:t></hp:run>
                 <hp:ctrl><hp:pic><hp:imgRect/></hp:pic></hp:ctrl>
                 <hp:run><hp:t>after image</hp:t></hp:run>
-                <hp:ctrl><hp:equation script="x + y"/></hp:ctrl>
-                <hp:ctrl><hp:chart title="Sales"/></hp:ctrl>
+                <hp:ctrl><hp:equation formula="x + y"/></hp:ctrl>
+                <hp:ctrl><hp:chart chartTitle="Sales"/></hp:ctrl>
               </hp:p>
             </hs:sec>
         "#;
@@ -4599,6 +4600,28 @@ mod tests {
                 if shape.kind == ShapeKind::Rectangle
                     && shape.fallback_text.as_deref() == Some("shape text")
         ));
+    }
+
+    #[test]
+    fn recovers_hwpx_shape_description_attribute_alias() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p>
+                <hp:ctrl><hp:rect alt="shape alt text"/></hp:ctrl>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+
+        match &blocks[0] {
+            Block::Shape(shape) => {
+                assert_eq!(shape.description.as_deref(), Some("shape alt text"));
+                assert_eq!(shape.fallback_text.as_deref(), Some("shape alt text"));
+            }
+            other => panic!("expected shape block, got {other:?}"),
+        }
     }
 
     #[test]
