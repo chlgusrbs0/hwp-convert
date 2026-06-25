@@ -73,6 +73,7 @@ const HWPX_HEADER_FOOTER_APPLY_PAGE_TYPE_ATTRIBUTES: &[&str] =
 const HWPX_LIST_ID_REF_ATTRIBUTES: &[&str] = &["idRef", "idref", "idREF"];
 const HWPX_LIST_LEVEL_ATTRIBUTES: &[&str] = &["level", "lvl", "outlineLevel"];
 const HWPX_LIST_TYPE_ATTRIBUTES: &[&str] = &["type", "kind"];
+const HWPX_LINE_SPACING_TYPE_ATTRIBUTES: &[&str] = &["type", "kind"];
 const HWPX_MANIFEST_HREF_ATTRIBUTES: &[&str] = &["href", "full-path", "fullPath"];
 const HWPX_MANIFEST_ID_REF_ATTRIBUTES: &[&str] = &["idref", "idRef", "idREF"];
 const HWPX_MANIFEST_MEDIA_TYPE_ATTRIBUTES: &[&str] = &["media-type", "mediaType"];
@@ -1460,7 +1461,8 @@ fn hwpx_direct_paragraph_style_prefix(paragraph_xml: &str) -> &str {
 }
 
 fn is_hwpx_percent_line_spacing(tag: &str) -> bool {
-    xml_attribute_value(tag, "type").is_some_and(|value| value.eq_ignore_ascii_case("PERCENT"))
+    xml_attribute_value_any(tag, HWPX_LINE_SPACING_TYPE_ATTRIBUTES)
+        .is_some_and(|value| value.eq_ignore_ascii_case("PERCENT"))
 }
 
 fn hwpx_xml_has_percent_line_spacing(xml: &str) -> bool {
@@ -5192,7 +5194,7 @@ mod tests {
             r#"
             <hh:head>
               <hh:paraPr id="1">
-                <hh:lineSpacing type="PERCENT" value="160" unit="HWPUNIT"/>
+                <hh:lineSpacing kind="PERCENT" value="160" unit="HWPUNIT"/>
               </hh:paraPr>
             </hh:head>
             "#,
