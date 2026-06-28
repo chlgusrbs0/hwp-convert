@@ -314,11 +314,10 @@ fn export_file(
 }
 
 fn conversion_warnings_for_document(document: &Document) -> Vec<String> {
-    let mut warnings = document
-        .warnings
-        .iter()
-        .map(|warning| warning.message.clone())
-        .collect::<Vec<_>>();
+    let mut warnings = Vec::new();
+    for warning in &document.warnings {
+        push_warning_once(&mut warnings, warning.message.clone());
+    }
 
     collect_ir_unknown_warnings(document, &mut warnings);
     warnings
@@ -2342,7 +2341,7 @@ mod tests {
         ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
         ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing,
         StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
-        UnknownInline,
+        UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -2747,6 +2746,25 @@ mod tests {
         assert!(warnings.iter().any(|warning| {
             warning.contains("IR unknown block `cell_field`: cell field fallback preserved")
         }));
+    }
+
+    #[test]
+    fn deduplicates_document_conversion_warnings() {
+        let mut document = document_with_blocks(Vec::new());
+        document.warnings = vec![
+            ConversionWarning {
+                code: WarningCode::Unknown,
+                message: "same warning".to_string(),
+            },
+            ConversionWarning {
+                code: WarningCode::Unknown,
+                message: "same warning".to_string(),
+            },
+        ];
+
+        let warnings = conversion_warnings_for_document(&document);
+
+        assert_eq!(warnings, vec!["same warning".to_string()]);
     }
 
     #[test]
