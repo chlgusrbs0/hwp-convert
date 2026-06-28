@@ -563,14 +563,30 @@ impl HwpxFallbackContext {
         })
     }
 
-    fn border_fill_background_color(&self, border_fill_id: u32) -> Option<Color> {
-        self.border_fill(border_fill_id)?.background_color
+    fn border_fill_background_color(&mut self, border_fill_id: u32) -> Option<Color> {
+        match self.border_fill(border_fill_id) {
+            Some(fill) => fill.background_color,
+            None => {
+                self.warn_missing_border_fill(border_fill_id);
+                None
+            }
+        }
     }
 
-    fn border_fill_borders(&self, border_fill_id: u32) -> [Option<Border>; 4] {
-        self.border_fill(border_fill_id)
-            .map(|fill| fill.borders.clone())
-            .unwrap_or_default()
+    fn border_fill_borders(&mut self, border_fill_id: u32) -> [Option<Border>; 4] {
+        match self.border_fill(border_fill_id) {
+            Some(fill) => fill.borders.clone(),
+            None => {
+                self.warn_missing_border_fill(border_fill_id);
+                Default::default()
+            }
+        }
+    }
+
+    fn warn_missing_border_fill(&mut self, border_fill_id: u32) {
+        self.add_warning_once(&format!(
+            "HWPX object referenced missing borderFill id {border_fill_id}; hwp-convert used default fill and border style."
+        ));
     }
 
     fn text_style_for_run(&mut self, run_tag: &str) -> TextStyle {
@@ -4637,6 +4653,33 @@ mod tests {
         assert_eq!(
             table.rows[0].cells[0].style.background_color,
             Some(cell_color)
+        );
+    }
+
+    #[test]
+    fn warns_when_hwpx_table_references_missing_border_fill() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tr>
+                <hp:tc>
+                  <hp:cellPr borderFillIDRef="9"/>
+                  <hp:subList>
+                    <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+
+        assert_eq!(table.rows[0].cells[0].style.background_color, None);
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("missing borderFill id 9"))
         );
     }
 
