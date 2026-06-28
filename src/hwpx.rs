@@ -120,6 +120,8 @@ const HWPX_PICTURE_VERTICAL_REL_TO_ATTRIBUTES: &[&str] = &["vertRelTo", "vertica
 const HWPX_VERTICAL_ALIGN_ATTRIBUTES: &[&str] = &["vertAlign", "verticalAlign"];
 const HWPX_TABLE_CELL_COL_ADDR_ATTRIBUTES: &[&str] = &["colAddr", "coladdr", "colIndex"];
 const HWPX_TABLE_CELL_COL_SPAN_ATTRIBUTES: &[&str] = &["colSpan", "colspan", "col-span"];
+const HWPX_TABLE_CELL_FIELD_NAME_ATTRIBUTES: &[&str] =
+    &["fieldName", "field-name", "cellFieldName"];
 const HWPX_TABLE_CELL_ROW_ADDR_ATTRIBUTES: &[&str] = &["rowAddr", "rowaddr", "rowIndex"];
 const HWPX_TABLE_CELL_ROW_SPAN_ATTRIBUTES: &[&str] = &["rowSpan", "rowspan", "row-span"];
 const HWPX_WIDTH_ATTRIBUTES: &[&str] = &["width", "w"];
@@ -1753,12 +1755,32 @@ fn extract_table_cell_from_xml(
     } else {
         *table_padding
     };
+    let mut blocks = extract_section_xml_blocks(cell_xml, context);
+    if let Some(field_name) =
+        decoded_root_xml_attribute_value_any(cell_xml, HWPX_TABLE_CELL_FIELD_NAME_ATTRIBUTES)
+    {
+        blocks.insert(
+            0,
+            Block::Unknown(UnknownBlock {
+                kind: "table_cell_field".to_string(),
+                fallback_text: Some(format!("[cell field: {field_name}]")),
+                message: Some(
+                    "Table cell field name preserved as fallback text because Document IR does not yet model cell fields."
+                        .to_string(),
+                ),
+                source: Some("hwpx".to_string()),
+            }),
+        );
+        context.add_warning_once(
+            "HWPX table cell field names were preserved as unknown block fallback text.",
+        );
+    }
 
     TableCell {
         row_span: hwpx_table_cell_span(cell_xml, HWPX_TABLE_CELL_ROW_SPAN_ATTRIBUTES),
         col_span: hwpx_table_cell_span(cell_xml, HWPX_TABLE_CELL_COL_SPAN_ATTRIBUTES),
         is_header,
-        blocks: extract_section_xml_blocks(cell_xml, context),
+        blocks,
         style: TableCellStyle {
             background_color,
             vertical_align,
@@ -4397,6 +4419,39 @@ mod tests {
         assert_eq!(inherited.padding_top, Some(LengthPx(3.0)));
         assert_eq!(custom.padding_left, Some(LengthPx(2.0)));
         assert_eq!(custom.padding_top, Some(LengthPx(1.0)));
+    }
+
+    #[test]
+    fn preserves_hwpx_table_cell_field_name_as_unknown_block() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tr>
+                <hp:tc fieldName="amount">
+                  <hp:subList>
+                    <hp:p><hp:run><hp:t>1000</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+        let cell = &table.rows[0].cells[0];
+
+        assert!(matches!(
+            &cell.blocks[0],
+            Block::Unknown(unknown)
+                if unknown.kind == "table_cell_field"
+                    && unknown.fallback_text.as_deref() == Some("[cell field: amount]")
+                    && unknown.source.as_deref() == Some("hwpx")
+        ));
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("table cell field names"))
+        );
     }
 
     #[test]
