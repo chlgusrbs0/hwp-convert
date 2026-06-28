@@ -1756,8 +1756,14 @@ fn extract_table_cell_from_xml(
         *table_padding
     };
     let mut blocks = extract_section_xml_blocks(cell_xml, context);
-    if let Some(field_name) =
-        decoded_root_xml_attribute_value_any(cell_xml, HWPX_TABLE_CELL_FIELD_NAME_ATTRIBUTES)
+    if let Some(field_name) = root_or_direct_child_xml_attribute_value_any(
+        cell_xml,
+        "tc",
+        &["cellPr"],
+        HWPX_TABLE_CELL_FIELD_NAME_ATTRIBUTES,
+    )
+    .map(decode_xml_text)
+    .and_then(non_empty_string_owned)
     {
         blocks.insert(
             0,
@@ -4426,7 +4432,8 @@ mod tests {
         let xml = r#"
             <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:tr>
-                <hp:tc fieldName="amount">
+                <hp:tc>
+                  <hp:cellPr field-name="amount"/>
                   <hp:subList>
                     <hp:p><hp:run><hp:t>1000</hp:t></hp:run></hp:p>
                   </hp:subList>
