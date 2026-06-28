@@ -700,12 +700,23 @@ impl HwpxFallbackContext {
     }
 
     fn ensure_image_resource(&mut self, binary_item_id_ref: &str) -> Option<ResourceId> {
-        let image_key = self.resolve_image_item_key(binary_item_id_ref)?;
+        let Some(image_key) = self.resolve_image_item_key(binary_item_id_ref) else {
+            self.add_warning_once(&format!(
+                "HWPX picture referenced missing binary item `{}`; hwp-convert preserved available fallback text instead of silently dropping the image.",
+                binary_item_id_ref.trim()
+            ));
+            return None;
+        };
         if let Some(resource_id) = self.image_resource_ids.get(&image_key) {
             return Some(resource_id.clone());
         }
 
-        let item = self.image_items.get(&image_key)?;
+        let Some(item) = self.image_items.get(&image_key) else {
+            self.add_warning_once(&format!(
+                "HWPX picture referenced missing binary item `{image_key}`; hwp-convert preserved available fallback text instead of silently dropping the image."
+            ));
+            return None;
+        };
         let resource_id = ResourceId(item.id.clone());
         if self.resources.get(&resource_id).is_none() {
             self.resources
@@ -4901,6 +4912,11 @@ mod tests {
                 if unknown.kind == "hwpx:image"
                     && unknown.fallback_text.as_deref() == Some("[image]\nmissing image alt")
         ));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("missing binary item `missing-image`")
+        }));
     }
 
     #[test]
