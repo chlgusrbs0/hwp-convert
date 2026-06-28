@@ -633,17 +633,26 @@ impl HwpxFallbackContext {
                     number: Some(*number),
                 })
             }
-            Some(ListKind::Unordered) => Some(ListInfo {
-                kind: ListKind::Unordered,
-                level: style.level,
-                marker: Some(
-                    style
-                        .list_id
-                        .and_then(|list_id| self.bullet_markers.get(&list_id).cloned())
-                        .unwrap_or_else(|| "•".to_string()),
-                ),
-                number: None,
-            }),
+            Some(ListKind::Unordered) => {
+                let marker = style
+                    .list_id
+                    .and_then(|list_id| match self.bullet_markers.get(&list_id) {
+                        Some(marker) => Some(marker.clone()),
+                        None => {
+                            self.add_warning_once(&format!(
+                                "HWPX unordered list referenced missing bullet marker id {list_id}; hwp-convert used a default bullet marker."
+                            ));
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| "•".to_string());
+                Some(ListInfo {
+                    kind: ListKind::Unordered,
+                    level: style.level,
+                    marker: Some(marker),
+                    number: None,
+                })
+            }
             _ => None,
         }
     }
@@ -5396,6 +5405,43 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.message.contains("missing charPr id 7"))
+        );
+    }
+
+    #[test]
+    fn warns_when_hwpx_unordered_list_marker_is_missing() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p paraPrIDRef="0"><hp:run><hp:t>item</hp:t></hp:run></hp:p>
+            </hs:sec>
+        "#;
+        let mut context = HwpxFallbackContext {
+            paragraph_styles: vec![HwpxParagraphStyle {
+                kind: Some(ListKind::Unordered),
+                list_id: Some(99),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+        let paragraph = match &blocks[0] {
+            Block::Paragraph(paragraph) => paragraph,
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(
+            paragraph
+                .list
+                .as_ref()
+                .and_then(|list| list.marker.as_deref()),
+            Some("•")
+        );
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("missing bullet marker id 99"))
         );
     }
 
