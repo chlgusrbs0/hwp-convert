@@ -1622,8 +1622,23 @@ fn hwpx_table_row_addr(row_xml: &str) -> Option<u32> {
         let mut cursor = 0usize;
         while let Some(tag) = next_xml_tag(row_xml, cursor) {
             if tag.name == "tc" && !tag.is_closing {
-                return xml_attribute_value_any(tag.raw, HWPX_TABLE_CELL_ROW_ADDR_ATTRIBUTES)
-                    .and_then(parse_trimmed);
+                let from_cell_attr =
+                    xml_attribute_value_any(tag.raw, HWPX_TABLE_CELL_ROW_ADDR_ATTRIBUTES)
+                        .and_then(parse_trimmed);
+                if from_cell_attr.is_some() {
+                    return from_cell_attr;
+                }
+                let cell_end = if tag.is_self_closing {
+                    tag.end
+                } else {
+                    find_matching_element_end(row_xml, &tag).unwrap_or(tag.end)
+                };
+                return root_or_direct_child_xml_attribute_u32_any(
+                    &row_xml[tag.start..cell_end],
+                    "tc",
+                    &["cellAddr"],
+                    HWPX_TABLE_CELL_ROW_ADDR_ATTRIBUTES,
+                );
             }
             cursor = tag.end;
         }
@@ -1675,7 +1690,15 @@ fn extract_table_cells_from_row_xml(
         };
         let cell_xml = &row_xml[tag.start..cell_end];
         let col_addr =
-            root_xml_attribute_u32_any(cell_xml, "tc", HWPX_TABLE_CELL_COL_ADDR_ATTRIBUTES);
+            root_xml_attribute_u32_any(cell_xml, "tc", HWPX_TABLE_CELL_COL_ADDR_ATTRIBUTES)
+                .or_else(|| {
+                    root_or_direct_child_xml_attribute_u32_any(
+                        cell_xml,
+                        "tc",
+                        &["cellAddr"],
+                        HWPX_TABLE_CELL_COL_ADDR_ATTRIBUTES,
+                    )
+                });
         cells.push((
             col_addr,
             next_order,
@@ -4466,12 +4489,14 @@ mod tests {
         let xml = r#"
             <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
               <hp:tr>
-                <hp:tc colIndex="1">
+                <hp:tc>
+                  <hp:cellAddr colIndex="1"/>
                   <hp:subList>
                     <hp:p><hp:run><hp:t>second cell</hp:t></hp:run></hp:p>
                   </hp:subList>
                 </hp:tc>
-                <hp:tc colIndex="0">
+                <hp:tc>
+                  <hp:cellAddr colIndex="0"/>
                   <hp:subList>
                     <hp:p><hp:run><hp:t>first cell</hp:t></hp:run></hp:p>
                   </hp:subList>
@@ -4497,15 +4522,17 @@ mod tests {
     fn orders_hwpx_table_rows_by_row_addr_when_present() {
         let xml = r#"
             <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-              <hp:tr rowIndex="1">
+              <hp:tr>
                 <hp:tc>
+                  <hp:cellAddr rowIndex="1"/>
                   <hp:subList>
                     <hp:p><hp:run><hp:t>second row</hp:t></hp:run></hp:p>
                   </hp:subList>
                 </hp:tc>
               </hp:tr>
-              <hp:tr rowIndex="0">
+              <hp:tr>
                 <hp:tc>
+                  <hp:cellAddr rowIndex="0"/>
                   <hp:subList>
                     <hp:p><hp:run><hp:t>first row</hp:t></hp:run></hp:p>
                   </hp:subList>
