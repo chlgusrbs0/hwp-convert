@@ -924,8 +924,12 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                 }
 
                 let char_xml = &header_xml[tag.start..char_end];
-                context.text_styles[id] =
-                    extract_hwpx_text_style(tag.raw, char_xml, &context.font_faces);
+                let (style, warnings) =
+                    extract_hwpx_text_style_with_warnings(tag.raw, char_xml, &context.font_faces);
+                context.text_styles[id] = style;
+                for warning in warnings {
+                    context.add_warning_once(&warning);
+                }
                 cursor = char_end;
             }
             "borderFill" => {
@@ -1228,11 +1232,11 @@ fn hwpx_font_face_group_index(lang: &str) -> Option<usize> {
     }
 }
 
-fn extract_hwpx_text_style(
+fn extract_hwpx_text_style_with_warnings(
     char_pr_tag: &str,
     char_pr_xml: &str,
     font_faces: &[Vec<String>],
-) -> TextStyle {
+) -> (TextStyle, Vec<String>) {
     let mut style = TextStyle {
         emphasis_dot: xml_attribute_value_any(char_pr_tag, HWPX_TEXT_EMPHASIS_DOT_ATTRIBUTES)
             .is_some_and(hwpx_style_value_is_enabled),
@@ -1250,6 +1254,7 @@ fn extract_hwpx_text_style(
         ..Default::default()
     };
     let mut cursor = 0usize;
+    let mut style_warnings = Vec::new();
 
     while let Some(tag) = next_xml_tag(char_pr_xml, cursor) {
         if !tag.is_closing {
@@ -1283,7 +1288,10 @@ fn extract_hwpx_text_style(
                 "shadow" => style.shadow = hwpx_style_tag_is_enabled(tag.raw, &["type"]),
                 "outline" => style.outline = hwpx_style_tag_is_enabled(tag.raw, &["type"]),
                 "fontRef" => {
-                    style.font_family = font_ref_family(tag.raw, font_faces);
+                    let (font_family, warnings) =
+                        font_ref_family_with_warnings(tag.raw, font_faces);
+                    style.font_family = font_family;
+                    style_warnings.extend(warnings);
                 }
                 _ => {}
             }
@@ -1291,7 +1299,7 @@ fn extract_hwpx_text_style(
         cursor = tag.end;
     }
 
-    style
+    (style, style_warnings)
 }
 
 fn hwpx_style_tag_is_enabled(tag: &str, attribute_names: &[&str]) -> bool {
@@ -1401,7 +1409,13 @@ fn extract_hwpx_bullet_marker(bullet_tag: &str, bullet_xml: &str) -> Option<Stri
     ])
 }
 
-fn font_ref_family(font_ref_tag: &str, font_faces: &[Vec<String>]) -> Option<String> {
+fn font_ref_family_with_warnings(
+    font_ref_tag: &str,
+    font_faces: &[Vec<String>],
+) -> (Option<String>, Vec<String>) {
+    let mut family = None;
+    let mut warnings = Vec::new();
+
     for (group_index, attribute) in [
         "hangul", "latin", "hanja", "japanese", "other", "symbol", "user",
     ]
@@ -1414,15 +1428,23 @@ fn font_ref_family(font_ref_tag: &str, font_faces: &[Vec<String>]) -> Option<Str
             continue;
         };
         let Some(group) = font_faces.get(group_index) else {
+            warnings.push(format!(
+                "HWPX charPr fontRef referenced missing {attribute} font id {font_id}; hwp-convert used an available fallback font family or default font style."
+            ));
             continue;
         };
         let Some(face) = group.get(font_id).filter(|face| !face.is_empty()) else {
+            warnings.push(format!(
+                "HWPX charPr fontRef referenced missing {attribute} font id {font_id}; hwp-convert used an available fallback font family or default font style."
+            ));
             continue;
         };
-        return Some(face.clone());
+        if family.is_none() {
+            family = Some(face.clone());
+        }
     }
 
-    None
+    (family, warnings)
 }
 
 fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
@@ -5802,7 +5824,7 @@ mod tests {
 
     #[test]
     fn ignores_disabled_hwpx_text_effect_tags() {
-        let style = extract_hwpx_text_style(
+        let (style, warnings) = extract_hwpx_text_style_with_warnings(
             r#"hh:charPr id="0" symMark="NONE""#,
             r##"
               <hh:charPr id="0" symMark="NONE">
@@ -5815,6 +5837,7 @@ mod tests {
             &[],
         );
 
+        assert!(warnings.is_empty());
         assert!(!style.underline);
         assert!(!style.strike);
         assert!(!style.emphasis_dot);
@@ -5822,6 +5845,33 @@ mod tests {
         assert!(!style.shadow);
         assert_eq!(style.underline_color, None);
         assert_eq!(style.strike_color, None);
+    }
+
+    #[test]
+    fn warns_when_hwpx_font_ref_references_missing_face() {
+        let context = extract_hwpx_fallback_context(
+            r#"
+            <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+              <hh:fontface lang="LATIN">
+                <hh:font id="0" face="Latin Font"/>
+              </hh:fontface>
+              <hh:charPr id="0">
+                <hh:fontRef hangul="9" latin="0"/>
+              </hh:charPr>
+            </hh:head>
+            "#,
+        );
+
+        assert_eq!(
+            context.text_styles[0].font_family.as_deref(),
+            Some("Latin Font")
+        );
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("missing hangul font id 9") })
+        );
     }
 
     #[test]
