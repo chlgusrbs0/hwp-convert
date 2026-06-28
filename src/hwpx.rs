@@ -1560,6 +1560,16 @@ fn extract_section_xml_blocks_with_metadata(
 }
 
 fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) -> Option<Table> {
+    let table_padding = [
+        HWPX_MARGIN_TOP_ATTRIBUTES,
+        HWPX_MARGIN_RIGHT_ATTRIBUTES,
+        HWPX_MARGIN_BOTTOM_ATTRIBUTES,
+        HWPX_MARGIN_LEFT_ATTRIBUTES,
+    ]
+    .map(|attributes| {
+        root_or_direct_child_xml_attribute_u32_any(table_xml, "tbl", &["inMargin"], attributes)
+            .and_then(hwp_units_to_px_option)
+    });
     let mut rows = Vec::new();
     let mut next_order = 0usize;
     let mut cursor = 0usize;
@@ -1575,7 +1585,7 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
             continue;
         };
         let row_xml = &table_xml[tag.start..row_end];
-        let cells = extract_table_cells_from_row_xml(row_xml, context);
+        let cells = extract_table_cells_from_row_xml(row_xml, context, &table_padding);
         if !cells.is_empty() {
             rows.push((hwpx_table_row_addr(row_xml), next_order, TableRow { cells }));
             next_order += 1;
@@ -1645,6 +1655,7 @@ fn extract_table_blocks_from_xml(table_xml: &str, context: &mut HwpxFallbackCont
 fn extract_table_cells_from_row_xml(
     row_xml: &str,
     context: &mut HwpxFallbackContext,
+    table_padding: &[Option<LengthPx>; 4],
 ) -> Vec<TableCell> {
     let mut cells = Vec::new();
     let mut next_order = 0usize;
@@ -1666,7 +1677,7 @@ fn extract_table_cells_from_row_xml(
         cells.push((
             col_addr,
             next_order,
-            extract_table_cell_from_xml(cell_xml, context),
+            extract_table_cell_from_xml(cell_xml, context, table_padding),
         ));
         next_order += 1;
         cursor = cell_end;
@@ -1679,7 +1690,11 @@ fn extract_table_cells_from_row_xml(
     cells.into_iter().map(|(_, _, cell)| cell).collect()
 }
 
-fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext) -> TableCell {
+fn extract_table_cell_from_xml(
+    cell_xml: &str,
+    context: &mut HwpxFallbackContext,
+    table_padding: &[Option<LengthPx>; 4],
+) -> TableCell {
     let border_fill_id = root_or_direct_child_xml_attribute_u32_any(
         cell_xml,
         "tc",
@@ -1713,6 +1728,31 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
         root_or_direct_child_xml_attribute_u32_any(cell_xml, "tc", &["cellMargin"], attributes)
             .and_then(hwp_units_to_px_option)
     };
+    let has_margin_attribute = root_xml_attribute_value(cell_xml, "hasMargin");
+    let has_explicit_cell_margin = [
+        HWPX_MARGIN_TOP_ATTRIBUTES,
+        HWPX_MARGIN_RIGHT_ATTRIBUTES,
+        HWPX_MARGIN_BOTTOM_ATTRIBUTES,
+        HWPX_MARGIN_LEFT_ATTRIBUTES,
+    ]
+    .iter()
+    .any(|attributes| {
+        root_or_direct_child_xml_attribute_value_any(cell_xml, "tc", &["cellMargin"], attributes)
+            .is_some()
+    });
+    let use_cell_margin = has_margin_attribute
+        .map(xml_boolean_is_true)
+        .unwrap_or(has_explicit_cell_margin);
+    let padding = if use_cell_margin {
+        [
+            cell_margin(HWPX_MARGIN_TOP_ATTRIBUTES),
+            cell_margin(HWPX_MARGIN_RIGHT_ATTRIBUTES),
+            cell_margin(HWPX_MARGIN_BOTTOM_ATTRIBUTES),
+            cell_margin(HWPX_MARGIN_LEFT_ATTRIBUTES),
+        ]
+    } else {
+        *table_padding
+    };
 
     TableCell {
         row_span: hwpx_table_cell_span(cell_xml, HWPX_TABLE_CELL_ROW_SPAN_ATTRIBUTES),
@@ -1724,10 +1764,10 @@ fn extract_table_cell_from_xml(cell_xml: &str, context: &mut HwpxFallbackContext
             vertical_align,
             width: cell_size(HWPX_WIDTH_ATTRIBUTES),
             height: cell_size(HWPX_HEIGHT_ATTRIBUTES),
-            padding_top: cell_margin(HWPX_MARGIN_TOP_ATTRIBUTES),
-            padding_right: cell_margin(HWPX_MARGIN_RIGHT_ATTRIBUTES),
-            padding_bottom: cell_margin(HWPX_MARGIN_BOTTOM_ATTRIBUTES),
-            padding_left: cell_margin(HWPX_MARGIN_LEFT_ATTRIBUTES),
+            padding_top: padding[0],
+            padding_right: padding[1],
+            padding_bottom: padding[2],
+            padding_left: padding[3],
             border_top,
             border_right,
             border_bottom,
@@ -4328,6 +4368,35 @@ mod tests {
         assert_eq!(cell.style.padding_left, Some(LengthPx(2.0)));
         assert_eq!(cell.style.padding_top, Some(LengthPx(1.0)));
         assert_eq!(cell.style.vertical_align, Some(VerticalAlign::Middle));
+    }
+
+    #[test]
+    fn applies_hwpx_table_padding_unless_cell_margin_is_enabled() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:inMargin l="300" r="300" t="225" b="225"/>
+              <hp:tr>
+                <hp:tc hasMargin="0">
+                  <hp:cellMargin l="900" r="900" t="900" b="900"/>
+                  <hp:subList><hp:p><hp:run><hp:t>default</hp:t></hp:run></hp:p></hp:subList>
+                </hp:tc>
+                <hp:tc hasMargin="1">
+                  <hp:cellMargin l="150" r="150" t="75" b="75"/>
+                  <hp:subList><hp:p><hp:run><hp:t>custom</hp:t></hp:run></hp:p></hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+        let inherited = &table.rows[0].cells[0].style;
+        let custom = &table.rows[0].cells[1].style;
+
+        assert_eq!(inherited.padding_left, Some(LengthPx(4.0)));
+        assert_eq!(inherited.padding_top, Some(LengthPx(3.0)));
+        assert_eq!(custom.padding_left, Some(LengthPx(2.0)));
+        assert_eq!(custom.padding_top, Some(LengthPx(1.0)));
     }
 
     #[test]
