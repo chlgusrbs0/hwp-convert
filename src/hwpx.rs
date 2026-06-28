@@ -688,6 +688,15 @@ impl HwpxFallbackContext {
             NoteKind::Endnote => "endnote",
         };
         let mut requested_id = decoded_xml_attribute_value_any(tag, HWPX_NOTE_ID_ATTRIBUTES);
+        if let Some(raw_id) = requested_id.as_deref() {
+            let requested_note_id = NoteId(format!("{note_prefix}-{raw_id}"));
+            if self.notes.get(&requested_note_id).is_some() {
+                self.add_warning_once(&format!(
+                    "HWPX note referenced duplicate id `{}`; hwp-convert assigned a unique note id instead of dropping the note.",
+                    requested_note_id.as_str()
+                ));
+            }
+        }
         let blocks = extract_section_xml_blocks(note_xml, self);
 
         let note_id = loop {
@@ -6996,6 +7005,12 @@ mod tests {
                 .notes
                 .get(&NoteId("footnote-3-2".to_string()))
                 .is_some()
+        );
+        assert!(
+            document
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("duplicate id `footnote-3`") })
         );
 
         Ok(())
