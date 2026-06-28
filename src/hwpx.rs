@@ -573,24 +573,29 @@ impl HwpxFallbackContext {
             .unwrap_or_default()
     }
 
-    fn text_style_for_run(&self, run_tag: &str) -> TextStyle {
+    fn text_style_for_run(&mut self, run_tag: &str) -> TextStyle {
         let Some(char_pr_id) = xml_attribute_value_any(run_tag, HWPX_CHAR_PR_ID_REF_ATTRIBUTES)
             .and_then(parse_trimmed::<usize>)
         else {
             return TextStyle::default();
         };
 
-        self.text_styles
-            .get(char_pr_id)
-            .cloned()
-            .unwrap_or_default()
+        match self.text_styles.get(char_pr_id) {
+            Some(style) => style.clone(),
+            None => {
+                self.add_warning_once(&format!(
+                    "HWPX run referenced missing charPr id {char_pr_id}; hwp-convert used default text style."
+                ));
+                TextStyle::default()
+            }
+        }
     }
 
-    fn paragraph_style_for_paragraph(&self, paragraph_xml: &str) -> ParagraphStyle {
+    fn paragraph_style_for_paragraph(&mut self, paragraph_xml: &str) -> ParagraphStyle {
         self.hwpx_paragraph_style_for_paragraph(paragraph_xml).style
     }
 
-    fn paragraph_role_for_paragraph(&self, paragraph_xml: &str) -> ParagraphRole {
+    fn paragraph_role_for_paragraph(&mut self, paragraph_xml: &str) -> ParagraphRole {
         self.hwpx_paragraph_style_for_paragraph(paragraph_xml)
             .role
             .unwrap_or_default()
@@ -627,12 +632,21 @@ impl HwpxFallbackContext {
         }
     }
 
-    fn hwpx_paragraph_style_for_paragraph(&self, paragraph_xml: &str) -> HwpxParagraphStyle {
-        let mut style =
+    fn hwpx_paragraph_style_for_paragraph(&mut self, paragraph_xml: &str) -> HwpxParagraphStyle {
+        let paragraph_style_id =
             root_xml_attribute_u32_any(paragraph_xml, "p", HWPX_PARAGRAPH_PR_ID_REF_ATTRIBUTES)
-                .map(|id| id as usize)
-                .and_then(|para_pr_id| self.paragraph_styles.get(para_pr_id).cloned())
-                .unwrap_or_default();
+                .map(|id| id as usize);
+        let mut style = paragraph_style_id
+            .and_then(|para_pr_id| {
+                let style = self.paragraph_styles.get(para_pr_id).cloned();
+                if style.is_none() {
+                    self.add_warning_once(&format!(
+                        "HWPX paragraph referenced missing paraPr id {para_pr_id}; hwp-convert used direct paragraph properties or default paragraph style."
+                    ));
+                }
+                style
+            })
+            .unwrap_or_default();
         let direct_style = extract_hwpx_direct_paragraph_style(paragraph_xml);
         merge_hwpx_paragraph_style(&mut style, direct_style);
         style
@@ -5296,6 +5310,34 @@ mod tests {
         assert!(paragraph.list.is_none());
 
         Ok(())
+    }
+
+    #[test]
+    fn warns_when_hwpx_style_references_are_missing() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p paraPrIDRef="9">
+                <hp:run charPrIDRef="7"><hp:t>unstyled</hp:t></hp:run>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+
+        assert!(matches!(&blocks[0], Block::Paragraph(_)));
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("missing paraPr id 9"))
+        );
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("missing charPr id 7"))
+        );
     }
 
     #[test]
