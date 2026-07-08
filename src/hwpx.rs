@@ -1299,23 +1299,25 @@ fn extract_hwpx_text_style_with_warnings(
                 "italic" => style.italic = true,
                 "underline" => {
                     style.underline = hwpx_style_tag_is_enabled(tag.raw, &["type"]);
-                    style.underline_color = style
-                        .underline
-                        .then(|| {
-                            xml_attribute_value_any(tag.raw, HWPX_DECORATION_COLOR_ATTRIBUTES)
-                                .and_then(parse_hwpx_hex_color)
-                        })
-                        .flatten();
+                    if style.underline {
+                        style.underline_color = parse_hwpx_color_attribute_with_warning(
+                            tag.raw,
+                            HWPX_DECORATION_COLOR_ATTRIBUTES,
+                            "underline color",
+                            &mut style_warnings,
+                        );
+                    }
                 }
                 "strikeout" | "strikeOut" => {
                     style.strike = hwpx_style_tag_is_enabled(tag.raw, &["shape", "type"]);
-                    style.strike_color = style
-                        .strike
-                        .then(|| {
-                            xml_attribute_value_any(tag.raw, HWPX_DECORATION_COLOR_ATTRIBUTES)
-                                .and_then(parse_hwpx_hex_color)
-                        })
-                        .flatten();
+                    if style.strike {
+                        style.strike_color = parse_hwpx_color_attribute_with_warning(
+                            tag.raw,
+                            HWPX_DECORATION_COLOR_ATTRIBUTES,
+                            "strikeout color",
+                            &mut style_warnings,
+                        );
+                    }
                 }
                 "supscript" => style.superscript = true,
                 "subscript" => style.subscript = true,
@@ -6045,7 +6047,10 @@ mod tests {
         let context = extract_hwpx_fallback_context(
             r##"
             <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
-              <hh:charPr id="0" fontSize="large" color="not-a-color" backgroundColor="#xyz"/>
+              <hh:charPr id="0" fontSize="large" color="not-a-color" backgroundColor="#xyz">
+                <hh:underline type="BOTTOM" color="bad-underline"/>
+                <hh:strikeout shape="SOLID" color="bad-strike"/>
+              </hh:charPr>
             </hh:head>
             "##,
         );
@@ -6068,6 +6073,16 @@ mod tests {
             warning
                 .message
                 .contains("unsupported text background color `#xyz`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported underline color `bad-underline`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported strikeout color `bad-strike`")
         }));
     }
 
