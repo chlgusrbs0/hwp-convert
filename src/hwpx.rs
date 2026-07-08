@@ -1856,7 +1856,7 @@ fn extract_table_cell_from_xml(
         &["subList"],
         HWPX_VERTICAL_ALIGN_ATTRIBUTES,
     )
-    .and_then(map_hwpx_vertical_align);
+    .and_then(|value| map_hwpx_vertical_align_with_warning(value, context));
     let cell_size = |attributes: &[&str]| {
         root_or_direct_child_xml_attribute_u32_any(cell_xml, "tc", &["cellSz"], attributes)
             .and_then(hwp_units_to_px_option)
@@ -3686,12 +3686,21 @@ fn map_hwpx_alignment_with_warning(value: &str, warnings: &mut Vec<String>) -> O
     })
 }
 
-fn map_hwpx_vertical_align(value: &str) -> Option<VerticalAlign> {
+fn map_hwpx_vertical_align_with_warning(
+    value: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<VerticalAlign> {
     Some(match value.trim().to_ascii_uppercase().as_str() {
         "TOP" => VerticalAlign::Top,
         "CENTER" | "MIDDLE" => VerticalAlign::Middle,
         "BOTTOM" => VerticalAlign::Bottom,
-        _ => return None,
+        _ => {
+            context.add_warning_once(&format!(
+                "HWPX table cell referenced unsupported vertical alignment `{}`; hwp-convert used the default table cell vertical alignment.",
+                value.trim()
+            ));
+            return None;
+        }
     })
 }
 
@@ -4535,6 +4544,31 @@ mod tests {
         assert_eq!(cell.style.padding_left, Some(LengthPx(2.0)));
         assert_eq!(cell.style.padding_top, Some(LengthPx(1.0)));
         assert_eq!(cell.style.vertical_align, Some(VerticalAlign::Middle));
+    }
+
+    #[test]
+    fn warns_when_hwpx_table_cell_vertical_align_is_unsupported() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tr>
+                <hp:tc>
+                  <hp:subList verticalAlign="BASELINE">
+                    <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+
+        assert_eq!(table.rows[0].cells[0].style.vertical_align, None);
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported vertical alignment `BASELINE`")
+        }));
     }
 
     #[test]
