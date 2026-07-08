@@ -1762,15 +1762,35 @@ fn extract_section_xml_blocks_with_metadata(
 
 fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) -> Option<Table> {
     let table_padding = [
-        HWPX_MARGIN_TOP_ATTRIBUTES,
-        HWPX_MARGIN_RIGHT_ATTRIBUTES,
-        HWPX_MARGIN_BOTTOM_ATTRIBUTES,
-        HWPX_MARGIN_LEFT_ATTRIBUTES,
-    ]
-    .map(|attributes| {
-        root_or_direct_child_xml_attribute_u32_any(table_xml, "tbl", &["inMargin"], attributes)
-            .and_then(hwp_units_to_px_option)
-    });
+        hwpx_table_hwp_units_to_px_with_warning(
+            table_xml,
+            &["inMargin"],
+            HWPX_MARGIN_TOP_ATTRIBUTES,
+            "top padding",
+            context,
+        ),
+        hwpx_table_hwp_units_to_px_with_warning(
+            table_xml,
+            &["inMargin"],
+            HWPX_MARGIN_RIGHT_ATTRIBUTES,
+            "right padding",
+            context,
+        ),
+        hwpx_table_hwp_units_to_px_with_warning(
+            table_xml,
+            &["inMargin"],
+            HWPX_MARGIN_BOTTOM_ATTRIBUTES,
+            "bottom padding",
+            context,
+        ),
+        hwpx_table_hwp_units_to_px_with_warning(
+            table_xml,
+            &["inMargin"],
+            HWPX_MARGIN_LEFT_ATTRIBUTES,
+            "left padding",
+            context,
+        ),
+    ];
     let mut rows = Vec::new();
     let mut next_order = 0usize;
     let mut cursor = 0usize;
@@ -2078,6 +2098,30 @@ fn hwpx_table_cell_hwp_units_to_px_with_warning(
         .or_else(|| {
             context.add_warning_once(&format!(
                 "HWPX table cell referenced unsupported {label} value `{}`; hwp-convert omitted that table cell style value.",
+                value.trim()
+            ));
+            None
+        })
+}
+
+fn hwpx_table_hwp_units_to_px_with_warning(
+    table_xml: &str,
+    child_names: &[&str],
+    attribute_names: &[&str],
+    label: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<LengthPx> {
+    let value = root_or_direct_child_xml_attribute_value_any(
+        table_xml,
+        "tbl",
+        child_names,
+        attribute_names,
+    )?;
+    parse_trimmed::<u32>(value)
+        .and_then(hwp_units_to_px_option)
+        .or_else(|| {
+            context.add_warning_once(&format!(
+                "HWPX table referenced unsupported {label} value `{}`; hwp-convert omitted that table style value.",
                 value.trim()
             ));
             None
@@ -4744,6 +4788,37 @@ mod tests {
                 .message
                 .contains("unsupported height value `bad-height`")
         }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported left padding value `bad-left`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported top padding value `bad-top`")
+        }));
+    }
+
+    #[test]
+    fn warns_when_hwpx_table_padding_metrics_are_invalid() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:inMargin l="bad-left" t="bad-top"/>
+              <hp:tr>
+                <hp:tc hasMargin="0">
+                  <hp:subList><hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p></hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+        let cell_style = &table.rows[0].cells[0].style;
+
+        assert_eq!(cell_style.padding_left, None);
+        assert_eq!(cell_style.padding_top, None);
         assert!(context.warnings.iter().any(|warning| {
             warning
                 .message
