@@ -959,7 +959,11 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                 }
 
                 let border_xml = &header_xml[tag.start..border_end];
-                context.border_fills[id] = extract_hwpx_border_fill(border_xml);
+                let (border_fill, warnings) = extract_hwpx_border_fill(border_xml);
+                context.border_fills[id] = border_fill;
+                for warning in warnings {
+                    context.add_warning_once(&warning);
+                }
                 cursor = border_end;
             }
             "bullet" => {
@@ -1323,16 +1327,19 @@ fn hwpx_style_value_is_enabled(value: &str) -> bool {
     !value.eq_ignore_ascii_case("none") && value != "0"
 }
 
-fn extract_hwpx_border_fill(border_fill_xml: &str) -> HwpxBorderFill {
-    HwpxBorderFill {
+fn extract_hwpx_border_fill(border_fill_xml: &str) -> (HwpxBorderFill, Vec<String>) {
+    let mut warnings = Vec::new();
+    let fill = HwpxBorderFill {
         background_color: extract_hwpx_border_fill_background_color(border_fill_xml),
         borders: [
-            extract_hwpx_border(border_fill_xml, "leftBorder"),
-            extract_hwpx_border(border_fill_xml, "rightBorder"),
-            extract_hwpx_border(border_fill_xml, "topBorder"),
-            extract_hwpx_border(border_fill_xml, "bottomBorder"),
+            extract_hwpx_border(border_fill_xml, "leftBorder", &mut warnings),
+            extract_hwpx_border(border_fill_xml, "rightBorder", &mut warnings),
+            extract_hwpx_border(border_fill_xml, "topBorder", &mut warnings),
+            extract_hwpx_border(border_fill_xml, "bottomBorder", &mut warnings),
         ],
-    }
+    };
+
+    (fill, warnings)
 }
 
 fn extract_hwpx_border_fill_background_color(border_fill_xml: &str) -> Option<Color> {
@@ -1358,7 +1365,11 @@ fn extract_hwpx_border_fill_background_color(border_fill_xml: &str) -> Option<Co
     None
 }
 
-fn extract_hwpx_border(border_fill_xml: &str, border_name: &str) -> Option<Border> {
+fn extract_hwpx_border(
+    border_fill_xml: &str,
+    border_name: &str,
+    warnings: &mut Vec<String>,
+) -> Option<Border> {
     let mut cursor = 0usize;
 
     while let Some(tag) = next_xml_tag(border_fill_xml, cursor) {
@@ -1376,7 +1387,7 @@ fn extract_hwpx_border(border_fill_xml: &str, border_name: &str) -> Option<Borde
             width: xml_attribute_value_any(tag.raw, HWPX_BORDER_WIDTH_ATTRIBUTES)
                 .and_then(parse_hwpx_border_width)
                 .unwrap_or(LengthPx(1.0)),
-            style: map_hwpx_border_style(border_type),
+            style: map_hwpx_border_style_with_warning(border_type, "borderFill", warnings),
             color: xml_attribute_value_any(tag.raw, HWPX_BORDER_COLOR_ATTRIBUTES)
                 .and_then(parse_hwpx_hex_color),
         });
@@ -1401,13 +1412,25 @@ fn parse_hwpx_border_width(value: &str) -> Option<LengthPx> {
     Some(LengthPx(px))
 }
 
-fn map_hwpx_border_style(value: &str) -> BorderStyle {
-    match value.trim().to_ascii_uppercase().as_str() {
+fn map_hwpx_border_style_with_warning(
+    value: &str,
+    source: &str,
+    warnings: &mut Vec<String>,
+) -> BorderStyle {
+    let normalized = value.trim().to_ascii_uppercase();
+    match normalized.as_str() {
         "DASH" | "LONG_DASH" | "DASH_DOT" | "DASH_DOT_DOT" => BorderStyle::Dashed,
         "DOT" | "CIRCLE" => BorderStyle::Dotted,
         "DOUBLE" | "DOUBLE_SLIM" | "SLIM_THICK" | "THICK_SLIM" | "SLIM_THICK_SLIM"
         | "DOUBLE_WAVE" => BorderStyle::Double,
-        _ => BorderStyle::Solid,
+        "SOLID" => BorderStyle::Solid,
+        _ => {
+            warnings.push(format!(
+                "HWPX {source} referenced unsupported border style `{}`; hwp-convert approximated it as solid.",
+                value.trim()
+            ));
+            BorderStyle::Solid
+        }
     }
 }
 
@@ -2305,12 +2328,12 @@ fn extract_hwpx_image_from_pic_xml(
         caption: extract_hwpx_object_caption(pic_xml, context),
         width: hwpx_object_dimension_to_px(pic_xml, &["width", "w"]),
         height: hwpx_object_dimension_to_px(pic_xml, &["height", "h"]),
-        border: hwpx_picture_border(pic_xml),
+        border: hwpx_picture_border(pic_xml, context),
         grayscale,
     })
 }
 
-fn hwpx_picture_border(pic_xml: &str) -> Option<Border> {
+fn hwpx_picture_border(pic_xml: &str, context: &mut HwpxFallbackContext) -> Option<Border> {
     let tag = hwpx_picture_direct_child_tag(pic_xml, "lineShape")?;
     let style_name = xml_attribute_value_any(tag.raw, HWPX_IMAGE_BORDER_STYLE_ATTRIBUTES)
         .unwrap_or("SOLID")
@@ -2322,13 +2345,11 @@ fn hwpx_picture_border(pic_xml: &str) -> Option<Border> {
     let width = xml_attribute_value_any(tag.raw, HWPX_IMAGE_BORDER_WIDTH_ATTRIBUTES)
         .and_then(|value| value.trim().parse().ok())
         .and_then(hwp_units_to_px_option)?;
-    let style = match style_name.as_str() {
-        "DASH" | "LONG_DASH" | "DASH_DOT" | "DASH_DOT_DOT" => BorderStyle::Dashed,
-        "DOT" | "CIRCLE" => BorderStyle::Dotted,
-        "DOUBLE" | "DOUBLE_SLIM" | "SLIM_THICK" | "THICK_SLIM" | "SLIM_THICK_SLIM"
-        | "DOUBLE_WAVE" => BorderStyle::Double,
-        _ => BorderStyle::Solid,
-    };
+    let mut warnings = Vec::new();
+    let style = map_hwpx_border_style_with_warning(&style_name, "picture lineShape", &mut warnings);
+    for warning in warnings {
+        context.add_warning_once(&warning);
+    }
     Some(Border {
         width,
         style,
@@ -5980,6 +6001,32 @@ mod tests {
     }
 
     #[test]
+    fn warns_when_hwpx_border_fill_style_is_approximated() {
+        let context = extract_hwpx_fallback_context(
+            r##"
+            <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+              <hh:borderFill id="0">
+                <hh:leftBorder type="WAVE" width="1 px" color="#010203"/>
+              </hh:borderFill>
+            </hh:head>
+            "##,
+        );
+
+        assert_eq!(
+            context.border_fills[0].borders[0]
+                .as_ref()
+                .map(|border| border.style),
+            Some(BorderStyle::Solid)
+        );
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("unsupported border style `WAVE`") })
+        );
+    }
+
+    #[test]
     fn recovers_hwpx_image_resource_from_manifest() -> Result<(), Box<dyn Error>> {
         let bytes = create_archive_bytes(&[
             (
@@ -6231,9 +6278,28 @@ mod tests {
               <hp:caption><hp:pic><hp:lineShape color="#123456" width="150" style="SOLID"/></hp:pic></hp:caption>
             </hp:pic>
         "##;
+        let mut context = HwpxFallbackContext::default();
 
-        assert_eq!(hwpx_picture_border(disabled), None);
-        assert_eq!(hwpx_picture_border(nested), None);
+        assert_eq!(hwpx_picture_border(disabled, &mut context), None);
+        assert_eq!(hwpx_picture_border(nested, &mut context), None);
+    }
+
+    #[test]
+    fn warns_when_hwpx_picture_border_style_is_approximated() {
+        let mut context = HwpxFallbackContext::default();
+        let border = hwpx_picture_border(
+            r##"<hp:pic><hp:lineShape color="#123456" width="150" style="WAVE"/></hp:pic>"##,
+            &mut context,
+        )
+        .expect("picture border should be recovered");
+
+        assert_eq!(border.style, BorderStyle::Solid);
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("unsupported border style `WAVE`") })
+        );
     }
 
     #[test]
