@@ -1572,27 +1572,51 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> (HwpxParagraphStyle, Vec<Stri
                 }
                 "intent" | "indent" => {
                     paragraph_style.style.indent.first_line_pt =
-                        xml_attribute_hwp_units_to_pt_any(tag.raw, HWPX_HWP_UNIT_VALUE_ATTRIBUTES);
+                        hwpx_paragraph_hwp_units_to_pt_with_warning(
+                            tag.raw,
+                            "first-line indent",
+                            &mut warnings,
+                        );
                 }
                 "left" => {
                     paragraph_style.style.indent.left_pt =
-                        xml_attribute_hwp_units_to_pt_any(tag.raw, HWPX_HWP_UNIT_VALUE_ATTRIBUTES);
+                        hwpx_paragraph_hwp_units_to_pt_with_warning(
+                            tag.raw,
+                            "left indent",
+                            &mut warnings,
+                        );
                 }
                 "right" => {
                     paragraph_style.style.indent.right_pt =
-                        xml_attribute_hwp_units_to_pt_any(tag.raw, HWPX_HWP_UNIT_VALUE_ATTRIBUTES);
+                        hwpx_paragraph_hwp_units_to_pt_with_warning(
+                            tag.raw,
+                            "right indent",
+                            &mut warnings,
+                        );
                 }
                 "prev" => {
                     paragraph_style.style.spacing.before_pt =
-                        xml_attribute_hwp_units_to_pt_any(tag.raw, HWPX_HWP_UNIT_VALUE_ATTRIBUTES);
+                        hwpx_paragraph_hwp_units_to_pt_with_warning(
+                            tag.raw,
+                            "spacing before",
+                            &mut warnings,
+                        );
                 }
                 "next" => {
                     paragraph_style.style.spacing.after_pt =
-                        xml_attribute_hwp_units_to_pt_any(tag.raw, HWPX_HWP_UNIT_VALUE_ATTRIBUTES);
+                        hwpx_paragraph_hwp_units_to_pt_with_warning(
+                            tag.raw,
+                            "spacing after",
+                            &mut warnings,
+                        );
                 }
                 "lineSpacing" if !is_hwpx_percent_line_spacing(tag.raw) => {
                     paragraph_style.style.spacing.line_pt =
-                        xml_attribute_hwp_units_to_pt_any(tag.raw, HWPX_HWP_UNIT_VALUE_ATTRIBUTES);
+                        hwpx_paragraph_hwp_units_to_pt_with_warning(
+                            tag.raw,
+                            "line spacing",
+                            &mut warnings,
+                        );
                 }
                 _ => {}
             }
@@ -1606,6 +1630,23 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> (HwpxParagraphStyle, Vec<Stri
 
 fn extract_hwpx_direct_paragraph_style(paragraph_xml: &str) -> (HwpxParagraphStyle, Vec<String>) {
     extract_hwpx_paragraph_style(hwpx_direct_paragraph_style_prefix(paragraph_xml))
+}
+
+fn hwpx_paragraph_hwp_units_to_pt_with_warning(
+    tag: &str,
+    label: &str,
+    warnings: &mut Vec<String>,
+) -> Option<LengthPt> {
+    let value = xml_attribute_value_any(tag, HWPX_HWP_UNIT_VALUE_ATTRIBUTES)?;
+    parse_trimmed::<i32>(value)
+        .and_then(hwp_units_to_pt_option)
+        .or_else(|| {
+            warnings.push(format!(
+                "HWPX paragraph style referenced unsupported {label} value `{}`; hwp-convert omitted that paragraph style value.",
+                value.trim()
+            ));
+            None
+        })
 }
 
 fn hwpx_direct_paragraph_style_prefix(paragraph_xml: &str) -> &str {
@@ -3760,12 +3801,6 @@ fn map_hwpx_vertical_align_with_warning(
     })
 }
 
-fn xml_attribute_hwp_units_to_pt_any(tag: &str, attribute_names: &[&str]) -> Option<LengthPt> {
-    xml_attribute_value_any(tag, attribute_names)
-        .and_then(parse_trimmed::<i32>)
-        .and_then(hwp_units_to_pt_option)
-}
-
 fn hwp_units_to_pt_option(value: i32) -> Option<LengthPt> {
     if value == 0 {
         None
@@ -5685,6 +5720,42 @@ mod tests {
             warning
                 .message
                 .contains("unsupported horizontal alignment `SIDEWAYS`")
+        }));
+    }
+
+    #[test]
+    fn warns_when_hwpx_paragraph_metric_is_invalid() {
+        let context = extract_hwpx_fallback_context(
+            r#"
+            <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+              <hh:paraPr id="0">
+                <hh:margin>
+                  <hh:indent value="bad-indent"/>
+                  <hh:left value="bad-left"/>
+                </hh:margin>
+                <hh:lineSpacing value="bad-line"/>
+              </hh:paraPr>
+            </hh:head>
+            "#,
+        );
+
+        assert_eq!(context.paragraph_styles[0].style.indent.first_line_pt, None);
+        assert_eq!(context.paragraph_styles[0].style.indent.left_pt, None);
+        assert_eq!(context.paragraph_styles[0].style.spacing.line_pt, None);
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported first-line indent value `bad-indent`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported left indent value `bad-left`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported line spacing value `bad-line`")
         }));
     }
 
