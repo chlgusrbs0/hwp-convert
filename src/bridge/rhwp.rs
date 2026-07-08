@@ -1317,6 +1317,13 @@ impl<'a> BridgeContext<'a> {
     fn warn_unsupported_picture_transform(&mut self, picture: &Picture) {
         let mut details = Vec::new();
 
+        let border_line_type = (picture.border_attr.attr & 0x3f) as u8;
+        if border_line_type != 0 && !picture_border_line_type_is_modeled(border_line_type) {
+            self.add_warning_once(&format!(
+                "rhwp picture border line type {border_line_type} is not directly modeled; hwp-convert approximated it as a solid border."
+            ));
+        }
+
         if picture.image_attr.effect == RhwpImageEffect::BlackWhite {
             self.add_warning_once(
                 "rhwp picture BlackWhite effect was represented as a grayscale approximation because Image IR does not distinguish threshold black-and-white.",
@@ -1967,6 +1974,10 @@ fn map_image_border(picture: &Picture) -> Option<Border> {
     })
 }
 
+fn picture_border_line_type_is_modeled(line_type: u8) -> bool {
+    matches!(line_type, 1..=11 | 13)
+}
+
 fn map_border_line_type(line_type: RhwpBorderLineType) -> BorderStyle {
     match line_type {
         RhwpBorderLineType::Dash
@@ -2360,8 +2371,8 @@ mod tests {
     };
     use rhwp::model::shape::{
         Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection,
-        DrawingObjAttr as RhwpDrawingObjAttr, GroupShape as RhwpGroupShape,
-        RectangleShape as RhwpRectangleShape, TextBox as RhwpTextBox,
+        CommonObjAttr as RhwpCommonObjAttr, DrawingObjAttr as RhwpDrawingObjAttr,
+        GroupShape as RhwpGroupShape, RectangleShape as RhwpRectangleShape, TextBox as RhwpTextBox,
     };
     use rhwp::model::style::{
         Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, Bullet as RhwpBullet,
@@ -2917,6 +2928,48 @@ mod tests {
         assert_eq!(border.style, BorderStyle::Dotted);
         assert!((border.width.0 - (96.0 / 254.0)).abs() < f32::EPSILON);
         assert_eq!(map_image_border(&disabled), None);
+    }
+
+    #[test]
+    fn warns_when_picture_border_line_type_is_approximated() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Picture(Box::new(Picture {
+                        common: RhwpCommonObjAttr {
+                            width: 7500,
+                            height: 7500,
+                            ..Default::default()
+                        },
+                        image_attr: ImageAttr {
+                            bin_data_id: 7,
+                            ..Default::default()
+                        },
+                        border_width: 75,
+                        border_attr: rhwp::model::style::ShapeBorderLine {
+                            attr: 12,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            bin_data_content: vec![BinDataContent {
+                id: 7,
+                data: vec![137, 80, 78, 71],
+                extension: "png".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("picture border line type 12")
+                && warning.message.contains("solid border")
+        }));
     }
 
     #[test]
