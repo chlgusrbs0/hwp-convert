@@ -1390,10 +1390,19 @@ fn extract_hwpx_border(
             return None;
         }
 
+        let width = match xml_attribute_value_any(tag.raw, HWPX_BORDER_WIDTH_ATTRIBUTES) {
+            Some(value) => parse_hwpx_border_width(value).unwrap_or_else(|| {
+                warnings.push(format!(
+                    "HWPX borderFill referenced unsupported border width `{}`; hwp-convert used the default 1px border width.",
+                    value.trim()
+                ));
+                LengthPx(1.0)
+            }),
+            None => LengthPx(1.0),
+        };
+
         return Some(Border {
-            width: xml_attribute_value_any(tag.raw, HWPX_BORDER_WIDTH_ATTRIBUTES)
-                .and_then(parse_hwpx_border_width)
-                .unwrap_or(LengthPx(1.0)),
+            width,
             style: map_hwpx_border_style_with_warning(border_type, "borderFill", warnings),
             color: xml_attribute_value_any(tag.raw, HWPX_BORDER_COLOR_ATTRIBUTES)
                 .and_then(parse_hwpx_hex_color),
@@ -2350,9 +2359,19 @@ fn hwpx_picture_border(pic_xml: &str, context: &mut HwpxFallbackContext) -> Opti
     if style_name == "NONE" {
         return None;
     }
-    let width = xml_attribute_value_any(tag.raw, HWPX_IMAGE_BORDER_WIDTH_ATTRIBUTES)
-        .and_then(|value| value.trim().parse().ok())
-        .and_then(hwp_units_to_px_option)?;
+    let width_value = xml_attribute_value_any(tag.raw, HWPX_IMAGE_BORDER_WIDTH_ATTRIBUTES)?;
+    let Some(width) = width_value
+        .trim()
+        .parse()
+        .ok()
+        .and_then(hwp_units_to_px_option)
+    else {
+        context.add_warning_once(&format!(
+            "HWPX picture lineShape referenced unsupported border width `{}`; hwp-convert omitted the picture border.",
+            width_value.trim()
+        ));
+        return None;
+    };
     let mut warnings = Vec::new();
     let style = map_hwpx_border_style_with_warning(&style_name, "picture lineShape", &mut warnings);
     for warning in warnings {
@@ -6109,6 +6128,32 @@ mod tests {
     }
 
     #[test]
+    fn warns_when_hwpx_border_fill_width_is_approximated() {
+        let context = extract_hwpx_fallback_context(
+            r##"
+            <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+              <hh:borderFill id="0">
+                <hh:leftBorder type="SOLID" width="wide" color="#010203"/>
+              </hh:borderFill>
+            </hh:head>
+            "##,
+        );
+
+        assert_eq!(
+            context.border_fills[0].borders[0]
+                .as_ref()
+                .map(|border| border.width),
+            Some(LengthPx(1.0))
+        );
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("unsupported border width `wide`") })
+        );
+    }
+
+    #[test]
     fn recovers_hwpx_image_resource_from_manifest() -> Result<(), Box<dyn Error>> {
         let bytes = create_archive_bytes(&[
             (
@@ -6381,6 +6426,23 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| { warning.message.contains("unsupported border style `WAVE`") })
+        );
+    }
+
+    #[test]
+    fn warns_when_hwpx_picture_border_width_is_invalid() {
+        let mut context = HwpxFallbackContext::default();
+        let border = hwpx_picture_border(
+            r##"<hp:pic><hp:lineShape color="#123456" width="-1" style="SOLID"/></hp:pic>"##,
+            &mut context,
+        );
+
+        assert_eq!(border, None);
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("unsupported border width `-1`") })
         );
     }
 
