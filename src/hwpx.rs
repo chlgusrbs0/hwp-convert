@@ -672,7 +672,10 @@ impl HwpxFallbackContext {
                 style
             })
             .unwrap_or_default();
-        let direct_style = extract_hwpx_direct_paragraph_style(paragraph_xml);
+        let (direct_style, warnings) = extract_hwpx_direct_paragraph_style(paragraph_xml);
+        for warning in warnings {
+            self.add_warning_once(&warning);
+        }
         merge_hwpx_paragraph_style(&mut style, direct_style);
         style
     }
@@ -1006,7 +1009,11 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                         "HWPX paragraph percent line spacing is not modeled by ParagraphStyle; hwp-convert preserved other paragraph style properties.",
                     );
                 }
-                context.paragraph_styles[id] = extract_hwpx_paragraph_style(para_xml);
+                let (paragraph_style, warnings) = extract_hwpx_paragraph_style(para_xml);
+                context.paragraph_styles[id] = paragraph_style;
+                for warning in warnings {
+                    context.add_warning_once(&warning);
+                }
                 cursor = para_end;
             }
             _ => {
@@ -1479,9 +1486,10 @@ fn font_ref_family_with_warnings(
     (family, warnings)
 }
 
-fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
+fn extract_hwpx_paragraph_style(para_xml: &str) -> (HwpxParagraphStyle, Vec<String>) {
     let mut cursor = 0usize;
     let mut paragraph_style = HwpxParagraphStyle::default();
+    let mut warnings = Vec::new();
 
     while let Some(tag) = next_xml_tag(para_xml, cursor) {
         if !tag.is_closing {
@@ -1514,7 +1522,7 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
                         tag.raw,
                         HWPX_PARAGRAPH_HORIZONTAL_ALIGN_ATTRIBUTES,
                     )
-                    .and_then(map_hwpx_alignment);
+                    .and_then(|value| map_hwpx_alignment_with_warning(value, &mut warnings));
                 }
                 "intent" | "indent" => {
                     paragraph_style.style.indent.first_line_pt =
@@ -1547,10 +1555,10 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> HwpxParagraphStyle {
         cursor = tag.end;
     }
 
-    paragraph_style
+    (paragraph_style, warnings)
 }
 
-fn extract_hwpx_direct_paragraph_style(paragraph_xml: &str) -> HwpxParagraphStyle {
+fn extract_hwpx_direct_paragraph_style(paragraph_xml: &str) -> (HwpxParagraphStyle, Vec<String>) {
     extract_hwpx_paragraph_style(hwpx_direct_paragraph_style_prefix(paragraph_xml))
 }
 
@@ -3661,14 +3669,20 @@ fn first_decoded_xml_attribute_value_any(xml: &str, attribute_names: &[&str]) ->
     None
 }
 
-fn map_hwpx_alignment(value: &str) -> Option<Alignment> {
+fn map_hwpx_alignment_with_warning(value: &str, warnings: &mut Vec<String>) -> Option<Alignment> {
     let normalized = value.trim().to_ascii_uppercase();
     Some(match normalized.as_str() {
         "LEFT" => Alignment::Left,
         "CENTER" => Alignment::Center,
         "RIGHT" => Alignment::Right,
         "JUSTIFY" | "DISTRIBUTE" | "DISTRIBUTE_SPACE" => Alignment::Justify,
-        _ => return None,
+        _ => {
+            warnings.push(format!(
+                "HWPX paragraph align referenced unsupported horizontal alignment `{}`; hwp-convert used the default paragraph alignment.",
+                value.trim()
+            ));
+            return None;
+        }
     })
 }
 
@@ -5548,6 +5562,40 @@ mod tests {
         assert_eq!(paragraph.style.spacing.line_pt, Some(LengthPt(6.0)));
 
         Ok(())
+    }
+
+    #[test]
+    fn warns_when_hwpx_paragraph_alignment_is_unsupported() {
+        let mut context = extract_hwpx_fallback_context(
+            r#"
+            <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+              <hh:paraPr id="0">
+                <hh:align horizontalAlign="UNKNOWN_ALIGN"/>
+              </hh:paraPr>
+            </hh:head>
+            "#,
+        );
+
+        extract_section_xml_blocks(
+            r#"
+            <hp:p>
+              <hp:align horizontal="SIDEWAYS"/>
+              <hp:run><hp:t>text</hp:t></hp:run>
+            </hp:p>
+            "#,
+            &mut context,
+        );
+
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported horizontal alignment `UNKNOWN_ALIGN`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported horizontal alignment `SIDEWAYS`")
+        }));
     }
 
     #[test]
