@@ -1944,14 +1944,6 @@ fn extract_table_cell_from_xml(
         HWPX_VERTICAL_ALIGN_ATTRIBUTES,
     )
     .and_then(|value| map_hwpx_vertical_align_with_warning(value, context));
-    let cell_size = |attributes: &[&str]| {
-        root_or_direct_child_xml_attribute_u32_any(cell_xml, "tc", &["cellSz"], attributes)
-            .and_then(hwp_units_to_px_option)
-    };
-    let cell_margin = |attributes: &[&str]| {
-        root_or_direct_child_xml_attribute_u32_any(cell_xml, "tc", &["cellMargin"], attributes)
-            .and_then(hwp_units_to_px_option)
-    };
     let has_margin_attribute = root_xml_attribute_value(cell_xml, "hasMargin");
     let has_explicit_cell_margin = [
         HWPX_MARGIN_TOP_ATTRIBUTES,
@@ -1969,10 +1961,34 @@ fn extract_table_cell_from_xml(
         .unwrap_or(has_explicit_cell_margin);
     let padding = if use_cell_margin {
         [
-            cell_margin(HWPX_MARGIN_TOP_ATTRIBUTES),
-            cell_margin(HWPX_MARGIN_RIGHT_ATTRIBUTES),
-            cell_margin(HWPX_MARGIN_BOTTOM_ATTRIBUTES),
-            cell_margin(HWPX_MARGIN_LEFT_ATTRIBUTES),
+            hwpx_table_cell_hwp_units_to_px_with_warning(
+                cell_xml,
+                &["cellMargin"],
+                HWPX_MARGIN_TOP_ATTRIBUTES,
+                "top padding",
+                context,
+            ),
+            hwpx_table_cell_hwp_units_to_px_with_warning(
+                cell_xml,
+                &["cellMargin"],
+                HWPX_MARGIN_RIGHT_ATTRIBUTES,
+                "right padding",
+                context,
+            ),
+            hwpx_table_cell_hwp_units_to_px_with_warning(
+                cell_xml,
+                &["cellMargin"],
+                HWPX_MARGIN_BOTTOM_ATTRIBUTES,
+                "bottom padding",
+                context,
+            ),
+            hwpx_table_cell_hwp_units_to_px_with_warning(
+                cell_xml,
+                &["cellMargin"],
+                HWPX_MARGIN_LEFT_ATTRIBUTES,
+                "left padding",
+                context,
+            ),
         ]
     } else {
         *table_padding
@@ -2012,8 +2028,20 @@ fn extract_table_cell_from_xml(
         style: TableCellStyle {
             background_color,
             vertical_align,
-            width: cell_size(HWPX_WIDTH_ATTRIBUTES),
-            height: cell_size(HWPX_HEIGHT_ATTRIBUTES),
+            width: hwpx_table_cell_hwp_units_to_px_with_warning(
+                cell_xml,
+                &["cellSz"],
+                HWPX_WIDTH_ATTRIBUTES,
+                "width",
+                context,
+            ),
+            height: hwpx_table_cell_hwp_units_to_px_with_warning(
+                cell_xml,
+                &["cellSz"],
+                HWPX_HEIGHT_ATTRIBUTES,
+                "height",
+                context,
+            ),
             padding_top: padding[0],
             padding_right: padding[1],
             padding_bottom: padding[2],
@@ -2034,6 +2062,26 @@ fn hwpx_table_cell_span(cell_xml: &str, attribute_names: &[&str]) -> u32 {
         })
         .filter(|span| *span > 0)
         .unwrap_or(1)
+}
+
+fn hwpx_table_cell_hwp_units_to_px_with_warning(
+    cell_xml: &str,
+    child_names: &[&str],
+    attribute_names: &[&str],
+    label: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<LengthPx> {
+    let value =
+        root_or_direct_child_xml_attribute_value_any(cell_xml, "tc", child_names, attribute_names)?;
+    parse_trimmed::<u32>(value)
+        .and_then(hwp_units_to_px_option)
+        .or_else(|| {
+            context.add_warning_once(&format!(
+                "HWPX table cell referenced unsupported {label} value `{}`; hwp-convert omitted that table cell style value.",
+                value.trim()
+            ));
+            None
+        })
 }
 
 fn extract_blocks_from_paragraph_xml_with_metadata(
@@ -4659,6 +4707,52 @@ mod tests {
             warning
                 .message
                 .contains("unsupported vertical alignment `BASELINE`")
+        }));
+    }
+
+    #[test]
+    fn warns_when_hwpx_table_cell_metrics_are_invalid() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:tr>
+                <hp:tc hasMargin="1">
+                  <hp:cellSz w="bad-width" h="bad-height"/>
+                  <hp:cellMargin l="bad-left" t="bad-top"/>
+                  <hp:subList>
+                    <hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p>
+                  </hp:subList>
+                </hp:tc>
+              </hp:tr>
+            </hp:tbl>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+        let cell_style = &table.rows[0].cells[0].style;
+
+        assert_eq!(cell_style.width, None);
+        assert_eq!(cell_style.height, None);
+        assert_eq!(cell_style.padding_left, None);
+        assert_eq!(cell_style.padding_top, None);
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported width value `bad-width`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported height value `bad-height`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported left padding value `bad-left`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported top padding value `bad-top`")
         }));
     }
 
