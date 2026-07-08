@@ -2513,8 +2513,13 @@ fn extract_hwpx_image_from_pic_xml(
             first_hwpx_direct_child_element_text(pic_xml, &["shapeComment"]),
         ]),
         caption: extract_hwpx_object_caption(pic_xml, context),
-        width: hwpx_object_dimension_to_px(pic_xml, &["width", "w"]),
-        height: hwpx_object_dimension_to_px(pic_xml, &["height", "h"]),
+        width: hwpx_object_dimension_to_px_with_warning(pic_xml, &["width", "w"], "width", context),
+        height: hwpx_object_dimension_to_px_with_warning(
+            pic_xml,
+            &["height", "h"],
+            "height",
+            context,
+        ),
         border: hwpx_picture_border(pic_xml, context),
         grayscale,
     })
@@ -2925,18 +2930,29 @@ fn hwpx_caption_placement(caption_tag: &str) -> HwpxCaptionPlacement {
     }
 }
 
-fn hwpx_object_dimension_to_px(pic_xml: &str, attribute_names: &[&str]) -> Option<LengthPx> {
-    attribute_names
-        .iter()
-        .find_map(|attribute_name| {
-            root_or_direct_child_xml_attribute_u32(
-                pic_xml,
-                "pic",
-                &["sz", "imgRect", "size", "extent"],
-                attribute_name,
-            )
-        })
+fn hwpx_object_dimension_to_px_with_warning(
+    pic_xml: &str,
+    attribute_names: &[&str],
+    label: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<LengthPx> {
+    let value = attribute_names.iter().find_map(|attribute_name| {
+        root_or_direct_child_xml_attribute_value(
+            pic_xml,
+            "pic",
+            &["sz", "imgRect", "size", "extent"],
+            attribute_name,
+        )
+    })?;
+    parse_trimmed::<u32>(value)
         .and_then(hwp_units_to_px_option)
+        .or_else(|| {
+            context.add_warning_once(&format!(
+                "HWPX picture referenced unsupported {label} value `{}`; hwp-convert omitted that picture dimension.",
+                value.trim()
+            ));
+            None
+        })
 }
 
 fn unknown_hwpx_object_block(
@@ -6540,6 +6556,43 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn warns_when_hwpx_picture_dimensions_are_invalid() {
+        let mut context = HwpxFallbackContext::default();
+        context.image_items.insert(
+            "image1".to_string(),
+            HwpxImageItem {
+                id: "image1".to_string(),
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: b"image-bytes".to_vec(),
+            },
+        );
+        let image = extract_hwpx_image_from_pic_xml(
+            r#"
+            <hp:pic>
+              <hp:sz w="bad-width" h="bad-height"/>
+              <hc:img binaryItemIDRef="image1"/>
+            </hp:pic>
+            "#,
+            &mut context,
+        )
+        .expect("image should parse");
+
+        assert_eq!(image.width, None);
+        assert_eq!(image.height, None);
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported width value `bad-width`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported height value `bad-height`")
+        }));
     }
 
     #[test]
