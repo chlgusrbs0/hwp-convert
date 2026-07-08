@@ -1179,7 +1179,8 @@ impl<'a> BridgeContext<'a> {
         Table {
             rows,
             style: TableStyle {
-                background_color: self.border_fill_background_color(table.border_fill_id),
+                background_color: self
+                    .border_fill_background_color(table.border_fill_id, "table background"),
             },
         }
     }
@@ -1260,7 +1261,8 @@ impl<'a> BridgeContext<'a> {
             is_header: cell.is_header,
             blocks,
             style: TableCellStyle {
-                background_color: self.border_fill_background_color(cell.border_fill_id),
+                background_color: self
+                    .border_fill_background_color(cell.border_fill_id, "table cell background"),
                 vertical_align: map_vertical_align(cell.vertical_align),
                 width: hwp_units_to_px_option(cell.width),
                 height: hwp_units_to_px_option(cell.height),
@@ -1700,14 +1702,25 @@ impl<'a> BridgeContext<'a> {
         None
     }
 
-    fn border_fill_background_color(&self, border_fill_id: u16) -> Option<Color> {
-        self.lookup_border_fill(border_fill_id)
-            .and_then(border_fill_background_color)
+    fn border_fill_background_color(
+        &mut self,
+        border_fill_id: u16,
+        context: &str,
+    ) -> Option<Color> {
+        match self.lookup_border_fill(border_fill_id) {
+            Some(border_fill) => border_fill_background_color(border_fill),
+            None => {
+                if border_fill_id != 0 {
+                    self.warn_missing_border_fill(border_fill_id, context);
+                }
+                None
+            }
+        }
     }
 
     /// Map a border fill's four sides to IR cell borders, in rhwp order
     /// `[left, right, top, bottom]`.
-    fn map_cell_borders(&self, border_fill_id: u16) -> [Option<Border>; 4] {
+    fn map_cell_borders(&mut self, border_fill_id: u16) -> [Option<Border>; 4] {
         match self.lookup_border_fill(border_fill_id) {
             Some(border_fill) => [
                 map_border_line(&border_fill.borders[0]),
@@ -1715,8 +1728,19 @@ impl<'a> BridgeContext<'a> {
                 map_border_line(&border_fill.borders[2]),
                 map_border_line(&border_fill.borders[3]),
             ],
-            None => [None, None, None, None],
+            None => {
+                if border_fill_id != 0 {
+                    self.warn_missing_border_fill(border_fill_id, "table cell borders");
+                }
+                [None, None, None, None]
+            }
         }
+    }
+
+    fn warn_missing_border_fill(&mut self, border_fill_id: u16, context: &str) {
+        self.add_warning_once(&format!(
+            "rhwp {context} referenced missing border fill id {border_fill_id}; hwp-convert used default table border/fill style."
+        ));
     }
 
     fn lookup_border_fill(&self, border_fill_id: u16) -> Option<&RhwpBorderFill> {
@@ -3632,6 +3656,49 @@ mod tests {
             }
             other => panic!("expected table block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn warns_when_table_border_fill_refs_are_missing() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Table(Box::new(RhwpTable {
+                        row_count: 1,
+                        col_count: 1,
+                        border_fill_id: 9,
+                        cells: vec![RhwpCell {
+                            row: 0,
+                            col: 0,
+                            border_fill_id: 7,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("table background referenced missing border fill id 9")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("table cell background referenced missing border fill id 7")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("table cell borders referenced missing border fill id 7")
+        }));
     }
 
     #[test]
