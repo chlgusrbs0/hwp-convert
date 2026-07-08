@@ -1574,7 +1574,7 @@ impl<'a> BridgeContext<'a> {
         style_sheet
     }
 
-    fn map_text_style(&self, char_shape: &RhwpCharShape) -> TextStyle {
+    fn map_text_style(&mut self, char_shape: &RhwpCharShape, context: &str) -> TextStyle {
         TextStyle {
             bold: char_shape.bold,
             italic: char_shape.italic,
@@ -1587,7 +1587,7 @@ impl<'a> BridgeContext<'a> {
             engrave: char_shape.engrave,
             outline: char_shape.outline_type != 0,
             shadow: char_shape.shadow_type != 0,
-            font_family: self.lookup_font_family(char_shape),
+            font_family: self.lookup_font_family(char_shape, context),
             font_size_pt: i32_hwp_units_to_pt_option(char_shape.base_size),
             color: color_ref_to_color_option(char_shape.text_color),
             background_color: color_ref_to_color_option(char_shape.shade_color),
@@ -1669,8 +1669,8 @@ impl<'a> BridgeContext<'a> {
         char_shape_id: u32,
         context: &str,
     ) -> Option<TextStyle> {
-        match self.lookup_char_shape(char_shape_id) {
-            Some(char_shape) => Some(self.map_text_style(char_shape)),
+        match self.lookup_char_shape(char_shape_id).cloned() {
+            Some(char_shape) => Some(self.map_text_style(&char_shape, context)),
             None => {
                 if !self.source.doc_info.char_shapes.is_empty() || char_shape_id != 0 {
                     self.add_warning_once(&format!(
@@ -1686,12 +1686,22 @@ impl<'a> BridgeContext<'a> {
         self.source.doc_info.para_shapes.get(para_shape_id as usize)
     }
 
-    fn lookup_font_family(&self, char_shape: &RhwpCharShape) -> Option<String> {
+    fn lookup_font_family(&mut self, char_shape: &RhwpCharShape, context: &str) -> Option<String> {
         for (language_index, font_id) in char_shape.font_ids.iter().enumerate() {
             let Some(group) = self.source.doc_info.font_faces.get(language_index) else {
+                if *font_id != 0 {
+                    self.add_warning_once(&format!(
+                        "rhwp {context} referenced missing font face group {language_index} font id {font_id}; hwp-convert used an available fallback font family or default font style."
+                    ));
+                }
                 continue;
             };
             let Some(font) = group.get(*font_id as usize) else {
+                if *font_id != 0 || !group.is_empty() {
+                    self.add_warning_once(&format!(
+                        "rhwp {context} referenced missing font id {font_id} in font face group {language_index}; hwp-convert used an available fallback font family or default font style."
+                    ));
+                }
                 continue;
             };
             if let Some(name) = non_empty_string(&font.name) {
@@ -3411,6 +3421,56 @@ mod tests {
 
         assert_eq!(bridged.styles.text_styles.len(), 1);
         assert_eq!(bridged.styles.paragraph_styles.len(), 1);
+    }
+
+    #[test]
+    fn warns_when_char_shape_font_ref_is_missing() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                font_faces: vec![
+                    Vec::new(),
+                    vec![Font {
+                        name: "Fallback Latin".to_string(),
+                        ..Default::default()
+                    }],
+                ],
+                char_shapes: vec![RhwpCharShape {
+                    font_ids: [9, 0, 0, 0, 0, 0, 0],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "font".to_string(),
+                    char_offsets: vec![0, 1, 2, 3],
+                    char_shapes: vec![CharShapeRef {
+                        start_pos: 0,
+                        char_shape_id: 0,
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let paragraph = match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => paragraph,
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+        let run = match &paragraph.inlines[0] {
+            Inline::Text(run) => run,
+            other => panic!("expected text run, got {other:?}"),
+        };
+
+        assert_eq!(run.style.font_family.as_deref(), Some("Fallback Latin"));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("missing font id 9 in font face group 0")
+        }));
     }
 
     #[test]
