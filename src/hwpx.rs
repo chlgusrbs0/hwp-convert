@@ -1257,24 +1257,40 @@ fn extract_hwpx_text_style_with_warnings(
     char_pr_xml: &str,
     font_faces: &[Vec<String>],
 ) -> (TextStyle, Vec<String>) {
+    let mut style_warnings = Vec::new();
+    let font_size_pt = match xml_attribute_value_any(char_pr_tag, HWPX_TEXT_FONT_SIZE_ATTRIBUTES) {
+        Some(value) => parse_trimmed::<i32>(value)
+            .and_then(hwp_units_to_pt_option)
+            .or_else(|| {
+                style_warnings.push(format!(
+                    "HWPX charPr referenced unsupported font size `{}`; hwp-convert used the default text size.",
+                    value.trim()
+                ));
+                None
+            }),
+        None => None,
+    };
+    let color = parse_hwpx_color_attribute_with_warning(
+        char_pr_tag,
+        HWPX_TEXT_COLOR_ATTRIBUTES,
+        "text color",
+        &mut style_warnings,
+    );
+    let background_color = parse_hwpx_color_attribute_with_warning(
+        char_pr_tag,
+        HWPX_TEXT_BACKGROUND_COLOR_ATTRIBUTES,
+        "text background color",
+        &mut style_warnings,
+    );
     let mut style = TextStyle {
         emphasis_dot: xml_attribute_value_any(char_pr_tag, HWPX_TEXT_EMPHASIS_DOT_ATTRIBUTES)
             .is_some_and(hwpx_style_value_is_enabled),
-        font_size_pt: xml_attribute_hwp_units_to_pt_any(
-            char_pr_tag,
-            HWPX_TEXT_FONT_SIZE_ATTRIBUTES,
-        ),
-        color: xml_attribute_value_any(char_pr_tag, HWPX_TEXT_COLOR_ATTRIBUTES)
-            .and_then(parse_hwpx_hex_color),
-        background_color: xml_attribute_value_any(
-            char_pr_tag,
-            HWPX_TEXT_BACKGROUND_COLOR_ATTRIBUTES,
-        )
-        .and_then(parse_hwpx_hex_color),
+        font_size_pt,
+        color,
+        background_color,
         ..Default::default()
     };
     let mut cursor = 0usize;
-    let mut style_warnings = Vec::new();
 
     while let Some(tag) = next_xml_tag(char_pr_xml, cursor) {
         if !tag.is_closing {
@@ -1320,6 +1336,25 @@ fn extract_hwpx_text_style_with_warnings(
     }
 
     (style, style_warnings)
+}
+
+fn parse_hwpx_color_attribute_with_warning(
+    tag: &str,
+    attribute_names: &[&str],
+    label: &str,
+    warnings: &mut Vec<String>,
+) -> Option<Color> {
+    let value = xml_attribute_value_any(tag, attribute_names)?;
+    match parse_hwpx_hex_color(value) {
+        Some(color) => Some(color),
+        None => {
+            warnings.push(format!(
+                "HWPX charPr referenced unsupported {label} `{}`; hwp-convert used the default text style value.",
+                value.trim()
+            ));
+            None
+        }
+    }
 }
 
 fn hwpx_style_tag_is_enabled(tag: &str, attribute_names: &[&str]) -> bool {
@@ -6003,6 +6038,37 @@ mod tests {
                 .iter()
                 .any(|warning| { warning.message.contains("missing hangul font id 9") })
         );
+    }
+
+    #[test]
+    fn warns_when_hwpx_char_pr_values_are_invalid() {
+        let context = extract_hwpx_fallback_context(
+            r##"
+            <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+              <hh:charPr id="0" fontSize="large" color="not-a-color" backgroundColor="#xyz"/>
+            </hh:head>
+            "##,
+        );
+
+        assert_eq!(context.text_styles[0].font_size_pt, None);
+        assert_eq!(context.text_styles[0].color, None);
+        assert_eq!(context.text_styles[0].background_color, None);
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("unsupported font size `large`") })
+        );
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported text color `not-a-color`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported text background color `#xyz`")
+        }));
     }
 
     #[test]
