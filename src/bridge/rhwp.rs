@@ -926,26 +926,43 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn map_list_info(
-        &self,
+        &mut self,
         paragraph: &RhwpParagraph,
         outline_numbering_id: u16,
         list_state: &mut ListState,
     ) -> Option<ListInfo> {
-        let para_shape = self.lookup_para_shape(paragraph.para_shape_id)?;
+        let para_shape = self.lookup_para_shape(paragraph.para_shape_id).cloned()?;
         let level = para_shape.para_level.min(6);
 
         match para_shape.head_type {
             RhwpHeadType::None => None,
-            RhwpHeadType::Bullet => Some(ListInfo {
-                kind: ListKind::Unordered,
-                level,
-                marker: bullet_marker(self.source, para_shape.numbering_id),
-                number: None,
-            }),
+            RhwpHeadType::Bullet => {
+                let marker = bullet_marker(self.source, para_shape.numbering_id);
+                if para_shape.numbering_id != 0 && marker.is_none() {
+                    self.add_warning_once(&format!(
+                        "rhwp bullet paragraph referenced missing bullet id {}; hwp-convert used default unordered list marker behavior.",
+                        para_shape.numbering_id
+                    ));
+                }
+                Some(ListInfo {
+                    kind: ListKind::Unordered,
+                    level,
+                    marker,
+                    number: None,
+                })
+            }
             RhwpHeadType::Number | RhwpHeadType::Outline => {
-                let numbering_id = resolve_numbering_id(para_shape, outline_numbering_id);
-                let numbering = numbering_id
-                    .checked_sub(1)
+                let numbering_id = resolve_numbering_id(&para_shape, outline_numbering_id);
+                let numbering_index = numbering_id.checked_sub(1);
+                let numbering_exists = numbering_index
+                    .and_then(|index| self.source.doc_info.numberings.get(index as usize))
+                    .is_some();
+                if numbering_id != 0 && !numbering_exists {
+                    self.add_warning_once(&format!(
+                        "rhwp ordered paragraph referenced missing numbering id {numbering_id}; hwp-convert used sequential fallback numbering."
+                    ));
+                }
+                let numbering = numbering_index
                     .and_then(|index| self.source.doc_info.numberings.get(index as usize));
 
                 Some(ListInfo {
@@ -4529,6 +4546,77 @@ mod tests {
             }
             other => panic!("expected paragraph block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn warns_when_list_definitions_are_missing() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                para_shapes: vec![
+                    RhwpParaShape {
+                        head_type: RhwpHeadType::Bullet,
+                        para_level: 0,
+                        numbering_id: 3,
+                        ..Default::default()
+                    },
+                    RhwpParaShape {
+                        head_type: RhwpHeadType::Number,
+                        para_level: 0,
+                        numbering_id: 4,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![
+                    RhwpParagraph {
+                        text: "bullet".to_string(),
+                        para_shape_id: 0,
+                        ..Default::default()
+                    },
+                    RhwpParagraph {
+                        text: "number".to_string(),
+                        para_shape_id: 1,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => {
+                let list = paragraph.list.as_ref().expect("list info should exist");
+                assert_eq!(list.kind, ListKind::Unordered);
+                assert_eq!(list.marker, None);
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+
+        match &bridged.sections[0].blocks[1] {
+            Block::Paragraph(paragraph) => {
+                let list = paragraph.list.as_ref().expect("list info should exist");
+                assert_eq!(list.kind, ListKind::Ordered);
+                assert_eq!(list.number, Some(1));
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+
+        assert!(
+            bridged
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("referenced missing bullet id 3") })
+        );
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("referenced missing numbering id 4")
+        }));
     }
 
     #[test]
