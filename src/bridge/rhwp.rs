@@ -1755,13 +1755,24 @@ impl<'a> BridgeContext<'a> {
     /// Map a border fill's four sides to IR cell borders, in rhwp order
     /// `[left, right, top, bottom]`.
     fn map_cell_borders(&mut self, border_fill_id: u16) -> [Option<Border>; 4] {
-        match self.lookup_border_fill(border_fill_id) {
-            Some(border_fill) => [
-                map_border_line(&border_fill.borders[0]),
-                map_border_line(&border_fill.borders[1]),
-                map_border_line(&border_fill.borders[2]),
-                map_border_line(&border_fill.borders[3]),
-            ],
+        match self.lookup_border_fill(border_fill_id).cloned() {
+            Some(border_fill) => {
+                for line in &border_fill.borders {
+                    if table_border_line_type_is_approximated(line.line_type) {
+                        self.add_warning_once(&format!(
+                            "rhwp table cell border line type {:?} is not directly modeled; hwp-convert approximated it as a simpler CSS border style.",
+                            line.line_type
+                        ));
+                    }
+                }
+
+                [
+                    map_border_line(&border_fill.borders[0]),
+                    map_border_line(&border_fill.borders[1]),
+                    map_border_line(&border_fill.borders[2]),
+                    map_border_line(&border_fill.borders[3]),
+                ]
+            }
             None => {
                 if border_fill_id != 0 {
                     self.warn_missing_border_fill(border_fill_id, "table cell borders");
@@ -1993,6 +2004,18 @@ fn map_image_border(picture: &Picture) -> Option<Border> {
 
 fn picture_border_line_type_is_modeled(line_type: u8) -> bool {
     matches!(line_type, 1..=11 | 13)
+}
+
+fn table_border_line_type_is_approximated(line_type: RhwpBorderLineType) -> bool {
+    matches!(
+        line_type,
+        RhwpBorderLineType::Wave
+            | RhwpBorderLineType::DoubleWave
+            | RhwpBorderLineType::Thick3D
+            | RhwpBorderLineType::Thick3DReverse
+            | RhwpBorderLineType::Thin3D
+            | RhwpBorderLineType::Thin3DReverse
+    )
 }
 
 fn map_border_line_type(line_type: RhwpBorderLineType) -> BorderStyle {
@@ -2701,6 +2724,86 @@ mod tests {
             }
             other => panic!("expected table block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn warns_when_table_border_line_type_is_approximated() {
+        let border = |line_type| RhwpBorderLine {
+            line_type,
+            width: 1,
+            color: 0,
+        };
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                border_fills: vec![RhwpBorderFill {
+                    borders: [
+                        border(RhwpBorderLineType::Wave),
+                        border(RhwpBorderLineType::DoubleWave),
+                        border(RhwpBorderLineType::Thick3D),
+                        border(RhwpBorderLineType::None),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Table(Box::new(RhwpTable {
+                        row_count: 1,
+                        col_count: 1,
+                        cells: vec![RhwpCell {
+                            row: 0,
+                            col: 0,
+                            border_fill_id: 1,
+                            paragraphs: vec![RhwpParagraph {
+                                text: "c".to_string(),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Table(table) => {
+                let style = &table.rows[0].cells[0].style;
+                assert_eq!(
+                    style.border_left.as_ref().expect("left border").style,
+                    BorderStyle::Solid
+                );
+                assert_eq!(
+                    style.border_right.as_ref().expect("right border").style,
+                    BorderStyle::Double
+                );
+                assert_eq!(
+                    style.border_top.as_ref().expect("top border").style,
+                    BorderStyle::Solid
+                );
+                assert!(style.border_bottom.is_none());
+            }
+            other => panic!("expected table block, got {other:?}"),
+        }
+
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("border line type Wave")
+                && warning.message.contains("approximated")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("border line type DoubleWave")
+                && warning.message.contains("approximated")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("border line type Thick3D")
+                && warning.message.contains("approximated")
+        }));
     }
 
     #[test]
