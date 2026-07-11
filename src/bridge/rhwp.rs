@@ -33,17 +33,20 @@ use rhwp::model::style::{
 use rhwp::model::table::{
     Cell as RhwpCell, Table as RhwpTable, VerticalAlign as RhwpVerticalAlign,
 };
+use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_rhwp_number};
 
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
     Block, Border, BorderStyle, Color, ConversionWarning, Document, Equation, EquationKind,
     HeaderFooter, HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt, LengthPx, Link,
     ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore,
-    Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Resource, ResourceId,
+    Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, Resource, ResourceId,
     ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell,
-    TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, TextStyleId, UnknownInline,
-    VerticalAlign, WarningCode,
+    TableCellStyle, TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle, TextStyleId,
+    UnknownInline, VerticalAlign, WarningCode,
 };
+
+use super::hwpx_reconcile;
 
 /// Map rhwp cell vertical alignment to the IR. `Top` is rhwp's default, so it is
 /// represented as `None` to keep the IR and JSON output free of redundant data.
@@ -57,7 +60,9 @@ fn map_vertical_align(value: RhwpVerticalAlign) -> Option<VerticalAlign> {
 
 /// Parse a source document with `rhwp` and bridge the resulting model into the
 /// local `Document` IR. For `.hwpx`, section XML fallback remains available
-/// when parsing fails or when the mapped body is structurally empty.
+/// when parsing fails or when the mapped body is structurally empty. A
+/// successful HWPX parse is also compared with the section XML fallback so
+/// partial rHWP data loss is either recovered conservatively or reported.
 pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
     let (input_kind, bytes) = hwpx::read_input_bytes(input_path)?;
 
@@ -65,7 +70,11 @@ pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
         Ok(parsed) => {
             let bridged = BridgeContext::new(&parsed).into_document();
             if document_has_blocks(&bridged) {
-                Ok(bridged)
+                if input_kind == InputKind::Hwpx {
+                    Ok(reconcile_partial_hwpx_document(&bytes, bridged))
+                } else {
+                    Ok(bridged)
+                }
             } else if input_kind == InputKind::Hwpx {
                 let empty_error = empty_document_error();
                 fallback_to_hwpx_document(&bytes, &empty_error).map_err(Into::into)
@@ -85,6 +94,13 @@ pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
                 Err(rhwp_error.into())
             }
         }
+    }
+}
+
+fn reconcile_partial_hwpx_document(bytes: &[u8], bridged: Document) -> Document {
+    match hwpx::read_section_document_from_archive(bytes) {
+        Ok(fallback) => hwpx_reconcile::reconcile(bridged, fallback),
+        Err(_) => bridged,
     }
 }
 
@@ -198,12 +214,58 @@ impl<'a> BridgeContext<'a> {
         outline_numbering_id: u16,
         list_state: &mut ListState,
     ) {
-        if let Some(mapped) = self.map_paragraph(paragraph, outline_numbering_id, list_state) {
-            blocks.push(Block::Paragraph(mapped));
+        let mapped_paragraph = self.map_paragraph(paragraph, outline_numbering_id, list_state);
+        let control_positions = infer_control_text_positions(paragraph);
+        let mapped_controls = paragraph
+            .controls
+            .iter()
+            .enumerate()
+            .map(|(index, control)| {
+                (
+                    control_positions.get(index).copied().flatten(),
+                    self.map_control_blocks(control),
+                )
+            })
+            .collect::<Vec<_>>();
+        let text_len = paragraph.text.chars().count();
+        let can_place_around_paragraph = text_len > 0
+            && mapped_controls.iter().all(|(position, mapped)| {
+                mapped.is_empty()
+                    || position.is_some_and(|position| position == 0 || position >= text_len)
+            });
+
+        if can_place_around_paragraph {
+            for (position, mapped) in &mapped_controls {
+                if *position == Some(0) {
+                    blocks.extend(mapped.iter().cloned());
+                }
+            }
+            if let Some(mapped) = mapped_paragraph {
+                blocks.push(Block::Paragraph(mapped));
+            }
+            for (position, mapped) in mapped_controls {
+                if position.is_some_and(|position| position >= text_len) {
+                    blocks.extend(mapped);
+                }
+            }
+            return;
         }
 
-        for control in &paragraph.controls {
-            blocks.extend(self.map_control_blocks(control));
+        let has_unplaced_visible_control = text_len > 0
+            && mapped_controls
+                .iter()
+                .any(|(position, mapped)| !mapped.is_empty() && position != &Some(text_len));
+        if has_unplaced_visible_control {
+            self.add_warning_once(
+                "Some rhwp block controls occur inside paragraph text or lack recoverable offsets; Document IR kept the paragraph intact and placed those controls after it, so exact reading order may differ.",
+            );
+        }
+
+        if let Some(mapped) = mapped_paragraph {
+            blocks.push(Block::Paragraph(mapped));
+        }
+        for (_, mapped) in mapped_controls {
+            blocks.extend(mapped);
         }
     }
 
@@ -248,8 +310,12 @@ impl<'a> BridgeContext<'a> {
         self.build_inlines_with_control_placement(paragraph, &chars, &segments)
     }
 
-    fn find_substring_char_index(&self, text: &str, substring: &str) -> Option<usize> {
-        let byte_idx = text.find(substring)?;
+    fn find_unique_substring_char_index(&self, text: &str, substring: &str) -> Option<usize> {
+        let mut matches = text.match_indices(substring);
+        let (byte_idx, _) = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
         Some(text[..byte_idx].chars().count())
     }
 
@@ -264,8 +330,12 @@ impl<'a> BridgeContext<'a> {
             .iter()
             .map(|range| range.control_idx)
             .collect::<std::collections::BTreeSet<usize>>();
+        let control_positions = infer_control_text_positions(paragraph);
 
         let mut insertions = Vec::new();
+        let mut imprecise_note_placement = false;
+        let mut imprecise_link_placement = false;
+        let mut imprecise_field_placement = false;
 
         for (index, control) in paragraph.controls.iter().enumerate() {
             if consumed_control_idxs.contains(&index) {
@@ -277,13 +347,8 @@ impl<'a> BridgeContext<'a> {
                     let note_id =
                         self.store_note(NoteKind::Footnote, note.number, &note.paragraphs);
                     let inline = Inline::FootnoteRef { note_id };
-                    // try to match the footnote number in paragraph text
-                    let preferred = if note.number > 0 {
-                        let token = note.number.to_string();
-                        self.find_substring_char_index(&paragraph.text, &token)
-                    } else {
-                        None
-                    };
+                    let preferred = control_positions.get(index).copied().flatten();
+                    imprecise_note_placement |= preferred.is_none();
                     insertions.push(InlineInsertion {
                         position: preferred,
                         control_idx: index,
@@ -293,12 +358,8 @@ impl<'a> BridgeContext<'a> {
                 Control::Endnote(note) => {
                     let note_id = self.store_note(NoteKind::Endnote, note.number, &note.paragraphs);
                     let inline = Inline::EndnoteRef { note_id };
-                    let preferred = if note.number > 0 {
-                        let token = note.number.to_string();
-                        self.find_substring_char_index(&paragraph.text, &token)
-                    } else {
-                        None
-                    };
+                    let preferred = control_positions.get(index).copied().flatten();
+                    imprecise_note_placement |= preferred.is_none();
                     insertions.push(InlineInsertion {
                         position: preferred,
                         control_idx: index,
@@ -307,8 +368,13 @@ impl<'a> BridgeContext<'a> {
                 }
                 Control::Hyperlink(link) => {
                     if let Some(mapped) = self.map_trailing_hyperlink(link) {
-                        let preferred = non_empty_string(&link.text)
-                            .and_then(|t| self.find_substring_char_index(&paragraph.text, &t));
+                        let exact = control_positions.get(index).copied().flatten();
+                        let preferred = exact.or_else(|| {
+                            non_empty_string(&link.text).and_then(|text| {
+                                self.find_unique_substring_char_index(&paragraph.text, &text)
+                            })
+                        });
+                        imprecise_link_placement |= exact.is_none();
                         insertions.push(InlineInsertion {
                             position: preferred,
                             control_idx: index,
@@ -318,8 +384,10 @@ impl<'a> BridgeContext<'a> {
                         self.add_warning_once(
                             "rhwp hyperlink control URL was not URL-like; hwp-convert preserved it as unknown inline fallback text.",
                         );
+                        let preferred = control_positions.get(index).copied().flatten();
+                        imprecise_field_placement |= preferred.is_none();
                         insertions.push(InlineInsertion {
-                            position: None,
+                            position: preferred,
                             control_idx: index,
                             inline,
                         });
@@ -332,11 +400,15 @@ impl<'a> BridgeContext<'a> {
                             .or_else(|| field.field_name())
                             .map(|s| s.to_string())
                             .unwrap_or_default();
-                        let preferred = if !label.is_empty() {
-                            self.find_substring_char_index(&paragraph.text, &label)
-                        } else {
-                            None
-                        };
+                        let exact = control_positions.get(index).copied().flatten();
+                        let preferred = exact.or_else(|| {
+                            (!label.is_empty())
+                                .then_some(label.as_str())
+                                .and_then(|label| {
+                                    self.find_unique_substring_char_index(&paragraph.text, label)
+                                })
+                        });
+                        imprecise_link_placement |= exact.is_none();
                         insertions.push(InlineInsertion {
                             position: preferred,
                             control_idx: index,
@@ -346,8 +418,10 @@ impl<'a> BridgeContext<'a> {
                         self.add_warning_once(
                             "rhwp hyperlink field command was not URL-like; hwp-convert preserved it as unknown inline fallback text.",
                         );
+                        let preferred = control_positions.get(index).copied().flatten();
+                        imprecise_field_placement |= preferred.is_none();
                         insertions.push(InlineInsertion {
-                            position: None,
+                            position: preferred,
                             control_idx: index,
                             inline,
                         });
@@ -361,11 +435,15 @@ impl<'a> BridgeContext<'a> {
                                 Inline::Unknown(u) => u.fallback_text.clone().unwrap_or_default(),
                                 _ => String::new(),
                             };
-                            let preferred = if !fallback_text.is_empty() {
-                                self.find_substring_char_index(&paragraph.text, &fallback_text)
-                            } else {
-                                None
-                            };
+                            let exact = control_positions.get(index).copied().flatten();
+                            let preferred = exact.or_else(|| {
+                                (!fallback_text.is_empty())
+                                    .then_some(fallback_text.as_str())
+                                    .and_then(|text| {
+                                        self.find_unique_substring_char_index(&paragraph.text, text)
+                                    })
+                            });
+                            imprecise_field_placement |= exact.is_none();
                             insertions.push(InlineInsertion {
                                 position: preferred,
                                 control_idx: index,
@@ -377,11 +455,15 @@ impl<'a> BridgeContext<'a> {
                             Inline::Unknown(u) => u.fallback_text.clone().unwrap_or_default(),
                             _ => String::new(),
                         };
-                        let preferred = if !fallback_text.is_empty() {
-                            self.find_substring_char_index(&paragraph.text, &fallback_text)
-                        } else {
-                            None
-                        };
+                        let exact = control_positions.get(index).copied().flatten();
+                        let preferred = exact.or_else(|| {
+                            (!fallback_text.is_empty())
+                                .then_some(fallback_text.as_str())
+                                .and_then(|text| {
+                                    self.find_unique_substring_char_index(&paragraph.text, text)
+                                })
+                        });
+                        imprecise_field_placement |= exact.is_none();
                         insertions.push(InlineInsertion {
                             position: preferred,
                             control_idx: index,
@@ -391,10 +473,12 @@ impl<'a> BridgeContext<'a> {
                 }
                 Control::Bookmark(bookmark) => {
                     if let Some(mapped) = self.map_bookmark_anchor(bookmark) {
-                        // Prefer matching the explicit bookmark name when available
-                        let preferred = non_empty_string(&bookmark.name).and_then(|name| {
-                            self.find_substring_char_index(&paragraph.text, &name)
-                        });
+                        let preferred =
+                            control_positions.get(index).copied().flatten().or_else(|| {
+                                non_empty_string(&bookmark.name).and_then(|name| {
+                                    self.find_unique_substring_char_index(&paragraph.text, &name)
+                                })
+                            });
                         insertions.push(InlineInsertion {
                             position: preferred,
                             control_idx: index,
@@ -481,27 +565,21 @@ impl<'a> BridgeContext<'a> {
             final_inlines.push(insertion.inline);
         }
 
-        if final_inlines
-            .iter()
-            .any(|i| matches!(i, Inline::FootnoteRef { .. } | Inline::EndnoteRef { .. }))
-        {
+        if imprecise_note_placement {
             self.add_warning_once(
-                "rhwp footnote/endnote controls do not expose exact inline positions, so note references were appended after paragraph text.",
+                "Some rhwp footnote/endnote positions could not be recovered from paragraph offsets, so note references were appended after paragraph text.",
             );
         }
 
-        if final_inlines.iter().any(|i| matches!(i, Inline::Link(_))) {
+        if imprecise_link_placement {
             self.add_warning_once(
-                "Some rhwp hyperlinks could not be placed at exact inline positions, so bridge fallback appended them after paragraph text when possible.",
+                "Some rhwp hyperlinks could not be placed from paragraph offsets, so bridge fallback used a unique matching label or appended them after paragraph text.",
             );
         }
 
-        if final_inlines
-            .iter()
-            .any(|i| matches!(i, Inline::Unknown(_)))
-        {
+        if imprecise_field_placement {
             self.add_warning_once(
-                "Some rhwp click-here fields or other field controls could not be placed at exact inline positions, so bridge fallback appended their fallback text after paragraph text.",
+                "Some rhwp field controls could not be placed from paragraph offsets, so bridge fallback used uniquely matching text or appended their fallback text after paragraph text.",
             );
         }
 
@@ -518,7 +596,7 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn collect_link_ranges(
-        &self,
+        &mut self,
         paragraph: &RhwpParagraph,
         chars: &[char],
         segments: &[TextSegment],
@@ -576,7 +654,11 @@ impl<'a> BridgeContext<'a> {
         };
         let fallback_style = fallback_style_id
             .and_then(|char_shape_id| {
-                self.map_text_style_by_char_shape_id_or_warn(char_shape_id, "paragraph named style")
+                self.map_text_style_for_language_by_char_shape_id_or_warn(
+                    char_shape_id,
+                    0,
+                    "paragraph named style",
+                )
             })
             .unwrap_or_default();
         let fallback_style_ref = self.text_style_ref(paragraph.style_id);
@@ -588,6 +670,7 @@ impl<'a> BridgeContext<'a> {
             return vec![TextSegment {
                 start: 0,
                 end: text_len,
+                char_shape_id: fallback_style_id,
                 style: fallback_style,
                 style_ref: fallback_style_ref,
             }];
@@ -616,12 +699,16 @@ impl<'a> BridgeContext<'a> {
             let start =
                 char_index_for_utf16_position(paragraph, char_shape_ref.start_pos, text_len);
             let end = char_index_for_utf16_position(paragraph, next_start, text_len);
-            let style = self
-                .map_text_style_by_char_shape_id_or_warn(
-                    char_shape_ref.char_shape_id,
-                    "paragraph text run",
-                )
-                .unwrap_or_else(|| fallback_style.clone());
+            let mapped_style = self.map_text_style_for_language_by_char_shape_id_or_warn(
+                char_shape_ref.char_shape_id,
+                0,
+                "paragraph text run",
+            );
+            let char_shape_id = mapped_style
+                .as_ref()
+                .map(|_| char_shape_ref.char_shape_id)
+                .or(fallback_style_id);
+            let style = mapped_style.unwrap_or_else(|| fallback_style.clone());
             let style_ref = if fallback_style_id == Some(char_shape_ref.char_shape_id) {
                 fallback_style_ref.clone()
             } else {
@@ -631,6 +718,7 @@ impl<'a> BridgeContext<'a> {
             segments.push(TextSegment {
                 start,
                 end,
+                char_shape_id,
                 style,
                 style_ref,
             });
@@ -690,7 +778,7 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn push_text_range_as_inlines(
-        &self,
+        &mut self,
         inlines: &mut Vec<Inline>,
         chars: &[char],
         segments: &[TextSegment],
@@ -709,12 +797,24 @@ impl<'a> BridgeContext<'a> {
             }
 
             let text: String = chars[segment_start..segment_end].iter().collect();
-            push_text_fragment(inlines, &text, &segment.style, segment.style_ref.as_ref());
+            for (language_index, fragment) in split_text_by_language(&text) {
+                let style = segment
+                    .char_shape_id
+                    .and_then(|char_shape_id| {
+                        self.map_text_style_for_language_by_char_shape_id_or_warn(
+                            char_shape_id,
+                            language_index,
+                            "paragraph text run",
+                        )
+                    })
+                    .unwrap_or_else(|| segment.style.clone());
+                push_text_fragment(inlines, &fragment, &style, segment.style_ref.as_ref());
+            }
         }
     }
 
     fn map_link_from_field_range(
-        &self,
+        &mut self,
         paragraph: &RhwpParagraph,
         range: &FieldRange,
         chars: &[char],
@@ -937,48 +1037,150 @@ impl<'a> BridgeContext<'a> {
         match para_shape.head_type {
             RhwpHeadType::None => None,
             RhwpHeadType::Bullet => {
-                let marker = bullet_marker(self.source, para_shape.numbering_id);
-                if para_shape.numbering_id != 0 && marker.is_none() {
+                let bullet = para_shape
+                    .numbering_id
+                    .checked_sub(1)
+                    .and_then(|index| self.source.doc_info.bullets.get(index as usize))
+                    .cloned();
+                let marker = bullet
+                    .as_ref()
+                    .and_then(|bullet| normalize_bullet_char(bullet.bullet_char))
+                    .map(|ch| ch.to_string());
+                if para_shape.numbering_id != 0 && bullet.is_none() {
                     self.add_warning_once(&format!(
                         "rhwp bullet paragraph referenced missing bullet id {}; hwp-convert used default unordered list marker behavior.",
                         para_shape.numbering_id
                     ));
                 }
+                if let Some(bullet) = bullet.as_ref() {
+                    if marker.is_none() {
+                        self.add_warning_once(&format!(
+                            "rhwp bullet id {} exposed unusable marker {:?}; hwp-convert used default unordered list marker behavior.",
+                            para_shape.numbering_id, bullet.bullet_char
+                        ));
+                    }
+                    self.warn_unmodeled_bullet(bullet, para_shape.numbering_id);
+                }
                 Some(ListInfo {
                     kind: ListKind::Unordered,
                     level,
                     marker,
+                    marker_format: None,
                     number: None,
                 })
             }
             RhwpHeadType::Number | RhwpHeadType::Outline => {
                 let numbering_id = resolve_numbering_id(&para_shape, outline_numbering_id);
                 let numbering_index = numbering_id.checked_sub(1);
-                let numbering_exists = numbering_index
+                let numbering = numbering_index
                     .and_then(|index| self.source.doc_info.numberings.get(index as usize))
-                    .is_some();
-                if numbering_id != 0 && !numbering_exists {
+                    .cloned();
+                if numbering_id != 0 && numbering.is_none() {
                     self.add_warning_once(&format!(
                         "rhwp ordered paragraph referenced missing numbering id {numbering_id}; hwp-convert used sequential fallback numbering."
                     ));
                 }
-                let numbering = numbering_index
-                    .and_then(|index| self.source.doc_info.numberings.get(index as usize));
+                let marker_format = numbering
+                    .as_ref()
+                    .and_then(|numbering| numbering.level_formats.get(level as usize))
+                    .filter(|format| !format.is_empty())
+                    .cloned();
+                if let Some(numbering) = numbering.as_ref() {
+                    self.warn_unmodeled_numbering(
+                        numbering,
+                        numbering_id,
+                        level,
+                        marker_format.as_deref(),
+                    );
+                }
+                let number = numbering_id.checked_sub(1).and_then(|_| {
+                    list_state.advance(
+                        numbering_id,
+                        level,
+                        paragraph.numbering_restart,
+                        numbering.as_ref(),
+                    )
+                });
+                let marker = marker_format.as_deref().and_then(|format| {
+                    numbering.as_ref().and_then(|numbering| {
+                        list_state
+                            .counters(numbering_id)
+                            .map(|counters| expand_ordered_marker(format, counters, numbering))
+                    })
+                });
 
                 Some(ListInfo {
                     kind: ListKind::Ordered,
                     level,
-                    marker: None,
-                    number: numbering_id.checked_sub(1).and_then(|_| {
-                        list_state.advance(
-                            numbering_id,
-                            level,
-                            paragraph.numbering_restart,
-                            numbering,
-                        )
-                    }),
+                    marker,
+                    marker_format,
+                    number,
                 })
             }
+        }
+    }
+
+    fn warn_unmodeled_bullet(&mut self, bullet: &rhwp::model::style::Bullet, bullet_id: u16) {
+        if bullet.image_bullet != 0 {
+            self.add_warning_once(&format!(
+                "rhwp bullet id {bullet_id} used image bullet {}; ListInfo preserved only a text marker and omitted the image bullet resource.",
+                bullet.image_bullet
+            ));
+        }
+        if bullet.width_adjust != 0
+            || bullet.text_distance != 0
+            || bullet.attr != 0
+            || bullet.image_data != [0; 4]
+        {
+            self.add_warning_once(&format!(
+                "rhwp bullet id {bullet_id} used layout/style metadata attr={}, width_adjust={}, text_distance={}, image_data={:?}; ListInfo omitted those properties.",
+                bullet.attr, bullet.width_adjust, bullet.text_distance, bullet.image_data
+            ));
+        }
+        if normalize_bullet_char(bullet.check_bullet_char).is_some() {
+            self.add_warning_once(&format!(
+                "rhwp bullet id {bullet_id} exposed a check-bullet marker {:?}; ListInfo preserved only the primary bullet marker.",
+                bullet.check_bullet_char
+            ));
+        }
+    }
+
+    fn warn_unmodeled_numbering(
+        &mut self,
+        numbering: &RhwpNumbering,
+        numbering_id: u16,
+        level: u8,
+        marker: Option<&str>,
+    ) {
+        let head = &numbering.heads[level as usize];
+        let char_shape_id =
+            (!matches!(head.char_shape_id, 0 | u32::MAX)).then_some(head.char_shape_id);
+        if let Some(marker) = marker {
+            for referenced_level in numbering_marker_level_references(marker) {
+                let format_code = numbering.heads[referenced_level].number_format;
+                if numbering_format(format_code).is_none() {
+                    self.add_warning_once(&format!(
+                        "rhwp numbering id {numbering_id} level {level} format {marker:?} referenced unsupported number format code {format_code} at level {}; hwp-convert approximated that marker component with decimal digits.",
+                        referenced_level + 1
+                    ));
+                }
+            }
+        }
+        if head.attr != 0
+            || head.width_adjust != 0
+            || head.text_distance != 0
+            || char_shape_id.is_some()
+        {
+            let char_shape_id = char_shape_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            self.add_warning_once(&format!(
+                "rhwp numbering id {numbering_id} level {level} used layout/style metadata attr={}, width_adjust={}, text_distance={}, char_shape_id={}; ListInfo omitted those properties.",
+                head.attr,
+                head.width_adjust,
+                head.text_distance,
+                char_shape_id
+            ));
         }
     }
 
@@ -1168,6 +1370,7 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn map_table(&mut self, table: &RhwpTable) -> Table {
+        self.warn_unmodeled_table_properties(table);
         let mut rows = Vec::new();
         let row_count = table
             .cells
@@ -1200,6 +1403,77 @@ impl<'a> BridgeContext<'a> {
                     .border_fill_background_color(table.border_fill_id, "table background"),
             },
         }
+    }
+
+    fn warn_unmodeled_table_properties(&mut self, table: &RhwpTable) {
+        let mut details = Vec::new();
+
+        if table.cell_spacing != 0 {
+            details.push(format!("cell_spacing={}", table.cell_spacing));
+        }
+        if !table.row_sizes.is_empty() {
+            details.push(format!("row_sizes={:?}", table.row_sizes));
+        }
+        if !table.zones.is_empty() {
+            details.push(format!("border_fill_zones={}", table.zones.len()));
+        }
+        if table.page_break != Default::default() {
+            details.push(format!("page_break={:?}", table.page_break));
+        }
+        if table.repeat_header {
+            details.push("repeat_header=true".to_string());
+        }
+        if table.outer_margin_left != 0
+            || table.outer_margin_right != 0
+            || table.outer_margin_top != 0
+            || table.outer_margin_bottom != 0
+        {
+            details.push(format!(
+                "outer_margins={}/{}/{}/{}",
+                table.outer_margin_left,
+                table.outer_margin_right,
+                table.outer_margin_top,
+                table.outer_margin_bottom
+            ));
+        }
+
+        let common = &table.common;
+        if common.width != 0
+            || common.height != 0
+            || common.horizontal_offset != 0
+            || common.vertical_offset != 0
+            || common.z_order != 0
+            || common.margin.left != 0
+            || common.margin.right != 0
+            || common.margin.top != 0
+            || common.margin.bottom != 0
+            || common.treat_as_char
+            || common.text_wrap != rhwp::model::shape::TextWrap::Square
+            || common.vert_rel_to != rhwp::model::shape::VertRelTo::Paper
+            || common.horz_rel_to != rhwp::model::shape::HorzRelTo::Paper
+            || common.vert_align != rhwp::model::shape::VertAlign::Top
+            || common.horz_align != rhwp::model::shape::HorzAlign::Left
+        {
+            details.push(format!(
+                "layout=size:{}x{},offset:{}/{},z:{},treat_as_char:{},wrap:{:?}",
+                common.width,
+                common.height,
+                common.horizontal_offset,
+                common.vertical_offset,
+                common.z_order,
+                common.treat_as_char,
+                common.text_wrap
+            ));
+        }
+
+        if details.is_empty() {
+            return;
+        }
+
+        self.add_warning_once(&format!(
+            "rhwp exposed table layout properties that Table IR does not model; hwp-convert preserved table structure but omitted {}.",
+            details.join(", ")
+        ));
     }
 
     fn map_table_blocks(&mut self, table: &RhwpTable) -> Vec<Block> {
@@ -1265,12 +1539,20 @@ impl<'a> BridgeContext<'a> {
         }
 
         let [border_left, border_right, border_top, border_bottom] =
-            self.map_cell_borders(cell.border_fill_id);
+            self.map_borders(cell.border_fill_id, "table cell borders");
         let padding = if cell.apply_inner_margin {
             &cell.padding
         } else {
             table_padding
         };
+        self.warn_negative_table_padding(
+            padding,
+            if cell.apply_inner_margin {
+                "cell-specific"
+            } else {
+                "table-default"
+            },
+        );
 
         TableCell {
             row_span: (cell.row_span as u32).max(1),
@@ -1434,8 +1716,20 @@ impl<'a> BridgeContext<'a> {
         ));
     }
 
-    fn map_equation(&self, equation: &RhwpEquation) -> Equation {
+    fn map_equation(&mut self, equation: &RhwpEquation) -> Equation {
         let content = non_empty_string(&equation.script);
+        self.add_warning_once(&format!(
+            "rhwp equation presentation metadata is not modeled; hwp-convert preserved the script fallback but omitted font_size={}, color={:#010x}, baseline={}, font_name={:?}, version={:?}, size={}x{}, offset={}/{}.",
+            equation.font_size,
+            equation.color,
+            equation.baseline,
+            equation.font_name,
+            equation.version_info,
+            equation.common.width,
+            equation.common.height,
+            equation.common.horizontal_offset,
+            equation.common.vertical_offset
+        ));
         Equation {
             kind: EquationKind::PlainText,
             fallback_text: content.clone().or_else(|| Some("[equation]".to_string())),
@@ -1452,6 +1746,24 @@ impl<'a> BridgeContext<'a> {
             ShapeObject::Polygon(_) | ShapeObject::Curve(_) => ShapeKind::Polygon,
             ShapeObject::Group(_) | ShapeObject::Picture(_) => ShapeKind::Unknown,
         };
+        let common = shape.common();
+        let drawing_details = shape
+            .drawing()
+            .map(|drawing| {
+                format!(
+                    "border_width={}, fill={:?}, shadow_type={}",
+                    drawing.border_line.width, drawing.fill.fill_type, drawing.shadow_type
+                )
+            })
+            .unwrap_or_else(|| "drawing details unavailable".to_string());
+        self.add_warning_once(&format!(
+            "rhwp shape {kind:?} geometry and presentation are not modeled; hwp-convert preserved only kind/text fallback (size={}x{}, offset={}/{}, z_order={}, {drawing_details}).",
+            common.width,
+            common.height,
+            common.horizontal_offset,
+            common.vertical_offset,
+            common.z_order
+        ));
         let description = non_empty_string(&shape.common().description);
         let text_box_text = self.shape_text_box_text(shape);
         let caption_text = match shape.drawing().and_then(|drawing| drawing.caption.as_ref()) {
@@ -1599,6 +1911,19 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn map_text_style(&mut self, char_shape: &RhwpCharShape, context: &str) -> TextStyle {
+        self.warn_unmodeled_text_style(char_shape);
+        self.warn_nonuniform_text_metrics(char_shape, context);
+        let font_width_percent = uniform_u8_percent(&char_shape.ratios, 50..=200);
+        let letter_spacing_percent = uniform_i8_percent(&char_shape.spacings, -50..=50);
+        let relative_size_percent = uniform_u8_percent(&char_shape.relative_sizes, 10..=250);
+        let vertical_offset_percent = uniform_i8_percent(&char_shape.char_offsets, -100..=100);
+        let font_size_pt = self
+            .map_font_size_pt(char_shape.base_size, context)
+            .map(|size| match relative_size_percent {
+                Some(relative_size) => LengthPt(size.0 * relative_size.0 / 100.0),
+                None => size,
+            });
+
         TextStyle {
             bold: char_shape.bold,
             italic: char_shape.italic,
@@ -1612,26 +1937,139 @@ impl<'a> BridgeContext<'a> {
             outline: char_shape.outline_type != 0,
             shadow: char_shape.shadow_type != 0,
             font_family: self.lookup_font_family(char_shape, context),
-            font_size_pt: i32_hwp_units_to_pt_option(char_shape.base_size),
+            font_size_pt,
             color: color_ref_to_color_option(char_shape.text_color),
             background_color: color_ref_to_color_option(char_shape.shade_color),
             underline_color: color_ref_to_color_option(char_shape.underline_color),
             strike_color: color_ref_to_color_option(char_shape.strike_color),
+            underline_style: (char_shape.underline_type != RhwpUnderlineType::None)
+                .then(|| map_text_decoration_style(char_shape.underline_shape)),
+            strike_style: char_shape
+                .strikethrough
+                .then(|| map_text_decoration_style(char_shape.strike_shape)),
+            underline_above: char_shape.underline_type == RhwpUnderlineType::Top,
+            font_width_percent,
+            letter_spacing_percent,
+            relative_size_percent,
+            vertical_offset_percent,
+            kerning: char_shape.kerning,
+        }
+    }
+
+    fn map_font_size_pt(&mut self, value: i32, context: &str) -> Option<LengthPt> {
+        const MAX_FONT_SIZE_HWPUNIT: i32 = 4096 * 100;
+
+        if value == 0 {
+            return None;
+        }
+        if !(1..=MAX_FONT_SIZE_HWPUNIT).contains(&value) {
+            self.add_warning_once(&format!(
+                "rhwp {context} exposed invalid font size {value} HWPUNIT; hwp-convert omitted the font size."
+            ));
+            return None;
+        }
+
+        Some(LengthPt(value as f32 / 100.0))
+    }
+
+    fn warn_unmodeled_text_style(&mut self, char_shape: &RhwpCharShape) {
+        if percent_values_have_invalid_u8(&char_shape.ratios, 50..=200) {
+            self.add_warning_once(&format!(
+                "rhwp text style used invalid horizontal ratios {:?}; TextStyle omitted the out-of-range values.",
+                char_shape.ratios
+            ));
+        }
+        if percent_values_have_invalid_i8(&char_shape.spacings, -50..=50) {
+            self.add_warning_once(&format!(
+                "rhwp text style used invalid character spacing {:?}; TextStyle omitted the out-of-range values.",
+                char_shape.spacings
+            ));
+        }
+        if percent_values_have_invalid_u8(&char_shape.relative_sizes, 10..=250) {
+            self.add_warning_once(&format!(
+                "rhwp text style used invalid relative sizes {:?}; TextStyle omitted the out-of-range values.",
+                char_shape.relative_sizes
+            ));
+        }
+        if percent_values_have_invalid_i8(&char_shape.char_offsets, -100..=100) {
+            self.add_warning_once(&format!(
+                "rhwp text style used invalid character offsets {:?}; TextStyle omitted the out-of-range values.",
+                char_shape.char_offsets
+            ));
+        }
+        if char_shape.underline_type != RhwpUnderlineType::None
+            && decoration_shape_is_approximated(char_shape.underline_shape)
+        {
+            self.add_warning_once(&format!(
+                "rhwp text style used underline shape {}; hwp-convert preserved its closest CSS decoration style but exact line geometry is approximated.",
+                char_shape.underline_shape
+            ));
+        }
+        if char_shape.strikethrough && decoration_shape_is_approximated(char_shape.strike_shape) {
+            self.add_warning_once(&format!(
+                "rhwp text style used strike shape {}; hwp-convert preserved its closest CSS decoration style but exact line geometry is approximated.",
+                char_shape.strike_shape
+            ));
+        }
+        if char_shape.underline_type != RhwpUnderlineType::None
+            && char_shape.strikethrough
+            && map_text_decoration_style(char_shape.underline_shape)
+                != map_text_decoration_style(char_shape.strike_shape)
+        {
+            self.add_warning_once(
+                "rhwp text style used different simultaneous underline and strike decoration styles; JSON preserves both, while HTML CSS can display only one shared decoration style and prefers the underline style.",
+            );
+        }
+        if char_shape.emphasis_dot > 1 {
+            self.add_warning_once(&format!(
+                "rhwp text style used emphasis mark type {}; TextStyle approximated it as a generic dot emphasis.",
+                char_shape.emphasis_dot
+            ));
+        }
+        if char_shape.outline_type != 0 {
+            self.add_warning_once(&format!(
+                "rhwp text style used outline type {}; HTML approximates it with a uniform text stroke.",
+                char_shape.outline_type
+            ));
+        }
+        if char_shape.shadow_type != 0 || char_shape.emboss || char_shape.engrave {
+            self.add_warning_once(
+                "rhwp text effect details such as shadow type, offsets, color, emboss, or engrave are only approximated by generic HTML text shadows.",
+            );
+        }
+    }
+
+    fn warn_nonuniform_text_metrics(&mut self, char_shape: &RhwpCharShape, context: &str) {
+        if percent_values_are_nonuniform_u8(&char_shape.ratios, 50..=200) {
+            self.add_warning_once(&format!(
+                "rhwp {context} used script-specific horizontal ratios {:?}; this single named TextStyle preserved only its primary-script value, while paragraph runs retain per-script values.",
+                char_shape.ratios
+            ));
+        }
+        if percent_values_are_nonuniform_i8(&char_shape.spacings, -50..=50) {
+            self.add_warning_once(&format!(
+                "rhwp {context} used script-specific character spacing {:?}; this single named TextStyle preserved only its primary-script value, while paragraph runs retain per-script values.",
+                char_shape.spacings
+            ));
+        }
+        if percent_values_are_nonuniform_u8(&char_shape.relative_sizes, 10..=250) {
+            self.add_warning_once(&format!(
+                "rhwp {context} used script-specific relative sizes {:?}; this single named TextStyle preserved only its primary-script value, while paragraph runs retain per-script values.",
+                char_shape.relative_sizes
+            ));
+        }
+        if percent_values_are_nonuniform_i8(&char_shape.char_offsets, -100..=100) {
+            self.add_warning_once(&format!(
+                "rhwp {context} used script-specific character offsets {:?}; this single named TextStyle preserved only its primary-script value, while paragraph runs retain per-script values.",
+                char_shape.char_offsets
+            ));
         }
     }
 
     fn map_paragraph_style_by_id(&mut self, para_shape_id: u16, context: &str) -> ParagraphStyle {
-        if let Some(para_shape) = self.lookup_para_shape(para_shape_id) {
-            let style = self.map_paragraph_style(para_shape);
-            let percent_line_spacing = matches!(
-                para_shape.line_spacing_type,
-                rhwp::model::style::LineSpacingType::Percent
-            );
-            if percent_line_spacing {
-                self.add_warning_once(
-                    "rhwp paragraph percent line spacing is not modeled by ParagraphStyle; hwp-convert preserved other paragraph style properties.",
-                );
-            }
+        if let Some(para_shape) = self.lookup_para_shape(para_shape_id).cloned() {
+            let style = self.map_paragraph_style(&para_shape);
+            self.warn_unmodeled_paragraph_style(&para_shape);
             return style;
         }
 
@@ -1644,8 +2082,45 @@ impl<'a> BridgeContext<'a> {
         ParagraphStyle::default()
     }
 
-    fn map_paragraph_style(&self, para_shape: &RhwpParaShape) -> ParagraphStyle {
-        ParagraphStyle {
+    fn warn_unmodeled_paragraph_style(&mut self, para_shape: &RhwpParaShape) {
+        if matches!(
+            para_shape.alignment,
+            RhwpAlignment::Distribute | RhwpAlignment::Split
+        ) {
+            self.add_warning_once(&format!(
+                "rhwp paragraph alignment {:?} is not directly modeled; hwp-convert approximated it as justify.",
+                para_shape.alignment
+            ));
+        }
+
+        match para_shape.line_spacing_type {
+            rhwp::model::style::LineSpacingType::SpaceOnly
+            | rhwp::model::style::LineSpacingType::Minimum => {
+                self.add_warning_once(&format!(
+                    "rhwp paragraph line spacing mode {:?} is not directly modeled; hwp-convert approximated its numeric value as a fixed point line height.",
+                    para_shape.line_spacing_type
+                ));
+            }
+            rhwp::model::style::LineSpacingType::Fixed
+            | rhwp::model::style::LineSpacingType::Percent => {}
+        }
+
+        if para_shape.tab_def_id != 0 {
+            self.add_warning_once(&format!(
+                "rhwp paragraph referenced tab definition id {}; custom tab stops are not modeled and were omitted.",
+                para_shape.tab_def_id
+            ));
+        }
+        if para_shape.border_spacing.iter().any(|spacing| *spacing < 0) {
+            self.add_warning_once(&format!(
+                "rhwp paragraph border spacing {:?} contained negative HWPUNIT values; hwp-convert omitted the negative sides.",
+                para_shape.border_spacing
+            ));
+        }
+    }
+
+    fn map_paragraph_style(&mut self, para_shape: &RhwpParaShape) -> ParagraphStyle {
+        let mut style = ParagraphStyle {
             alignment: map_alignment(para_shape.alignment),
             spacing: Spacing {
                 before_pt: i32_hwp_units_to_pt_option(para_shape.spacing_before),
@@ -1659,13 +2134,46 @@ impl<'a> BridgeContext<'a> {
                     }
                     rhwp::model::style::LineSpacingType::Percent => None,
                 },
+                line_percent: match para_shape.line_spacing_type {
+                    rhwp::model::style::LineSpacingType::Percent => {
+                        let value = if para_shape.line_spacing_v2 > 0 {
+                            para_shape.line_spacing_v2 as f32
+                        } else {
+                            para_shape.line_spacing.max(0) as f32
+                        };
+                        (value > 0.0).then_some(Percent(value))
+                    }
+                    _ => None,
+                },
             },
             indent: crate::ir::Indent {
                 left_pt: i32_hwp_units_to_pt_option(para_shape.margin_left),
                 right_pt: i32_hwp_units_to_pt_option(para_shape.margin_right),
                 first_line_pt: i32_hwp_units_to_pt_option(para_shape.indent),
             },
+            widow_orphan: paragraph_layout_flag(para_shape, 16, 5),
+            keep_with_next: paragraph_layout_flag(para_shape, 17, 6),
+            keep_lines: paragraph_layout_flag(para_shape, 18, 7),
+            page_break_before: paragraph_layout_flag(para_shape, 19, 8),
+            ..Default::default()
+        };
+
+        if para_shape.border_fill_id != 0 {
+            style.background_color = self
+                .border_fill_background_color(para_shape.border_fill_id, "paragraph background");
+            let [border_left, border_right, border_top, border_bottom] =
+                self.map_borders(para_shape.border_fill_id, "paragraph borders");
+            style.border_top = border_top;
+            style.border_right = border_right;
+            style.border_bottom = border_bottom;
+            style.border_left = border_left;
+            style.padding_left_pt = i16_hwp_units_to_pt_option(para_shape.border_spacing[0]);
+            style.padding_right_pt = i16_hwp_units_to_pt_option(para_shape.border_spacing[1]);
+            style.padding_top_pt = i16_hwp_units_to_pt_option(para_shape.border_spacing[2]);
+            style.padding_bottom_pt = i16_hwp_units_to_pt_option(para_shape.border_spacing[3]);
         }
+
+        style
     }
 
     fn paragraph_style_ref(&self, paragraph: &RhwpParagraph) -> Option<ParagraphStyleId> {
@@ -1706,11 +2214,88 @@ impl<'a> BridgeContext<'a> {
         }
     }
 
+    fn map_text_style_for_language_by_char_shape_id_or_warn(
+        &mut self,
+        char_shape_id: u32,
+        language_index: usize,
+        context: &str,
+    ) -> Option<TextStyle> {
+        match self.lookup_char_shape(char_shape_id).cloned() {
+            Some(char_shape) => {
+                Some(self.map_text_style_for_language(&char_shape, language_index, context))
+            }
+            None => {
+                if !self.source.doc_info.char_shapes.is_empty() || char_shape_id != 0 {
+                    self.add_warning_once(&format!(
+                        "rhwp {context} referenced missing char shape id {char_shape_id}; hwp-convert used fallback text style."
+                    ));
+                }
+                None
+            }
+        }
+    }
+
+    fn map_text_style_for_language(
+        &mut self,
+        char_shape: &RhwpCharShape,
+        language_index: usize,
+        context: &str,
+    ) -> TextStyle {
+        let language_index = language_index.min(6);
+        self.warn_unmodeled_text_style(char_shape);
+        let font_width_percent = u8_percent_at(&char_shape.ratios, language_index, 50..=200);
+        let letter_spacing_percent = i8_percent_at(&char_shape.spacings, language_index, -50..=50);
+        let relative_size_percent =
+            u8_percent_at(&char_shape.relative_sizes, language_index, 10..=250);
+        let vertical_offset_percent =
+            i8_percent_at(&char_shape.char_offsets, language_index, -100..=100);
+        let font_size_pt = self
+            .map_font_size_pt(char_shape.base_size, context)
+            .map(|size| match relative_size_percent {
+                Some(relative_size) => LengthPt(size.0 * relative_size.0 / 100.0),
+                None => size,
+            });
+
+        TextStyle {
+            bold: char_shape.bold,
+            italic: char_shape.italic,
+            underline: char_shape.underline_type != RhwpUnderlineType::None,
+            strike: char_shape.strikethrough,
+            superscript: char_shape.superscript,
+            subscript: char_shape.subscript,
+            emphasis_dot: char_shape.emphasis_dot != 0,
+            emboss: char_shape.emboss,
+            engrave: char_shape.engrave,
+            outline: char_shape.outline_type != 0,
+            shadow: char_shape.shadow_type != 0,
+            font_family: self.lookup_font_family_for_language(char_shape, language_index, context),
+            font_size_pt,
+            color: color_ref_to_color_option(char_shape.text_color),
+            background_color: color_ref_to_color_option(char_shape.shade_color),
+            underline_color: color_ref_to_color_option(char_shape.underline_color),
+            strike_color: color_ref_to_color_option(char_shape.strike_color),
+            underline_style: (char_shape.underline_type != RhwpUnderlineType::None)
+                .then(|| map_text_decoration_style(char_shape.underline_shape)),
+            strike_style: char_shape
+                .strikethrough
+                .then(|| map_text_decoration_style(char_shape.strike_shape)),
+            underline_above: char_shape.underline_type == RhwpUnderlineType::Top,
+            font_width_percent,
+            letter_spacing_percent,
+            relative_size_percent,
+            vertical_offset_percent,
+            kerning: char_shape.kerning,
+        }
+    }
+
     fn lookup_para_shape(&self, para_shape_id: u16) -> Option<&RhwpParaShape> {
         self.source.doc_info.para_shapes.get(para_shape_id as usize)
     }
 
     fn lookup_font_family(&mut self, char_shape: &RhwpCharShape, context: &str) -> Option<String> {
+        let mut selected = None;
+        let mut distinct_names = Vec::new();
+
         for (language_index, font_id) in char_shape.font_ids.iter().enumerate() {
             let Some(group) = self.source.doc_info.font_faces.get(language_index) else {
                 if *font_id != 0 {
@@ -1729,11 +2314,66 @@ impl<'a> BridgeContext<'a> {
                 continue;
             };
             if let Some(name) = non_empty_string(&font.name) {
-                return Some(name);
+                if selected.is_none() {
+                    selected = Some(name.clone());
+                }
+                if !distinct_names.contains(&name) {
+                    distinct_names.push(name);
+                }
             }
         }
 
-        None
+        if distinct_names.len() > 1 {
+            self.add_warning_once(&format!(
+                "rhwp {context} used multiple script-specific font families ({}); TextStyle preserved only the first available family.",
+                distinct_names.join(", ")
+            ));
+        }
+
+        selected
+    }
+
+    fn lookup_font_family_for_language(
+        &mut self,
+        char_shape: &RhwpCharShape,
+        language_index: usize,
+        context: &str,
+    ) -> Option<String> {
+        let font_id = char_shape.font_ids[language_index];
+        match self.source.doc_info.font_faces.get(language_index) {
+            Some(group) => match group.get(font_id as usize) {
+                Some(font) => {
+                    if let Some(name) = non_empty_string(&font.name) {
+                        return Some(name);
+                    }
+                }
+                None if font_id != 0 || !group.is_empty() => {
+                    self.add_warning_once(&format!(
+                        "rhwp {context} referenced missing font id {font_id} in font face group {language_index}; hwp-convert used an available fallback font family or default font style."
+                    ));
+                }
+                None => {}
+            },
+            None if font_id != 0 => {
+                self.add_warning_once(&format!(
+                    "rhwp {context} referenced missing font face group {language_index} font id {font_id}; hwp-convert used an available fallback font family or default font style."
+                ));
+            }
+            None => {}
+        }
+
+        char_shape
+            .font_ids
+            .iter()
+            .enumerate()
+            .find_map(|(fallback_index, fallback_id)| {
+                self.source
+                    .doc_info
+                    .font_faces
+                    .get(fallback_index)
+                    .and_then(|group| group.get(*fallback_id as usize))
+                    .and_then(|font| non_empty_string(&font.name))
+            })
     }
 
     fn border_fill_background_color(
@@ -1741,8 +2381,11 @@ impl<'a> BridgeContext<'a> {
         border_fill_id: u16,
         context: &str,
     ) -> Option<Color> {
-        match self.lookup_border_fill(border_fill_id) {
-            Some(border_fill) => border_fill_background_color(border_fill),
+        match self.lookup_border_fill(border_fill_id).cloned() {
+            Some(border_fill) => {
+                self.warn_unmodeled_border_fill(&border_fill, context);
+                border_fill_background_color(&border_fill)
+            }
             None => {
                 if border_fill_id != 0 {
                     self.warn_missing_border_fill(border_fill_id, context);
@@ -1752,15 +2395,63 @@ impl<'a> BridgeContext<'a> {
         }
     }
 
-    /// Map a border fill's four sides to IR cell borders, in rhwp order
+    fn warn_unmodeled_border_fill(&mut self, border_fill: &RhwpBorderFill, context: &str) {
+        match border_fill.fill.fill_type {
+            RhwpFillType::None => {}
+            RhwpFillType::Solid => match border_fill.fill.solid.as_ref() {
+                Some(solid) if solid.pattern_type > 0 => {
+                    self.add_warning_once(&format!(
+                        "rhwp {context} used solid fill pattern type {}; hwp-convert approximated it with the pattern background color.",
+                        solid.pattern_type
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    self.add_warning_once(&format!(
+                        "rhwp {context} declared a solid fill without solid fill data; hwp-convert omitted the background fill."
+                    ));
+                }
+            },
+            RhwpFillType::Gradient => {
+                self.add_warning_once(&format!(
+                    "rhwp {context} used a gradient fill that semantic IR does not model; hwp-convert omitted the background fill."
+                ));
+            }
+            RhwpFillType::Image => {
+                self.add_warning_once(&format!(
+                    "rhwp {context} used an image fill that semantic IR does not model; hwp-convert omitted the background fill."
+                ));
+            }
+        }
+
+        if !matches!(border_fill.fill.alpha, 0 | 255) {
+            self.add_warning_once(&format!(
+                "rhwp {context} used fill opacity {}; hwp-convert did not apply that opacity.",
+                border_fill.fill.alpha
+            ));
+        }
+    }
+
+    fn warn_negative_table_padding(&mut self, padding: &rhwp::model::Padding, source: &str) {
+        if padding.left >= 0 && padding.right >= 0 && padding.top >= 0 && padding.bottom >= 0 {
+            return;
+        }
+
+        self.add_warning_once(&format!(
+            "rhwp table cell {source} padding contained negative HWPUNIT values left={}, right={}, top={}, bottom={}; hwp-convert omitted the negative sides.",
+            padding.left, padding.right, padding.top, padding.bottom
+        ));
+    }
+
+    /// Map a border fill's four sides to IR borders, in rhwp order
     /// `[left, right, top, bottom]`.
-    fn map_cell_borders(&mut self, border_fill_id: u16) -> [Option<Border>; 4] {
+    fn map_borders(&mut self, border_fill_id: u16, context: &str) -> [Option<Border>; 4] {
         match self.lookup_border_fill(border_fill_id).cloned() {
             Some(border_fill) => {
                 for line in &border_fill.borders {
                     if table_border_line_type_is_approximated(line.line_type) {
                         self.add_warning_once(&format!(
-                            "rhwp table cell border line type {:?} is not directly modeled; hwp-convert approximated it as a simpler CSS border style.",
+                            "rhwp {context} used border line type {:?} that is not directly modeled; hwp-convert approximated it as a simpler CSS border style.",
                             line.line_type
                         ));
                     }
@@ -1775,7 +2466,7 @@ impl<'a> BridgeContext<'a> {
             }
             None => {
                 if border_fill_id != 0 {
-                    self.warn_missing_border_fill(border_fill_id, "table cell borders");
+                    self.warn_missing_border_fill(border_fill_id, context);
                 }
                 [None, None, None, None]
             }
@@ -1784,7 +2475,7 @@ impl<'a> BridgeContext<'a> {
 
     fn warn_missing_border_fill(&mut self, border_fill_id: u16, context: &str) {
         self.add_warning_once(&format!(
-            "rhwp {context} referenced missing border fill id {border_fill_id}; hwp-convert used default table border/fill style."
+            "rhwp {context} referenced missing border fill id {border_fill_id}; hwp-convert used default border/fill style."
         ));
     }
 
@@ -1815,6 +2506,7 @@ impl<'a> BridgeContext<'a> {
 struct TextSegment {
     start: usize,
     end: usize,
+    char_shape_id: Option<u32>,
     style: TextStyle,
     style_ref: Option<TextStyleId>,
 }
@@ -1878,6 +2570,147 @@ impl ListState {
 
         Some(counters[level_index])
     }
+
+    fn counters(&self, numbering_id: u16) -> Option<&[u32; 7]> {
+        self.counters.get(&numbering_id)
+    }
+}
+
+fn expand_ordered_marker(format: &str, counters: &[u32; 7], numbering: &RhwpNumbering) -> String {
+    let mut result = String::new();
+    let mut chars = format.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '^'
+            && let Some(digit) = chars.peek().copied()
+            && ('1'..='7').contains(&digit)
+        {
+            chars.next();
+            let index = (digit as u8 - b'1') as usize;
+            let number = if counters[index] > 0 {
+                counters[index]
+            } else {
+                numbering_level_start(numbering, index)
+            };
+            result.push_str(&format_numbering_value(
+                number,
+                numbering.heads[index].number_format,
+            ));
+            continue;
+        }
+        result.push(ch);
+    }
+
+    result
+}
+
+fn numbering_level_start(numbering: &RhwpNumbering, index: usize) -> u32 {
+    let level_start = numbering.level_start_numbers[index];
+    if level_start > 0 {
+        level_start
+    } else if index == 0 && numbering.start_number > 0 {
+        numbering.start_number as u32
+    } else {
+        1
+    }
+}
+
+fn format_numbering_value(number: u32, format_code: u8) -> String {
+    let Some(format) = numbering_format(format_code) else {
+        return number.to_string();
+    };
+    let Ok(number) = u16::try_from(number) else {
+        return number.to_string();
+    };
+    format_rhwp_number(number, format)
+}
+
+fn numbering_format(format_code: u8) -> Option<RhwpNumberFormat> {
+    match format_code {
+        0 => Some(RhwpNumberFormat::Digit),
+        1 => Some(RhwpNumberFormat::CircledDigit),
+        2 => Some(RhwpNumberFormat::RomanUpper),
+        3 => Some(RhwpNumberFormat::RomanLower),
+        4 => Some(RhwpNumberFormat::LatinUpper),
+        5 => Some(RhwpNumberFormat::LatinLower),
+        8 => Some(RhwpNumberFormat::HangulGaNaDa),
+        12 => Some(RhwpNumberFormat::HangulNumber),
+        13 => Some(RhwpNumberFormat::HanjaNumber),
+        _ => None,
+    }
+}
+
+fn numbering_marker_level_references(format: &str) -> Vec<usize> {
+    let mut referenced = [false; 7];
+    let mut chars = format.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '^'
+            && let Some(digit) = chars.peek().copied()
+            && ('1'..='7').contains(&digit)
+        {
+            chars.next();
+            referenced[(digit as u8 - b'1') as usize] = true;
+        }
+    }
+
+    referenced
+        .iter()
+        .enumerate()
+        .filter_map(|(index, is_referenced)| is_referenced.then_some(index))
+        .collect()
+}
+
+fn split_text_by_language(text: &str) -> Vec<(usize, String)> {
+    let chars = text.chars().collect::<Vec<_>>();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+
+    let initial_language = chars
+        .iter()
+        .copied()
+        .find(|ch| !is_language_neutral(*ch))
+        .map(rhwp::renderer::style_resolver::detect_lang_category)
+        .unwrap_or(0);
+    let mut current_language = initial_language;
+    let mut current_start = 0usize;
+    let mut runs = Vec::new();
+
+    for (index, ch) in chars.iter().copied().enumerate() {
+        if is_language_neutral(ch) {
+            continue;
+        }
+        let language = rhwp::renderer::style_resolver::detect_lang_category(ch);
+        if language == current_language {
+            continue;
+        }
+
+        if index > current_start {
+            runs.push((
+                current_language,
+                chars[current_start..index].iter().collect(),
+            ));
+        }
+        current_language = language;
+        current_start = index;
+    }
+
+    if current_start < chars.len() {
+        runs.push((current_language, chars[current_start..].iter().collect()));
+    }
+    runs
+}
+
+fn is_language_neutral(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x0000..=0x0020
+            | 0x0021..=0x002F
+            | 0x003A..=0x0040
+            | 0x005B..=0x0060
+            | 0x007B..=0x007F
+            | 0x00A0..=0x00BF
+    )
 }
 
 fn push_text_fragment(
@@ -1922,6 +2755,202 @@ fn flush_text_run(
         style: style.clone(),
         style_ref: style_ref.cloned(),
     }));
+}
+
+fn infer_control_text_positions(paragraph: &RhwpParagraph) -> Vec<Option<usize>> {
+    let mut positions = vec![None; paragraph.controls.len()];
+    if paragraph.controls.is_empty() {
+        return positions;
+    }
+
+    let chars = paragraph.text.chars().collect::<Vec<_>>();
+    for range in &paragraph.field_ranges {
+        if range.control_idx < positions.len()
+            && range.start_char_idx <= range.end_char_idx
+            && range.end_char_idx <= chars.len()
+        {
+            positions[range.control_idx] = Some(range.start_char_idx);
+        }
+    }
+
+    if chars.is_empty() || paragraph.char_offsets.len() != chars.len() {
+        return positions;
+    }
+    if paragraph
+        .char_offsets
+        .windows(2)
+        .any(|window| window[0] >= window[1])
+    {
+        return positions;
+    }
+
+    let mut candidates = Vec::new();
+    let mut ambiguous_gap = false;
+    push_control_gap_candidates(
+        &mut candidates,
+        0,
+        paragraph.char_offsets[0] as usize,
+        &mut ambiguous_gap,
+    );
+
+    for (index, window) in paragraph.char_offsets.windows(2).enumerate() {
+        let current_offset = window[0] as usize;
+        let next_offset = window[1] as usize;
+        let current_width = source_text_char_width(chars[index]);
+        let Some(gap) = next_offset.checked_sub(current_offset + current_width) else {
+            return positions;
+        };
+        push_control_gap_candidates(&mut candidates, index + 1, gap, &mut ambiguous_gap);
+    }
+
+    if paragraph.char_count > 0 {
+        let content_end = paragraph.char_count.saturating_sub(1) as usize;
+        let last_index = chars.len() - 1;
+        let last_end =
+            paragraph.char_offsets[last_index] as usize + source_text_char_width(chars[last_index]);
+        let Some(gap) = content_end.checked_sub(last_end) else {
+            return positions;
+        };
+        push_control_gap_candidates(&mut candidates, chars.len(), gap, &mut ambiguous_gap);
+    }
+
+    for range in &paragraph.field_ranges {
+        if range.control_idx >= positions.len()
+            || range.start_char_idx > range.end_char_idx
+            || range.end_char_idx > chars.len()
+        {
+            continue;
+        }
+        if !remove_control_candidate(&mut candidates, range.start_char_idx)
+            || !remove_control_candidate(&mut candidates, range.end_char_idx)
+        {
+            ambiguous_gap = true;
+        }
+    }
+
+    let unmapped = positions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, position)| position.is_none().then_some(index))
+        .collect::<Vec<_>>();
+    if !ambiguous_gap && candidates.len() == unmapped.len() {
+        for (control_index, position) in unmapped.into_iter().zip(candidates) {
+            positions[control_index] = Some(position);
+        }
+    }
+
+    positions
+}
+
+fn push_control_gap_candidates(
+    candidates: &mut Vec<usize>,
+    text_position: usize,
+    gap: usize,
+    ambiguous: &mut bool,
+) {
+    if gap == 0 {
+        return;
+    }
+    if !gap.is_multiple_of(8) {
+        *ambiguous = true;
+        return;
+    }
+    candidates.extend(std::iter::repeat_n(text_position, gap / 8));
+}
+
+fn remove_control_candidate(candidates: &mut Vec<usize>, position: usize) -> bool {
+    let Some(index) = candidates
+        .iter()
+        .position(|candidate| *candidate == position)
+    else {
+        return false;
+    };
+    candidates.remove(index);
+    true
+}
+
+fn source_text_char_width(ch: char) -> usize {
+    if ch == '\t' {
+        8
+    } else if ch.len_utf16() == 2 {
+        2
+    } else {
+        1
+    }
+}
+
+fn uniform_u8_percent(
+    values: &[u8; 7],
+    valid_range: std::ops::RangeInclusive<u8>,
+) -> Option<Percent> {
+    let first = values[0];
+    (values.iter().all(|value| *value == first)
+        && !matches!(first, 0 | 100)
+        && valid_range.contains(&first))
+    .then_some(Percent(first as f32))
+}
+
+fn u8_percent_at(
+    values: &[u8; 7],
+    index: usize,
+    valid_range: std::ops::RangeInclusive<u8>,
+) -> Option<Percent> {
+    let value = values[index.min(6)];
+    (!matches!(value, 0 | 100) && valid_range.contains(&value)).then_some(Percent(value as f32))
+}
+
+fn uniform_i8_percent(
+    values: &[i8; 7],
+    valid_range: std::ops::RangeInclusive<i8>,
+) -> Option<Percent> {
+    let first = values[0];
+    (first != 0 && values.iter().all(|value| *value == first) && valid_range.contains(&first))
+        .then_some(Percent(first as f32))
+}
+
+fn i8_percent_at(
+    values: &[i8; 7],
+    index: usize,
+    valid_range: std::ops::RangeInclusive<i8>,
+) -> Option<Percent> {
+    let value = values[index.min(6)];
+    (value != 0 && valid_range.contains(&value)).then_some(Percent(value as f32))
+}
+
+fn percent_values_have_invalid_u8(
+    values: &[u8; 7],
+    valid_range: std::ops::RangeInclusive<u8>,
+) -> bool {
+    values
+        .iter()
+        .any(|value| !matches!(*value, 0 | 100) && !valid_range.contains(value))
+}
+
+fn percent_values_have_invalid_i8(
+    values: &[i8; 7],
+    valid_range: std::ops::RangeInclusive<i8>,
+) -> bool {
+    values
+        .iter()
+        .any(|value| *value != 0 && !valid_range.contains(value))
+}
+
+fn percent_values_are_nonuniform_u8(
+    values: &[u8; 7],
+    valid_range: std::ops::RangeInclusive<u8>,
+) -> bool {
+    values.iter().any(|value| !matches!(*value, 0 | 100))
+        && !percent_values_have_invalid_u8(values, valid_range)
+        && values.iter().any(|value| *value != values[0])
+}
+
+fn percent_values_are_nonuniform_i8(
+    values: &[i8; 7],
+    valid_range: std::ops::RangeInclusive<i8>,
+) -> bool {
+    values.iter().any(|value| *value != 0)
+        && !percent_values_have_invalid_i8(values, valid_range)
+        && values.iter().any(|value| *value != values[0])
 }
 
 fn char_index_for_utf16_position(
@@ -2055,8 +3084,18 @@ fn i32_hwp_units_to_pt_option(value: i32) -> Option<LengthPt> {
     }
 }
 
+fn i16_hwp_units_to_pt_option(value: i16) -> Option<LengthPt> {
+    (value > 0).then(|| LengthPt(value as f32 / 100.0))
+}
+
+fn paragraph_layout_flag(para_shape: &RhwpParaShape, attr1_bit: u32, attr2_bit: u32) -> bool {
+    para_shape.attr1 & (1 << attr1_bit) != 0 || para_shape.attr2 & (1 << attr2_bit) != 0
+}
+
 fn color_ref_to_color_option(color_ref: u32) -> Option<Color> {
-    if color_ref == 0 {
+    // COLORREF uses only the low 24 bits for RGB. A non-zero high byte is used
+    // by HWP/rHWP for CLR_INVALID/default/transparent sentinels.
+    if color_ref >> 24 != 0 {
         None
     } else {
         Some(Color {
@@ -2066,6 +3105,20 @@ fn color_ref_to_color_option(color_ref: u32) -> Option<Color> {
             a: 255,
         })
     }
+}
+
+fn map_text_decoration_style(shape: u8) -> TextDecorationStyle {
+    match shape {
+        1 | 3..=5 => TextDecorationStyle::Dashed,
+        2 | 6 => TextDecorationStyle::Dotted,
+        7..=10 => TextDecorationStyle::Double,
+        11 | 12 => TextDecorationStyle::Wavy,
+        _ => TextDecorationStyle::Solid,
+    }
+}
+
+fn decoration_shape_is_approximated(shape: u8) -> bool {
+    matches!(shape, 3..=6 | 8..=10 | 12..=u8::MAX)
 }
 
 fn border_fill_background_color(border_fill: &RhwpBorderFill) -> Option<Color> {
@@ -2303,17 +3356,8 @@ fn form_type_name(form_type: RhwpFormType) -> &'static str {
     }
 }
 
-fn bullet_marker(source: &RhwpDocument, bullet_id: u16) -> Option<String> {
-    if bullet_id == 0 {
-        return None;
-    }
-
-    let bullet = source.doc_info.bullets.get((bullet_id - 1) as usize)?;
-    normalize_bullet_char(bullet.bullet_char).map(|ch| ch.to_string())
-}
-
 fn normalize_bullet_char(ch: char) -> Option<char> {
-    if ch == '\u{FFFF}' {
+    if ch == '\u{FFFF}' || ch.is_control() {
         return None;
     }
 
@@ -2472,6 +3516,80 @@ mod tests {
                 }
             }
             other => panic!("expected table block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn warns_when_table_layout_properties_are_omitted() {
+        let table = RhwpTable {
+            row_count: 1,
+            col_count: 1,
+            cell_spacing: 75,
+            row_sizes: vec![1500],
+            zones: vec![rhwp::model::table::TableZone {
+                start_col: 0,
+                start_row: 0,
+                end_col: 0,
+                end_row: 0,
+                border_fill_id: 2,
+            }],
+            page_break: rhwp::model::table::TablePageBreak::RowBreak,
+            repeat_header: true,
+            outer_margin_left: 100,
+            outer_margin_right: 200,
+            outer_margin_top: 300,
+            outer_margin_bottom: 400,
+            common: RhwpCommonObjAttr {
+                width: 7500,
+                height: 3000,
+                horizontal_offset: 500,
+                vertical_offset: 600,
+                z_order: 2,
+                ..Default::default()
+            },
+            cells: vec![RhwpCell {
+                row: 0,
+                col: 0,
+                paragraphs: vec![RhwpParagraph {
+                    text: "cell".to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Table(Box::new(table))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        let warning = bridged
+            .warnings
+            .iter()
+            .find(|warning| warning.message.contains("table layout properties"))
+            .expect("table layout warning");
+        for expected in [
+            "cell_spacing=75",
+            "row_sizes=[1500]",
+            "border_fill_zones=1",
+            "page_break=RowBreak",
+            "repeat_header=true",
+            "outer_margins=100/200/300/400",
+            "layout=size:7500x3000",
+        ] {
+            assert!(
+                warning.message.contains(expected),
+                "missing warning fragment {expected:?}: {}",
+                warning.message
+            );
         }
     }
 
@@ -2649,6 +3767,56 @@ mod tests {
             }
             other => panic!("expected table block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn warns_and_omits_negative_table_padding_sides() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Table(Box::new(RhwpTable {
+                        row_count: 1,
+                        col_count: 1,
+                        padding: rhwp::model::Padding {
+                            left: -75,
+                            right: 150,
+                            top: -1,
+                            bottom: 225,
+                        },
+                        cells: vec![RhwpCell {
+                            row: 0,
+                            col: 0,
+                            paragraphs: vec![RhwpParagraph {
+                                text: "cell".to_string(),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Table(table) => {
+                let style = &table.rows[0].cells[0].style;
+                assert_eq!(style.padding_left, None);
+                assert_eq!(style.padding_right, Some(LengthPx(2.0)));
+                assert_eq!(style.padding_top, None);
+                assert_eq!(style.padding_bottom, Some(LengthPx(3.0)));
+            }
+            other => panic!("expected table block, got {other:?}"),
+        }
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("table-default padding")
+                && warning.message.contains("negative HWPUNIT")
+        }));
     }
 
     #[test]
@@ -2912,6 +4080,56 @@ mod tests {
                 .iter()
                 .any(|warning| { warning.message.contains("shape text box paragraphs") })
         );
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("shape Rectangle geometry")
+                && warning
+                    .message
+                    .contains("preserved only kind/text fallback")
+        }));
+    }
+
+    #[test]
+    fn warns_when_equation_presentation_metadata_is_omitted() {
+        let equation = RhwpEquation {
+            common: RhwpCommonObjAttr {
+                width: 7500,
+                height: 1500,
+                horizontal_offset: 300,
+                vertical_offset: 400,
+                ..Default::default()
+            },
+            script: "x over y".to_string(),
+            font_size: 1200,
+            color: 0x00112233,
+            baseline: -10,
+            font_name: "HancomEQN".to_string(),
+            version_info: "60".to_string(),
+            ..Default::default()
+        };
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Equation(Box::new(equation))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert!(matches!(
+            &bridged.sections[0].blocks[0],
+            Block::Equation(equation)
+                if equation.content.as_deref() == Some("x over y")
+                    && equation.fallback_text.as_deref() == Some("x over y")
+        ));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("equation presentation metadata")
+                && warning.message.contains("font_size=1200")
+                && warning.message.contains("size=7500x1500")
+        }));
     }
 
     #[test]
@@ -3597,7 +4815,261 @@ mod tests {
     }
 
     #[test]
-    fn warns_when_char_shape_font_ref_is_missing() {
+    fn warns_when_text_style_details_are_approximated_or_omitted() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                char_shapes: vec![RhwpCharShape {
+                    ratios: [120, 100, 100, 100, 100, 100, 100],
+                    spacings: [5, 0, 0, 0, 0, 0, 0],
+                    relative_sizes: [110, 100, 100, 100, 100, 100, 100],
+                    char_offsets: [10, 0, 0, 0, 0, 0, 0],
+                    base_size: -100,
+                    underline_type: RhwpUnderlineType::Top,
+                    underline_shape: 2,
+                    strikethrough: true,
+                    strike_shape: 3,
+                    emphasis_dot: 2,
+                    outline_type: 2,
+                    shadow_type: 1,
+                    kerning: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "styled".to_string(),
+                    char_offsets: vec![0, 1, 2, 3, 4, 5],
+                    char_shapes: vec![CharShapeRef {
+                        start_pos: 0,
+                        char_shape_id: 0,
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let run = match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => match &paragraph.inlines[0] {
+                Inline::Text(run) => run,
+                other => panic!("expected text run, got {other:?}"),
+            },
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(run.style.font_size_pt, None);
+        assert!(run.style.kerning);
+        assert!(run.style.underline_above);
+        assert_eq!(run.style.underline_style, Some(TextDecorationStyle::Dotted));
+        assert_eq!(run.style.strike_style, Some(TextDecorationStyle::Dashed));
+        for expected in [
+            "strike shape 3",
+            "different simultaneous underline and strike",
+            "emphasis mark type 2",
+            "outline type 2",
+            "shadow type",
+            "invalid font size -100",
+        ] {
+            assert!(
+                bridged
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.message.contains(expected)),
+                "missing warning fragment {expected:?}: {:#?}",
+                bridged.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn maps_uniform_text_metrics_and_effective_font_size() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                char_shapes: vec![RhwpCharShape {
+                    ratios: [95; 7],
+                    spacings: [-5; 7],
+                    relative_sizes: [80; 7],
+                    char_offsets: [10; 7],
+                    base_size: 1000,
+                    kerning: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "metrics".to_string(),
+                    char_offsets: vec![0, 1, 2, 3, 4, 5, 6],
+                    char_shapes: vec![CharShapeRef {
+                        start_pos: 0,
+                        char_shape_id: 0,
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let run = match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => match &paragraph.inlines[0] {
+                Inline::Text(run) => run,
+                other => panic!("expected text run, got {other:?}"),
+            },
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(run.style.font_width_percent, Some(Percent(95.0)));
+        assert_eq!(run.style.letter_spacing_percent, Some(Percent(-5.0)));
+        assert_eq!(run.style.relative_size_percent, Some(Percent(80.0)));
+        assert_eq!(run.style.vertical_offset_percent, Some(Percent(10.0)));
+        assert_eq!(run.style.font_size_pt, Some(LengthPt(8.0)));
+        assert!(run.style.kerning);
+        assert!(!bridged.warnings.iter().any(|warning| {
+            warning.message.contains("script-specific") || warning.message.contains("kerning")
+        }));
+    }
+
+    #[test]
+    fn splits_mixed_script_text_and_preserves_script_specific_styles() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                font_faces: vec![
+                    vec![Font {
+                        name: "Korean Font".to_string(),
+                        ..Default::default()
+                    }],
+                    vec![Font {
+                        name: "Latin Font".to_string(),
+                        ..Default::default()
+                    }],
+                ],
+                char_shapes: vec![RhwpCharShape {
+                    font_ids: [0; 7],
+                    ratios: [90, 110, 100, 100, 100, 100, 100],
+                    spacings: [-5, 5, 0, 0, 0, 0, 0],
+                    relative_sizes: [80, 120, 100, 100, 100, 100, 100],
+                    char_offsets: [10, -10, 0, 0, 0, 0, 0],
+                    base_size: 1000,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "한글 English".to_string(),
+                    char_offsets: (0..10).collect(),
+                    char_shapes: vec![CharShapeRef {
+                        start_pos: 0,
+                        char_shape_id: 0,
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let inlines = match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => &paragraph.inlines,
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(inlines.len(), 2);
+        let korean = match &inlines[0] {
+            Inline::Text(run) => run,
+            other => panic!("expected Korean text run, got {other:?}"),
+        };
+        let latin = match &inlines[1] {
+            Inline::Text(run) => run,
+            other => panic!("expected Latin text run, got {other:?}"),
+        };
+        assert_eq!(korean.text, "한글 ");
+        assert_eq!(korean.style.font_family.as_deref(), Some("Korean Font"));
+        assert_eq!(korean.style.font_width_percent, Some(Percent(90.0)));
+        assert_eq!(korean.style.letter_spacing_percent, Some(Percent(-5.0)));
+        assert_eq!(korean.style.font_size_pt, Some(LengthPt(8.0)));
+        assert_eq!(korean.style.vertical_offset_percent, Some(Percent(10.0)));
+
+        assert_eq!(latin.text, "English");
+        assert_eq!(latin.style.font_family.as_deref(), Some("Latin Font"));
+        assert_eq!(latin.style.font_width_percent, Some(Percent(110.0)));
+        assert_eq!(latin.style.letter_spacing_percent, Some(Percent(5.0)));
+        assert_eq!(latin.style.font_size_pt, Some(LengthPt(12.0)));
+        assert_eq!(latin.style.vertical_offset_percent, Some(Percent(-10.0)));
+        assert!(
+            !bridged
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("script-specific") })
+        );
+    }
+
+    #[test]
+    fn warns_for_missing_active_script_font_and_uses_fallback() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                font_faces: vec![
+                    vec![Font {
+                        name: "Korean Font".to_string(),
+                        ..Default::default()
+                    }],
+                    Vec::new(),
+                    vec![Font {
+                        name: "Hanja Font".to_string(),
+                        ..Default::default()
+                    }],
+                ],
+                char_shapes: vec![RhwpCharShape {
+                    font_ids: [0, 2, 0, 0, 0, 0, 0],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "fonts".to_string(),
+                    char_offsets: vec![0, 1, 2, 3, 4],
+                    char_shapes: vec![CharShapeRef {
+                        start_pos: 0,
+                        char_shape_id: 0,
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let run = match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => match &paragraph.inlines[0] {
+                Inline::Text(run) => run,
+                other => panic!("expected text run, got {other:?}"),
+            },
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(run.style.font_family.as_deref(), Some("Korean Font"));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("missing font id 2 in font face group 1")
+        }));
+        assert!(!bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("multiple script-specific font families")
+        }));
+    }
+
+    #[test]
+    fn uses_active_script_font_when_another_script_ref_is_missing() {
         let document = RhwpDocument {
             doc_info: DocInfo {
                 font_faces: vec![
@@ -3698,7 +5170,7 @@ mod tests {
     }
 
     #[test]
-    fn warns_when_percent_line_spacing_cannot_be_modeled() {
+    fn preserves_percent_line_spacing() {
         let document = RhwpDocument {
             doc_info: DocInfo {
                 para_shapes: vec![RhwpParaShape {
@@ -3721,9 +5193,159 @@ mod tests {
 
         let bridged = BridgeContext::new(&document).into_document();
 
-        assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("percent line spacing")
-                && warning.message.contains("not modeled")
+        let Block::Paragraph(paragraph) = &bridged.sections[0].blocks[0] else {
+            panic!("expected paragraph block");
+        };
+        assert_eq!(paragraph.style.spacing.line_percent, Some(Percent(160.0)));
+        assert!(
+            !bridged
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("percent line spacing"))
+        );
+    }
+
+    #[test]
+    fn warns_when_paragraph_style_values_are_approximated_or_omitted() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                para_shapes: vec![RhwpParaShape {
+                    alignment: RhwpAlignment::Distribute,
+                    line_spacing_type: rhwp::model::style::LineSpacingType::SpaceOnly,
+                    line_spacing: 1200,
+                    tab_def_id: 3,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "approximated paragraph".to_string(),
+                    para_shape_id: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => {
+                assert_eq!(
+                    paragraph.style.alignment,
+                    Some(crate::ir::Alignment::Justify)
+                );
+                assert_eq!(paragraph.style.spacing.line_pt, Some(LengthPt(12.0)));
+            }
+            other => panic!("expected paragraph block, got {other:?}"),
+        }
+        for expected in [
+            "alignment Distribute",
+            "line spacing mode SpaceOnly",
+            "tab definition id 3",
+        ] {
+            assert!(
+                bridged
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.message.contains(expected)),
+                "missing warning fragment {expected:?}: {:#?}",
+                bridged.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn maps_paragraph_border_background_and_spacing() {
+        let border = |line_type, width, color| RhwpBorderLine {
+            line_type,
+            width,
+            color,
+        };
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                para_shapes: vec![RhwpParaShape {
+                    attr1: (1 << 16) | (1 << 18),
+                    attr2: (1 << 6) | (1 << 8),
+                    border_fill_id: 1,
+                    // rhwp order: left, right, top, bottom
+                    border_spacing: [100, 200, 300, 400],
+                    ..Default::default()
+                }],
+                border_fills: vec![RhwpBorderFill {
+                    borders: [
+                        border(RhwpBorderLineType::Solid, 1, 0x00332211),
+                        border(RhwpBorderLineType::Dash, 1, 0),
+                        border(RhwpBorderLineType::Dot, 1, 0),
+                        border(RhwpBorderLineType::Double, 1, 0),
+                    ],
+                    fill: Fill {
+                        fill_type: FillType::Solid,
+                        solid: Some(SolidFill {
+                            background_color: 0x00665544,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "framed".to_string(),
+                    para_shape_id: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let style = match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => &paragraph.style,
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(
+            style.background_color,
+            Some(Color {
+                r: 0x44,
+                g: 0x55,
+                b: 0x66,
+                a: 255,
+            })
+        );
+        assert_eq!(style.padding_left_pt, Some(LengthPt(1.0)));
+        assert_eq!(style.padding_right_pt, Some(LengthPt(2.0)));
+        assert_eq!(style.padding_top_pt, Some(LengthPt(3.0)));
+        assert_eq!(style.padding_bottom_pt, Some(LengthPt(4.0)));
+        assert_eq!(
+            style.border_left.as_ref().map(|border| border.style),
+            Some(BorderStyle::Solid)
+        );
+        assert_eq!(
+            style.border_right.as_ref().map(|border| border.style),
+            Some(BorderStyle::Dashed)
+        );
+        assert_eq!(
+            style.border_top.as_ref().map(|border| border.style),
+            Some(BorderStyle::Dotted)
+        );
+        assert_eq!(
+            style.border_bottom.as_ref().map(|border| border.style),
+            Some(BorderStyle::Double)
+        );
+        assert!(style.widow_orphan);
+        assert!(style.keep_with_next);
+        assert!(style.keep_lines);
+        assert!(style.page_break_before);
+        assert!(!bridged.warnings.iter().any(|warning| {
+            warning.message.contains("paragraph borders")
+                || warning.message.contains("paragraph background")
         }));
     }
 
@@ -3821,6 +5443,102 @@ mod tests {
             }
             other => panic!("expected table block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn warns_when_table_background_fill_is_approximated_or_omitted() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                border_fills: vec![
+                    RhwpBorderFill {
+                        fill: Fill {
+                            fill_type: FillType::Solid,
+                            solid: Some(SolidFill {
+                                background_color: 0,
+                                pattern_color: 0x00FFFFFF,
+                                pattern_type: 1,
+                            }),
+                            alpha: 128,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    RhwpBorderFill {
+                        fill: Fill {
+                            fill_type: FillType::Gradient,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    controls: vec![Control::Table(Box::new(RhwpTable {
+                        row_count: 1,
+                        col_count: 1,
+                        border_fill_id: 1,
+                        cells: vec![RhwpCell {
+                            row: 0,
+                            col: 0,
+                            border_fill_id: 2,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        match &bridged.sections[0].blocks[0] {
+            Block::Table(table) => {
+                assert_eq!(
+                    table.style.background_color,
+                    Some(Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    })
+                );
+                assert_eq!(table.rows[0].cells[0].style.background_color, None);
+            }
+            other => panic!("expected table block, got {other:?}"),
+        }
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("solid fill pattern type 1")
+                && warning.message.contains("approximated")
+        }));
+        assert!(
+            bridged
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("fill opacity 128"))
+        );
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("gradient fill") && warning.message.contains("omitted")
+        }));
+    }
+
+    #[test]
+    fn maps_black_color_and_omits_invalid_colorref_sentinels() {
+        assert_eq!(
+            color_ref_to_color_option(0),
+            Some(Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            })
+        );
+        assert_eq!(color_ref_to_color_option(0xFFFFFFFF), None);
+        assert_eq!(color_ref_to_color_option(0x01000000), None);
     }
 
     #[test]
@@ -4011,8 +5729,9 @@ mod tests {
                         .iter()
                         .any(|inline| matches!(inline, Inline::Link(_)))
                 );
+                assert_eq!(paragraph.inlines.len(), 3);
                 assert!(matches!(
-                    paragraph.inlines.last(),
+                    paragraph.inlines.get(1),
                     Some(Inline::Unknown(unknown))
                         if unknown.kind == "field:hyperlink"
                             && unknown.fallback_text.as_deref()
@@ -4106,12 +5825,11 @@ mod tests {
             },
             other => panic!("expected paragraph block, got {other:?}"),
         }
-        assert!(
-            bridged
-                .warnings
-                .iter()
-                .any(|warning| warning.message.contains("click-here fields"))
-        );
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("field controls could not be placed")
+        }));
     }
 
     #[test]
@@ -4472,6 +6190,64 @@ mod tests {
     }
 
     #[test]
+    fn orders_block_controls_around_paragraph_from_recovered_offsets() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![
+                    RhwpParagraph {
+                        char_count: 14,
+                        text: "front".to_string(),
+                        char_offsets: vec![8, 9, 10, 11, 12],
+                        controls: vec![Control::Unknown(RhwpUnknownControl { ctrl_id: 1 })],
+                        ..Default::default()
+                    },
+                    RhwpParagraph {
+                        char_count: 13,
+                        text: "back".to_string(),
+                        char_offsets: vec![0, 1, 2, 3],
+                        controls: vec![Control::Unknown(RhwpUnknownControl { ctrl_id: 2 })],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let blocks = &bridged.sections[0].blocks;
+
+        assert!(matches!(
+            &blocks[0],
+            Block::Unknown(unknown) if unknown.kind == "control:0x00000001"
+        ));
+        assert!(matches!(
+            &blocks[1],
+            Block::Paragraph(_)
+                if crate::util::plain_text::blocks_to_plain_text(
+                    std::slice::from_ref(&blocks[1])
+                ) == "front"
+        ));
+        assert!(matches!(
+            &blocks[2],
+            Block::Paragraph(_)
+                if crate::util::plain_text::blocks_to_plain_text(
+                    std::slice::from_ref(&blocks[2])
+                ) == "back"
+        ));
+        assert!(matches!(
+            &blocks[3],
+            Block::Unknown(unknown) if unknown.kind == "control:0x00000002"
+        ));
+        assert!(
+            !bridged
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("exact reading order may differ"))
+        );
+    }
+
+    #[test]
     fn maps_footnotes_into_note_store_and_inline_refs() {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
@@ -4507,6 +6283,55 @@ mod tests {
             },
             other => panic!("expected paragraph block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn places_note_reference_at_recovered_control_offset() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    char_count: 20,
+                    text: "beforeafter".to_string(),
+                    char_offsets: vec![0, 1, 2, 3, 4, 5, 14, 15, 16, 17, 18],
+                    controls: vec![Control::Footnote(Box::new(RhwpFootnote {
+                        number: 1,
+                        paragraphs: vec![RhwpParagraph {
+                            text: "note".to_string(),
+                            ..Default::default()
+                        }],
+                    }))],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let paragraph = match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => paragraph,
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(paragraph.inlines.len(), 3);
+        assert!(matches!(
+            &paragraph.inlines[0],
+            Inline::Text(run) if run.text == "before"
+        ));
+        assert!(matches!(
+            &paragraph.inlines[1],
+            Inline::FootnoteRef { note_id } if note_id.as_str() == "footnote-1"
+        ));
+        assert!(matches!(
+            &paragraph.inlines[2],
+            Inline::Text(run) if run.text == "after"
+        ));
+        assert!(
+            !bridged
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("positions could not be recovered") })
+        );
     }
 
     #[test]
@@ -4594,6 +6419,55 @@ mod tests {
     }
 
     #[test]
+    fn warns_when_bullet_metadata_cannot_be_modeled() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                para_shapes: vec![RhwpParaShape {
+                    head_type: RhwpHeadType::Bullet,
+                    numbering_id: 1,
+                    ..Default::default()
+                }],
+                bullets: vec![RhwpBullet {
+                    attr: 3,
+                    width_adjust: 100,
+                    text_distance: 200,
+                    bullet_char: '•',
+                    image_bullet: 7,
+                    image_data: [1, 2, 3, 4],
+                    check_bullet_char: '✓',
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "item".to_string(),
+                    para_shape_id: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("used image bullet 7")
+                && warning
+                    .message
+                    .contains("omitted the image bullet resource")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("width_adjust=100")
+                && warning.message.contains("text_distance=200")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("check-bullet marker") && warning.message.contains('✓')
+        }));
+    }
+
+    #[test]
     fn maps_ordered_list_numbers_from_numbering_state() {
         let document = RhwpDocument {
             doc_info: DocInfo {
@@ -4649,6 +6523,122 @@ mod tests {
             }
             other => panic!("expected paragraph block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn preserves_ordered_list_format_and_warns_for_unmodeled_metadata() {
+        let mut numbering = RhwpNumbering {
+            level_start_numbers: [1, 1, 1, 1, 1, 1, 1],
+            ..Default::default()
+        };
+        numbering.level_formats[0] = "제^1장".to_string();
+        numbering.heads[0].attr = 5;
+        numbering.heads[0].width_adjust = 100;
+        numbering.heads[0].text_distance = 200;
+        numbering.heads[0].char_shape_id = 3;
+        numbering.heads[0].number_format = 2;
+
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                para_shapes: vec![RhwpParaShape {
+                    head_type: RhwpHeadType::Number,
+                    numbering_id: 1,
+                    ..Default::default()
+                }],
+                numberings: vec![numbering],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "chapter".to_string(),
+                    para_shape_id: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let list = match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => paragraph.list.as_ref().expect("list info"),
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(list.marker.as_deref(), Some("제I장"));
+        assert_eq!(list.marker_format.as_deref(), Some("제^1장"));
+        assert!(!bridged.warnings.iter().any(|warning| {
+            warning.message.contains("format \"제^1장\"")
+                && warning.message.contains("plain number")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("char_shape_id=3")
+                && warning.message.contains("layout/style metadata")
+        }));
+    }
+
+    #[test]
+    fn expands_multilevel_ordered_markers_from_numbering_state() {
+        let mut numbering = RhwpNumbering {
+            level_start_numbers: [1, 1, 1, 1, 1, 1, 1],
+            ..Default::default()
+        };
+        numbering.level_formats[0] = "^1.".to_string();
+        numbering.level_formats[1] = "^1-^2)".to_string();
+        numbering.heads[0].number_format = 0;
+        numbering.heads[1].number_format = 4;
+
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                para_shapes: vec![
+                    RhwpParaShape {
+                        head_type: RhwpHeadType::Number,
+                        numbering_id: 1,
+                        para_level: 0,
+                        ..Default::default()
+                    },
+                    RhwpParaShape {
+                        head_type: RhwpHeadType::Number,
+                        numbering_id: 1,
+                        para_level: 1,
+                        ..Default::default()
+                    },
+                ],
+                numberings: vec![numbering],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![
+                    RhwpParagraph {
+                        text: "chapter".to_string(),
+                        para_shape_id: 0,
+                        ..Default::default()
+                    },
+                    RhwpParagraph {
+                        text: "section".to_string(),
+                        para_shape_id: 1,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let lists = bridged.sections[0]
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Paragraph(paragraph) => paragraph.list.as_ref(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(lists[0].marker.as_deref(), Some("1."));
+        assert_eq!(lists[1].marker.as_deref(), Some("1-A)"));
+        assert_eq!(lists[1].marker_format.as_deref(), Some("^1-^2)"));
+        assert_eq!(lists[1].number, Some(1));
     }
 
     #[test]

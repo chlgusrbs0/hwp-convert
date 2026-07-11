@@ -12,8 +12,8 @@ use crate::ir::{
     Alignment, Block, Border, BorderStyle, Chart, Color, Document, Equation, EquationKind,
     HeaderFooter, HeaderFooterPlacement, Image, Inline, Link, ListInfo, ListKind, Note, NoteId,
     NoteKind, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore,
-    Section, Shape, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
-    UnknownBlock, UnknownInline, VerticalAlign,
+    Section, Shape, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextDecorationStyle,
+    TextRun, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -630,8 +630,8 @@ fn render_html_document_with_asset_prefix(
 
     format!(
         "<!DOCTYPE html>\n\
-<html lang=\"ko\">\n\
-  <head>\n\
+    <html lang=\"ko\">\n\
+    <head>\n\
     <meta charset=\"UTF-8\" />\n\
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n\
     <title>{title}</title>\n\
@@ -703,6 +703,9 @@ fn render_html_document_with_asset_prefix(
       p:last-child {{\n\
         margin-bottom: 0;\n\
       }}\n\
+      li[data-marker]::marker {{\n\
+        content: attr(data-marker) \" \";\n\
+      }}\n\
       td p {{\n\
         margin-bottom: 0.75em;\n\
       }}\n\
@@ -747,15 +750,15 @@ fn render_html_document_with_asset_prefix(
         margin-bottom: 0;\n\
       }}\n\
     </style>\n\
-  </head>\n\
-  <body>\n\
+    </head>\n\
+    <body>\n\
     <main>\n\
       <h1>{title}</h1>\n\
       <article>\n\
-{document_nodes}{note_nodes}      </article>\n\
+    {document_nodes}{note_nodes}      </article>\n\
     </main>\n\
-  </body>\n\
-</html>\n"
+    </body>\n\
+    </html>\n"
     )
 }
 
@@ -956,10 +959,25 @@ fn render_html_list_item_open(paragraph: &Paragraph, list: &ListInfo) -> String 
     } else {
         String::new()
     };
+    let marker_format = if list.kind == ListKind::Ordered {
+        list.marker_format
+            .as_deref()
+            .filter(|format| !format.is_empty())
+            .map(|format| format!(" data-marker-format=\"{}\"", escape_html(format)))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let marker = list
+        .marker
+        .as_deref()
+        .filter(|marker| !marker.is_empty())
+        .map(|marker| format!(" data-marker=\"{}\"", escape_html(marker)))
+        .unwrap_or_default();
     let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
     let content = render_html_inlines(&paragraph.inlines);
 
-    format!("<li{value}{style}>{content}")
+    format!("<li{value}{marker_format}{marker}{style}>{content}")
 }
 
 fn html_list_tag_name(kind: &ListKind) -> &'static str {
@@ -1124,7 +1142,11 @@ fn render_html_text_style(style: &TextStyle) -> String {
 
     let mut decorations = Vec::new();
     if style.underline {
-        decorations.push("underline");
+        decorations.push(if style.underline_above {
+            "overline"
+        } else {
+            "underline"
+        });
     }
     if style.strike {
         decorations.push("line-through");
@@ -1142,6 +1164,17 @@ fn render_html_text_style(style: &TextStyle) -> String {
             declarations.push(format!(
                 "text-decoration-color: {}",
                 render_css_color(color)
+            ));
+        }
+        let decoration_style = if style.underline {
+            style.underline_style.as_ref()
+        } else {
+            style.strike_style.as_ref()
+        };
+        if let Some(decoration_style) = decoration_style {
+            declarations.push(format!(
+                "text-decoration-style: {}",
+                text_decoration_style_to_css(decoration_style)
             ));
         }
     }
@@ -1185,6 +1218,35 @@ fn render_html_text_style(style: &TextStyle) -> String {
     if let Some(font_size_pt) = style.font_size_pt {
         declarations.push(format!("font-size: {}pt", font_size_pt.0));
     }
+    if let Some(font_width_percent) = style.font_width_percent
+        && font_width_percent.0.is_finite()
+        && (1.0..=1000.0).contains(&font_width_percent.0)
+    {
+        declarations.push(format!("font-stretch: {}%", font_width_percent.0));
+    }
+    if let Some(letter_spacing_percent) = style.letter_spacing_percent
+        && letter_spacing_percent.0.is_finite()
+        && (-100.0..=1000.0).contains(&letter_spacing_percent.0)
+    {
+        declarations.push(format!(
+            "letter-spacing: {}em",
+            letter_spacing_percent.0 / 100.0
+        ));
+    }
+    if !style.superscript
+        && !style.subscript
+        && let Some(vertical_offset_percent) = style.vertical_offset_percent
+        && vertical_offset_percent.0.is_finite()
+        && (-1000.0..=1000.0).contains(&vertical_offset_percent.0)
+    {
+        declarations.push(format!(
+            "vertical-align: {}em",
+            vertical_offset_percent.0 / 100.0
+        ));
+    }
+    if style.kerning {
+        declarations.push("font-kerning: normal".to_string());
+    }
     if let Some(color) = style.color {
         declarations.push(format!("color: {}", render_css_color(color)));
     }
@@ -1196,6 +1258,16 @@ fn render_html_text_style(style: &TextStyle) -> String {
     }
 
     declarations.join("; ")
+}
+
+fn text_decoration_style_to_css(style: &TextDecorationStyle) -> &'static str {
+    match style {
+        TextDecorationStyle::Solid => "solid",
+        TextDecorationStyle::Dashed => "dashed",
+        TextDecorationStyle::Dotted => "dotted",
+        TextDecorationStyle::Double => "double",
+        TextDecorationStyle::Wavy => "wavy",
+    }
 }
 
 fn render_html_paragraph_style(style: &ParagraphStyle) -> String {
@@ -1212,6 +1284,8 @@ fn render_html_paragraph_style(style: &ParagraphStyle) -> String {
     }
     if let Some(line_pt) = style.spacing.line_pt {
         declarations.push(format!("line-height: {}pt", line_pt.0));
+    } else if let Some(line_percent) = style.spacing.line_percent {
+        declarations.push(format!("line-height: {}%", line_percent.0));
     }
     if let Some(first_line_pt) = style.indent.first_line_pt {
         declarations.push(format!("text-indent: {}pt", first_line_pt.0));
@@ -1221,6 +1295,45 @@ fn render_html_paragraph_style(style: &ParagraphStyle) -> String {
     }
     if let Some(right_pt) = style.indent.right_pt {
         declarations.push(format!("margin-right: {}pt", right_pt.0));
+    }
+    if let Some(background_color) = style.background_color {
+        declarations.push(format!(
+            "background-color: {}",
+            render_css_color(background_color)
+        ));
+    }
+    for (value, property) in [
+        (style.padding_top_pt, "padding-top"),
+        (style.padding_right_pt, "padding-right"),
+        (style.padding_bottom_pt, "padding-bottom"),
+        (style.padding_left_pt, "padding-left"),
+    ] {
+        if let Some(value) = value {
+            declarations.push(format!("{property}: {}pt", value.0));
+        }
+    }
+    for (border, property) in [
+        (&style.border_top, "border-top"),
+        (&style.border_right, "border-right"),
+        (&style.border_bottom, "border-bottom"),
+        (&style.border_left, "border-left"),
+    ] {
+        if let Some(border) = border {
+            declarations.push(format!("{property}: {}", render_css_border(border)));
+        }
+    }
+    if style.widow_orphan {
+        declarations.push("orphans: 2".to_string());
+        declarations.push("widows: 2".to_string());
+    }
+    if style.keep_with_next {
+        declarations.push("break-after: avoid-page".to_string());
+    }
+    if style.keep_lines {
+        declarations.push("break-inside: avoid".to_string());
+    }
+    if style.page_break_before {
+        declarations.push("break-before: page".to_string());
     }
 
     declarations.join("; ")
@@ -1311,13 +1424,25 @@ fn render_html_style_attr(style: &str) -> String {
 fn list_prefix(list: &ListInfo) -> String {
     let indent = "  ".repeat(list.level as usize);
     let marker = match list.kind {
-        ListKind::Ordered => format!("{}. ", list.number.unwrap_or(1)),
+        ListKind::Ordered => list
+            .marker
+            .as_deref()
+            .map(marker_with_trailing_space)
+            .unwrap_or_else(|| format!("{}. ", list.number.unwrap_or(1))),
         ListKind::Unordered | ListKind::Unknown => {
-            format!("{} ", list.marker.as_deref().unwrap_or("-"))
+            marker_with_trailing_space(list.marker.as_deref().unwrap_or("-"))
         }
     };
 
     format!("{indent}{marker}")
+}
+
+fn marker_with_trailing_space(marker: &str) -> String {
+    if marker.chars().last().is_some_and(char::is_whitespace) {
+        marker.to_string()
+    } else {
+        format!("{marker} ")
+    }
 }
 
 fn note_html_anchor_id(note_id: &NoteId) -> String {
@@ -2339,9 +2464,9 @@ mod tests {
         Alignment, Chart, Color, ConversionWarning, Equation, EquationKind, HeaderFooter,
         HeaderFooterPlacement, IR_VERSION, Image, ImageResource, Indent, LengthPt, LengthPx, Link,
         ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
-        ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing,
-        StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
-        UnknownInline, WarningCode,
+        ParagraphStyle, Percent, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind,
+        Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun,
+        TextStyle, UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -3067,6 +3192,7 @@ mod tests {
                     kind: ListKind::Ordered,
                     level: 0,
                     marker: None,
+                    marker_format: None,
                     number: Some(1),
                 }),
             }),
@@ -3083,6 +3209,7 @@ mod tests {
                     kind: ListKind::Ordered,
                     level: 0,
                     marker: None,
+                    marker_format: None,
                     number: Some(2),
                 }),
             }),
@@ -3094,6 +3221,36 @@ mod tests {
             html.contains("<ol>\n<li value=\"1\">first</li>\n<li value=\"2\">second</li>\n</ol>")
         );
         assert!(!html.contains("1. first"));
+    }
+
+    #[test]
+    fn preserves_and_escapes_ordered_list_marker_format_in_html() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![Inline::Text(TextRun {
+                text: "chapter".to_string(),
+                style: TextStyle::default(),
+                style_ref: None,
+            })],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: Some(ListInfo {
+                kind: ListKind::Ordered,
+                level: 0,
+                marker: Some("chapter 3 & \"appendix\"".to_string()),
+                marker_format: Some("chapter ^1 & \"appendix\"".to_string()),
+                number: Some(3),
+            }),
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+        let markdown = render_markdown_document(&document);
+
+        assert!(html.contains(
+            "<li value=\"3\" data-marker-format=\"chapter ^1 &amp; &quot;appendix&quot;\" data-marker=\"chapter 3 &amp; &quot;appendix&quot;\">chapter</li>"
+        ));
+        assert!(html.contains("li[data-marker]::marker"));
+        assert_eq!(markdown, "chapter 3 & \"appendix\" chapter");
     }
 
     #[test]
@@ -3112,6 +3269,7 @@ mod tests {
                     kind: ListKind::Unordered,
                     level: 0,
                     marker: Some("-".to_string()),
+                    marker_format: None,
                     number: None,
                 }),
             }),
@@ -3128,6 +3286,7 @@ mod tests {
                     kind: ListKind::Unordered,
                     level: 1,
                     marker: Some("-".to_string()),
+                    marker_format: None,
                     number: None,
                 }),
             }),
@@ -3144,6 +3303,7 @@ mod tests {
                     kind: ListKind::Unordered,
                     level: 0,
                     marker: Some("-".to_string()),
+                    marker_format: None,
                     number: None,
                 }),
             }),
@@ -3152,7 +3312,7 @@ mod tests {
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
         assert!(html.contains(
-            "<ul>\n<li>parent<ul>\n<li>child</li>\n</ul>\n</li>\n<li>sibling</li>\n</ul>"
+            "<ul>\n<li data-marker=\"-\">parent<ul>\n<li data-marker=\"-\">child</li>\n</ul>\n</li>\n<li data-marker=\"-\">sibling</li>\n</ul>"
         ));
     }
 
@@ -3204,6 +3364,7 @@ mod tests {
                 kind: ListKind::Ordered,
                 level: 0,
                 marker: None,
+                marker_format: None,
                 number: Some(3),
             }),
         })]);
@@ -3561,6 +3722,8 @@ mod tests {
                     italic: true,
                     underline: true,
                     strike: true,
+                    underline_style: Some(TextDecorationStyle::Wavy),
+                    underline_above: true,
                     underline_color: Some(Color {
                         r: 17,
                         g: 34,
@@ -3580,8 +3743,9 @@ mod tests {
 
         assert!(html.contains("font-weight: bold"));
         assert!(html.contains("font-style: italic"));
-        assert!(html.contains("text-decoration: underline line-through"));
+        assert!(html.contains("text-decoration: overline line-through"));
         assert!(html.contains("text-decoration-color: #112233"));
+        assert!(html.contains("text-decoration-style: wavy"));
     }
 
     #[test]
@@ -3610,6 +3774,35 @@ mod tests {
         assert!(html.contains("text-emphasis: dot"));
         assert!(html.contains("-webkit-text-stroke: 1px currentColor"));
         assert!(html.contains("text-shadow:"));
+    }
+
+    #[test]
+    fn renders_html_typographic_metrics() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![Inline::Text(TextRun {
+                text: "metrics".to_string(),
+                style: TextStyle {
+                    font_width_percent: Some(Percent(95.0)),
+                    letter_spacing_percent: Some(Percent(-5.0)),
+                    relative_size_percent: Some(Percent(80.0)),
+                    vertical_offset_percent: Some(Percent(10.0)),
+                    kerning: true,
+                    ..Default::default()
+                },
+                style_ref: None,
+            })],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: None,
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+
+        assert!(html.contains("font-stretch: 95%"));
+        assert!(html.contains("letter-spacing: -0.05em"));
+        assert!(html.contains("vertical-align: 0.1em"));
+        assert!(html.contains("font-kerning: normal"));
     }
 
     #[test]
@@ -3732,12 +3925,14 @@ mod tests {
                     before_pt: Some(LengthPt(6.0)),
                     after_pt: Some(LengthPt(8.0)),
                     line_pt: Some(LengthPt(14.0)),
+                    line_percent: None,
                 },
                 indent: Indent {
                     left_pt: Some(LengthPt(10.0)),
                     right_pt: Some(LengthPt(12.0)),
                     first_line_pt: Some(LengthPt(18.0)),
                 },
+                ..Default::default()
             },
             style_ref: None,
             list: None,
@@ -3752,6 +3947,61 @@ mod tests {
         assert!(html.contains("text-indent: 18pt"));
         assert!(html.contains("margin-left: 10pt"));
         assert!(html.contains("margin-right: 12pt"));
+    }
+
+    #[test]
+    fn renders_html_paragraph_border_background_and_padding() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![Inline::Text(TextRun {
+                text: "framed paragraph".to_string(),
+                style: TextStyle::default(),
+                style_ref: None,
+            })],
+            style: ParagraphStyle {
+                background_color: Some(Color {
+                    r: 17,
+                    g: 34,
+                    b: 51,
+                    a: 255,
+                }),
+                padding_top_pt: Some(LengthPt(1.0)),
+                padding_right_pt: Some(LengthPt(2.0)),
+                padding_bottom_pt: Some(LengthPt(3.0)),
+                padding_left_pt: Some(LengthPt(4.0)),
+                border_top: Some(Border {
+                    width: LengthPx(2.0),
+                    style: BorderStyle::Dashed,
+                    color: Some(Color {
+                        r: 68,
+                        g: 85,
+                        b: 102,
+                        a: 255,
+                    }),
+                }),
+                widow_orphan: true,
+                keep_with_next: true,
+                keep_lines: true,
+                page_break_before: true,
+                ..Default::default()
+            },
+            style_ref: None,
+            list: None,
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+
+        assert!(html.contains("background-color: #112233"));
+        assert!(html.contains("padding-top: 1pt"));
+        assert!(html.contains("padding-right: 2pt"));
+        assert!(html.contains("padding-bottom: 3pt"));
+        assert!(html.contains("padding-left: 4pt"));
+        assert!(html.contains("border-top: 2px dashed #445566"));
+        assert!(html.contains("orphans: 2"));
+        assert!(html.contains("widows: 2"));
+        assert!(html.contains("break-after: avoid-page"));
+        assert!(html.contains("break-inside: avoid"));
+        assert!(html.contains("break-before: page"));
     }
 
     #[test]
@@ -4082,6 +4332,7 @@ mod tests {
                     kind: ListKind::Unordered,
                     level: 0,
                     marker: Some("-".to_string()),
+                    marker_format: None,
                     number: None,
                 }),
             }),
@@ -4098,6 +4349,7 @@ mod tests {
                     kind: ListKind::Ordered,
                     level: 0,
                     marker: None,
+                    marker_format: None,
                     number: Some(2),
                 }),
             }),

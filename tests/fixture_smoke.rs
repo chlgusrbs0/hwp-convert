@@ -1080,11 +1080,11 @@ fn assert_footnote_fixture(input: &FixtureInput, document: &Document) {
         input.label
     );
     assert!(
-        document
+        !document
             .warnings
             .iter()
             .any(|warning| warning.message.contains("footnote/endnote")),
-        "fixture {} should report the current rhwp note-position limitation",
+        "fixture {} should recover the footnote position without a placement warning",
         input.label
     );
 

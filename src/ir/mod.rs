@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// v12: added `TableCellStyle` per-side borders (`Border`/`BorderStyle`).
 /// Additive and `#[serde(default)]`.
 /// v13: added `Image::{border, grayscale}`. Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 13;
+pub const IR_VERSION: u16 = 14;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -207,6 +207,10 @@ pub struct LengthMm(pub f32);
 #[serde(transparent)]
 pub struct LengthPx(pub f32);
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, PartialOrd)]
+#[serde(transparent)]
+pub struct Percent(pub f32);
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Color {
     pub r: u8,
@@ -254,6 +258,40 @@ pub struct TextStyle {
     pub background_color: Option<Color>,
     pub underline_color: Option<Color>,
     pub strike_color: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub underline_style: Option<TextDecorationStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strike_style: Option<TextDecorationStyle>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub underline_above: bool,
+    /// Glyph width relative to the selected font's normal width.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_width_percent: Option<Percent>,
+    /// Additional spacing between glyphs, relative to the effective font size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub letter_spacing_percent: Option<Percent>,
+    /// Source-relative size metadata; mapped `font_size_pt` is already effective.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relative_size_percent: Option<Percent>,
+    /// Baseline offset relative to the effective font size; positive values move up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vertical_offset_percent: Option<Percent>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub kerning: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TextDecorationStyle {
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
+    Wavy,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -262,6 +300,32 @@ pub struct ParagraphStyle {
     pub alignment: Option<Alignment>,
     pub spacing: Spacing,
     pub indent: Indent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub padding_top_pt: Option<LengthPt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub padding_right_pt: Option<LengthPt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub padding_bottom_pt: Option<LengthPt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub padding_left_pt: Option<LengthPt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_top: Option<Border>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_right: Option<Border>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_bottom: Option<Border>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_left: Option<Border>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub widow_orphan: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub keep_with_next: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub keep_lines: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub page_break_before: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -287,6 +351,7 @@ pub struct Spacing {
     pub before_pt: Option<LengthPt>,
     pub after_pt: Option<LengthPt>,
     pub line_pt: Option<LengthPt>,
+    pub line_percent: Option<Percent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -436,7 +501,11 @@ pub struct Link {
 pub struct ListInfo {
     pub kind: ListKind,
     pub level: u8,
+    /// Rendered marker for this concrete list item.
     pub marker: Option<String>,
+    /// Source numbering template such as `^1.` when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_format: Option<String>,
     pub number: Option<u32>,
 }
 
@@ -1003,10 +1072,86 @@ mod tests {
         assert!(!style.shadow);
         assert_eq!(style.underline_color, None);
         assert_eq!(style.strike_color, None);
+        assert_eq!(style.underline_style, None);
+        assert_eq!(style.strike_style, None);
+        assert!(!style.underline_above);
         assert_eq!(style.font_family.as_deref(), Some("Noto Sans KR"));
         assert_eq!(style.font_size_pt, None);
         assert_eq!(style.color, None);
         assert_eq!(style.background_color, None);
+        assert_eq!(style.font_width_percent, None);
+        assert_eq!(style.letter_spacing_percent, None);
+        assert_eq!(style.relative_size_percent, None);
+        assert_eq!(style.vertical_offset_percent, None);
+        assert!(!style.kerning);
+    }
+
+    #[test]
+    fn text_style_typographic_metrics_round_trip() {
+        let style = TextStyle {
+            underline: true,
+            strike: true,
+            underline_style: Some(TextDecorationStyle::Wavy),
+            strike_style: Some(TextDecorationStyle::Double),
+            underline_above: true,
+            font_width_percent: Some(Percent(95.0)),
+            letter_spacing_percent: Some(Percent(-5.0)),
+            relative_size_percent: Some(Percent(80.0)),
+            vertical_offset_percent: Some(Percent(10.0)),
+            kerning: true,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&style).expect("text style should serialize");
+        let restored: TextStyle =
+            serde_json::from_str(&json).expect("text style should deserialize");
+
+        assert_eq!(restored, style);
+        assert!(json.contains("\"font_width_percent\":95.0"));
+        assert!(json.contains("\"letter_spacing_percent\":-5.0"));
+        assert!(json.contains("\"kerning\":true"));
+        assert!(json.contains("\"underline_style\":\"wavy\""));
+        assert!(json.contains("\"underline_above\":true"));
+    }
+
+    #[test]
+    fn paragraph_border_style_round_trip() {
+        let style = ParagraphStyle {
+            background_color: Some(Color {
+                r: 17,
+                g: 34,
+                b: 51,
+                a: 255,
+            }),
+            padding_left_pt: Some(LengthPt(2.0)),
+            border_left: Some(Border {
+                width: LengthPx(1.0),
+                style: BorderStyle::Dotted,
+                color: Some(Color {
+                    r: 68,
+                    g: 85,
+                    b: 102,
+                    a: 255,
+                }),
+            }),
+            widow_orphan: true,
+            keep_with_next: true,
+            keep_lines: true,
+            page_break_before: true,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&style).expect("paragraph style should serialize");
+        let restored: ParagraphStyle =
+            serde_json::from_str(&json).expect("paragraph style should deserialize");
+
+        assert_eq!(restored, style);
+        assert!(json.contains("\"background_color\""));
+        assert!(json.contains("\"padding_left_pt\":2.0"));
+        assert!(json.contains("\"border_left\""));
+        assert!(json.contains("\"keep_with_next\":true"));
+        assert!(json.contains("\"page_break_before\":true"));
+        assert!(!json.contains("\"border_right\""));
     }
 
     #[test]

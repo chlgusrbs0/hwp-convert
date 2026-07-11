@@ -6,13 +6,16 @@ use std::path::Path;
 
 use zip::ZipArchive;
 
+use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_rhwp_number};
+
 use crate::ir::{
     Alignment, Block, Border, BorderStyle, Chart, Color, ConversionWarning, Document, Equation,
     EquationKind, HeaderFooter, HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt,
     LengthPx, Link, ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph,
-    ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind,
-    StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle,
-    UnknownBlock, UnknownInline, VerticalAlign, WarningCode,
+    ParagraphRole, ParagraphStyle, Percent, Resource, ResourceId, ResourceStore, Section, Shape,
+    ShapeKind, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
+    TextDecorationStyle, TextRun, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
+    WarningCode,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -531,6 +534,7 @@ struct HwpxFallbackContext {
     font_faces: Vec<Vec<String>>,
     border_fills: Vec<HwpxBorderFill>,
     bullet_markers: BTreeMap<u32, String>,
+    numberings: BTreeMap<u32, HwpxNumbering>,
     image_items: BTreeMap<String, HwpxImageItem>,
     image_resource_ids: BTreeMap<String, ResourceId>,
     resources: ResourceStore,
@@ -538,6 +542,17 @@ struct HwpxFallbackContext {
     notes: NoteStore,
     warnings: Vec<ConversionWarning>,
     next_note_ordinal: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct HwpxNumbering {
+    levels: BTreeMap<u8, HwpxNumberingLevel>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HwpxNumberingLevel {
+    start: u32,
+    format: String,
 }
 
 impl HwpxFallbackContext {
@@ -623,14 +638,34 @@ impl HwpxFallbackContext {
         match style.kind {
             Some(ListKind::Ordered) => {
                 let key = (style.list_id.unwrap_or(0), style.level);
-                let number = self.ordered_counts.entry(key).or_insert(0);
-                *number += 1;
+                let start = style
+                    .list_id
+                    .and_then(|id| self.numberings.get(&id))
+                    .and_then(|numbering| numbering.levels.get(&style.level))
+                    .map(|level| level.start)
+                    .unwrap_or(1);
+                let number = self
+                    .ordered_counts
+                    .entry(key)
+                    .and_modify(|number| *number += 1)
+                    .or_insert(start);
+                let number = *number;
+                self.ordered_counts
+                    .retain(|(id, level), _| *id != key.0 || *level <= key.1);
+                let marker = style.list_id.and_then(|id| {
+                    self.numberings
+                        .get(&id)
+                        .and_then(|numbering| numbering.levels.get(&style.level))
+                        .cloned()
+                        .map(|level| self.render_ordered_marker(id, style.level, number, &level))
+                });
 
                 Some(ListInfo {
                     kind: ListKind::Ordered,
                     level: style.level,
-                    marker: None,
-                    number: Some(*number),
+                    marker,
+                    marker_format: None,
+                    number: Some(number),
                 })
             }
             Some(ListKind::Unordered) => {
@@ -650,11 +685,35 @@ impl HwpxFallbackContext {
                     kind: ListKind::Unordered,
                     level: style.level,
                     marker: Some(marker),
+                    marker_format: None,
                     number: None,
                 })
             }
             _ => None,
         }
+    }
+
+    fn render_ordered_marker(
+        &mut self,
+        numbering_id: u32,
+        level: u8,
+        number: u32,
+        definition: &HwpxNumberingLevel,
+    ) -> String {
+        let Some(format) = hwpx_number_format(&definition.format) else {
+            self.add_warning_once(&format!(
+                "HWPX numbering id {numbering_id} level {level} referenced unsupported numFormat `{}`; hwp-convert used decimal digits.",
+                definition.format
+            ));
+            return number.to_string();
+        };
+        let Ok(number) = u16::try_from(number) else {
+            self.add_warning_once(&format!(
+                "HWPX numbering id {numbering_id} level {level} exceeded the supported formatted-number range; hwp-convert used decimal digits."
+            ));
+            return number.to_string();
+        };
+        format_rhwp_number(number, format)
     }
 
     fn hwpx_paragraph_style_for_paragraph(&mut self, paragraph_xml: &str) -> HwpxParagraphStyle {
@@ -677,7 +736,23 @@ impl HwpxFallbackContext {
             self.add_warning_once(&warning);
         }
         merge_hwpx_paragraph_style(&mut style, direct_style);
+        style.apply_layout_flags();
+        self.resolve_hwpx_paragraph_border(&mut style);
         style
+    }
+
+    fn resolve_hwpx_paragraph_border(&mut self, style: &mut HwpxParagraphStyle) {
+        let Some(border_fill_id) = style.border_fill_id.filter(|id| *id != 0) else {
+            return;
+        };
+
+        style.style.background_color = self.border_fill_background_color(border_fill_id);
+        let [border_left, border_right, border_top, border_bottom] =
+            self.border_fill_borders(border_fill_id);
+        style.style.border_top = border_top;
+        style.style.border_right = border_right;
+        style.style.border_bottom = border_bottom;
+        style.style.border_left = border_left;
     }
 
     fn store_note_from_hwpx_control(
@@ -810,7 +885,21 @@ struct HwpxParagraphStyle {
     level: u8,
     list_id: Option<u32>,
     role: Option<ParagraphRole>,
+    border_fill_id: Option<u32>,
+    widow_orphan: Option<bool>,
+    keep_with_next: Option<bool>,
+    keep_lines: Option<bool>,
+    page_break_before: Option<bool>,
     style: ParagraphStyle,
+}
+
+impl HwpxParagraphStyle {
+    fn apply_layout_flags(&mut self) {
+        self.style.widow_orphan = self.widow_orphan.unwrap_or(false);
+        self.style.keep_with_next = self.keep_with_next.unwrap_or(false);
+        self.style.keep_lines = self.keep_lines.unwrap_or(false);
+        self.style.page_break_before = self.page_break_before.unwrap_or(false);
+    }
 }
 
 fn merge_hwpx_paragraph_style(base: &mut HwpxParagraphStyle, overlay: HwpxParagraphStyle) {
@@ -821,6 +910,21 @@ fn merge_hwpx_paragraph_style(base: &mut HwpxParagraphStyle, overlay: HwpxParagr
     }
     if overlay.role.is_some() {
         base.role = overlay.role;
+    }
+    if overlay.border_fill_id.is_some() {
+        base.border_fill_id = overlay.border_fill_id;
+    }
+    if overlay.widow_orphan.is_some() {
+        base.widow_orphan = overlay.widow_orphan;
+    }
+    if overlay.keep_with_next.is_some() {
+        base.keep_with_next = overlay.keep_with_next;
+    }
+    if overlay.keep_lines.is_some() {
+        base.keep_lines = overlay.keep_lines;
+    }
+    if overlay.page_break_before.is_some() {
+        base.page_break_before = overlay.page_break_before;
     }
     merge_paragraph_style(&mut base.style, overlay.style);
 }
@@ -838,6 +942,10 @@ fn merge_paragraph_style(base: &mut ParagraphStyle, overlay: ParagraphStyle) {
     if overlay.spacing.line_pt.is_some() {
         base.spacing.line_pt = overlay.spacing.line_pt;
     }
+    if overlay.spacing.line_percent.is_some() {
+        base.spacing.line_percent = overlay.spacing.line_percent;
+        base.spacing.line_pt = None;
+    }
     if overlay.indent.left_pt.is_some() {
         base.indent.left_pt = overlay.indent.left_pt;
     }
@@ -846,6 +954,33 @@ fn merge_paragraph_style(base: &mut ParagraphStyle, overlay: ParagraphStyle) {
     }
     if overlay.indent.first_line_pt.is_some() {
         base.indent.first_line_pt = overlay.indent.first_line_pt;
+    }
+    if overlay.background_color.is_some() {
+        base.background_color = overlay.background_color;
+    }
+    if overlay.padding_top_pt.is_some() {
+        base.padding_top_pt = overlay.padding_top_pt;
+    }
+    if overlay.padding_right_pt.is_some() {
+        base.padding_right_pt = overlay.padding_right_pt;
+    }
+    if overlay.padding_bottom_pt.is_some() {
+        base.padding_bottom_pt = overlay.padding_bottom_pt;
+    }
+    if overlay.padding_left_pt.is_some() {
+        base.padding_left_pt = overlay.padding_left_pt;
+    }
+    if overlay.border_top.is_some() {
+        base.border_top = overlay.border_top;
+    }
+    if overlay.border_right.is_some() {
+        base.border_right = overlay.border_right;
+    }
+    if overlay.border_bottom.is_some() {
+        base.border_bottom = overlay.border_bottom;
+    }
+    if overlay.border_left.is_some() {
+        base.border_left = overlay.border_left;
     }
 }
 
@@ -986,6 +1121,23 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                 }
                 cursor = bullet_end;
             }
+            "numbering" => {
+                let Some(id) = xml_attribute_value(tag.raw, "id").and_then(parse_trimmed::<u32>)
+                else {
+                    cursor = tag.end;
+                    continue;
+                };
+                let numbering_end = if tag.is_self_closing {
+                    tag.end
+                } else {
+                    find_matching_element_end(header_xml, &tag).unwrap_or(tag.end)
+                };
+                let numbering_xml = &header_xml[tag.start..numbering_end];
+                context
+                    .numberings
+                    .insert(id, extract_hwpx_numbering(numbering_xml));
+                cursor = numbering_end;
+            }
             "paraPr" => {
                 let Some(id) = xml_attribute_value(tag.raw, "id").and_then(parse_trimmed::<usize>)
                 else {
@@ -1004,11 +1156,6 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
                 }
 
                 let para_xml = &header_xml[tag.start..para_end];
-                if hwpx_xml_has_percent_line_spacing(para_xml) {
-                    context.add_warning_once(
-                        "HWPX paragraph percent line spacing is not modeled by ParagraphStyle; hwp-convert preserved other paragraph style properties.",
-                    );
-                }
                 let (paragraph_style, warnings) = extract_hwpx_paragraph_style(para_xml);
                 context.paragraph_styles[id] = paragraph_style;
                 for warning in warnings {
@@ -1285,6 +1432,8 @@ fn extract_hwpx_text_style_with_warnings(
     let mut style = TextStyle {
         emphasis_dot: xml_attribute_value_any(char_pr_tag, HWPX_TEXT_EMPHASIS_DOT_ATTRIBUTES)
             .is_some_and(hwpx_style_value_is_enabled),
+        kerning: xml_attribute_value_any(char_pr_tag, &["useKerning", "kerning"])
+            .is_some_and(hwpx_style_value_is_enabled),
         font_size_pt,
         color,
         background_color,
@@ -1300,6 +1449,23 @@ fn extract_hwpx_text_style_with_warnings(
                 "underline" => {
                     style.underline = hwpx_style_tag_is_enabled(tag.raw, &["type"]);
                     if style.underline {
+                        style.underline_above = xml_attribute_value_any(
+                            tag.raw,
+                            &["type", "position"],
+                        )
+                        .is_some_and(|value| {
+                            value.eq_ignore_ascii_case("TOP") || value.eq_ignore_ascii_case("ABOVE")
+                        });
+                        style.underline_style =
+                            xml_attribute_value_any(tag.raw, &["shape", "style"]).and_then(
+                                |value| {
+                                    map_hwpx_text_decoration_style_with_warning(
+                                        value,
+                                        "underline",
+                                        &mut style_warnings,
+                                    )
+                                },
+                            );
                         style.underline_color = parse_hwpx_color_attribute_with_warning(
                             tag.raw,
                             HWPX_DECORATION_COLOR_ATTRIBUTES,
@@ -1311,6 +1477,16 @@ fn extract_hwpx_text_style_with_warnings(
                 "strikeout" | "strikeOut" => {
                     style.strike = hwpx_style_tag_is_enabled(tag.raw, &["shape", "type"]);
                     if style.strike {
+                        style.strike_style =
+                            xml_attribute_value_any(tag.raw, &["shape", "style", "type"]).and_then(
+                                |value| {
+                                    map_hwpx_text_decoration_style_with_warning(
+                                        value,
+                                        "strikeout",
+                                        &mut style_warnings,
+                                    )
+                                },
+                            );
                         style.strike_color = parse_hwpx_color_attribute_with_warning(
                             tag.raw,
                             HWPX_DECORATION_COLOR_ATTRIBUTES,
@@ -1325,6 +1501,42 @@ fn extract_hwpx_text_style_with_warnings(
                 "engrave" => style.engrave = true,
                 "shadow" => style.shadow = hwpx_style_tag_is_enabled(tag.raw, &["type"]),
                 "outline" => style.outline = hwpx_style_tag_is_enabled(tag.raw, &["type"]),
+                "ratio" => {
+                    style.font_width_percent = extract_uniform_hwpx_percent(
+                        tag.raw,
+                        100.0,
+                        50.0..=200.0,
+                        "horizontal ratio",
+                        &mut style_warnings,
+                    );
+                }
+                "spacing" => {
+                    style.letter_spacing_percent = extract_uniform_hwpx_percent(
+                        tag.raw,
+                        0.0,
+                        -50.0..=50.0,
+                        "character spacing",
+                        &mut style_warnings,
+                    );
+                }
+                "relSz" => {
+                    style.relative_size_percent = extract_uniform_hwpx_percent(
+                        tag.raw,
+                        100.0,
+                        10.0..=250.0,
+                        "relative size",
+                        &mut style_warnings,
+                    );
+                }
+                "offset" => {
+                    style.vertical_offset_percent = extract_uniform_hwpx_percent(
+                        tag.raw,
+                        0.0,
+                        -100.0..=100.0,
+                        "character offset",
+                        &mut style_warnings,
+                    );
+                }
                 "fontRef" => {
                     let (font_family, warnings) =
                         font_ref_family_with_warnings(tag.raw, font_faces);
@@ -1337,7 +1549,65 @@ fn extract_hwpx_text_style_with_warnings(
         cursor = tag.end;
     }
 
+    if let Some(relative_size) = style.relative_size_percent
+        && let Some(font_size) = style.font_size_pt.as_mut()
+    {
+        font_size.0 *= relative_size.0 / 100.0;
+    }
+
     (style, style_warnings)
+}
+
+fn extract_uniform_hwpx_percent(
+    tag: &str,
+    default: f32,
+    valid_range: std::ops::RangeInclusive<f32>,
+    label: &str,
+    warnings: &mut Vec<String>,
+) -> Option<Percent> {
+    const SCRIPT_ATTRIBUTES: [&str; 7] = [
+        "hangul", "latin", "hanja", "japanese", "other", "symbol", "user",
+    ];
+
+    let raw_values = SCRIPT_ATTRIBUTES.map(|attribute| xml_attribute_value(tag, attribute));
+    if raw_values.iter().all(Option::is_none) {
+        return None;
+    }
+
+    let mut values = [default; 7];
+    for (index, raw_value) in raw_values.into_iter().enumerate() {
+        let Some(raw_value) = raw_value else {
+            continue;
+        };
+        let Some(value) = parse_trimmed::<f32>(raw_value) else {
+            warnings.push(format!(
+                "HWPX charPr used invalid {label} value `{}`; hwp-convert omitted that metric.",
+                raw_value.trim()
+            ));
+            return None;
+        };
+        if !value.is_finite() || !valid_range.contains(&value) {
+            warnings.push(format!(
+                "HWPX charPr used out-of-range {label} value `{}`; hwp-convert omitted that metric.",
+                raw_value.trim()
+            ));
+            return None;
+        }
+        values[index] = value;
+    }
+
+    let first = values[0];
+    if values
+        .iter()
+        .any(|value| (*value - first).abs() > f32::EPSILON)
+    {
+        warnings.push(format!(
+            "HWPX charPr used script-specific {label} values {values:?}; TextStyle omitted them because one value cannot represent every script."
+        ));
+        return None;
+    }
+
+    ((first - default).abs() > f32::EPSILON).then_some(Percent(first))
 }
 
 fn parse_hwpx_color_attribute_with_warning(
@@ -1369,6 +1639,41 @@ fn hwpx_style_tag_is_enabled(tag: &str, attribute_names: &[&str]) -> bool {
 fn hwpx_style_value_is_enabled(value: &str) -> bool {
     let value = value.trim();
     !value.eq_ignore_ascii_case("none") && value != "0"
+}
+
+fn map_hwpx_text_decoration_style_with_warning(
+    value: &str,
+    label: &str,
+    warnings: &mut Vec<String>,
+) -> Option<TextDecorationStyle> {
+    let normalized = value.trim().to_ascii_uppercase().replace('-', "_");
+    let (style, approximated) = match normalized.as_str() {
+        "NONE" | "0" => return None,
+        "SOLID" => (TextDecorationStyle::Solid, false),
+        "DASH" => (TextDecorationStyle::Dashed, false),
+        "DOT" => (TextDecorationStyle::Dotted, false),
+        "DOUBLE" | "DOUBLE_SLIM" => (TextDecorationStyle::Double, false),
+        "WAVE" => (TextDecorationStyle::Wavy, false),
+        "DASH_DOT" | "DASH_DOT_DOT" | "LONG_DASH" => (TextDecorationStyle::Dashed, true),
+        "CIRCLE" => (TextDecorationStyle::Dotted, true),
+        "SLIM_THICK" | "THICK_SLIM" | "SLIM_THICK_SLIM" => (TextDecorationStyle::Double, true),
+        "DOUBLE_WAVE" => (TextDecorationStyle::Wavy, true),
+        _ => {
+            warnings.push(format!(
+                "HWPX {label} referenced unsupported decoration shape `{}`; hwp-convert used the default solid decoration style.",
+                value.trim()
+            ));
+            return None;
+        }
+    };
+
+    if approximated {
+        warnings.push(format!(
+            "HWPX {label} decoration shape `{}` has no exact CSS equivalent; hwp-convert used the closest {style:?} style.",
+            value.trim()
+        ));
+    }
+    Some(style)
 }
 
 fn extract_hwpx_border_fill(border_fill_xml: &str) -> (HwpxBorderFill, Vec<String>) {
@@ -1492,6 +1797,57 @@ fn extract_hwpx_bullet_marker(bullet_tag: &str, bullet_xml: &str) -> Option<Stri
         decoded_xml_attribute_value_any(bullet_tag, HWPX_BULLET_MARKER_ATTRIBUTES),
         first_hwpx_child_element_text(bullet_xml, HWPX_BULLET_MARKER_ATTRIBUTES),
     ])
+}
+
+fn extract_hwpx_numbering(numbering_xml: &str) -> HwpxNumbering {
+    let mut numbering = HwpxNumbering::default();
+    let mut cursor = 0usize;
+
+    while let Some(tag) = next_xml_tag(numbering_xml, cursor) {
+        cursor = tag.end;
+        if tag.is_closing || tag.name != "paraHead" {
+            continue;
+        }
+        let Some(source_level) = xml_attribute_value_any(tag.raw, HWPX_LIST_LEVEL_ATTRIBUTES)
+            .and_then(parse_trimmed::<u8>)
+        else {
+            continue;
+        };
+        let level = source_level.saturating_sub(1);
+        let start = xml_attribute_value(tag.raw, "start")
+            .and_then(parse_trimmed::<u32>)
+            .filter(|start| *start > 0)
+            .unwrap_or(1);
+        let format = xml_attribute_value(tag.raw, "numFormat")
+            .map(str::trim)
+            .filter(|format| !format.is_empty())
+            .unwrap_or("DIGIT")
+            .to_string();
+        numbering
+            .levels
+            .insert(level, HwpxNumberingLevel { start, format });
+    }
+
+    numbering
+}
+
+fn hwpx_number_format(value: &str) -> Option<RhwpNumberFormat> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "DIGIT" | "ARABIC" | "DECIMAL" => Some(RhwpNumberFormat::Digit),
+        "CIRCLED_DIGIT" | "CIRCLE_DIGIT" => Some(RhwpNumberFormat::CircledDigit),
+        "ROMAN_CAPITAL" | "ROMAN_UPPER" | "UPPER_ROMAN" => Some(RhwpNumberFormat::RomanUpper),
+        "ROMAN_SMALL" | "ROMAN_LOWER" | "LOWER_ROMAN" => Some(RhwpNumberFormat::RomanLower),
+        "LATIN_CAPITAL" | "LATIN_UPPER" | "UPPER_LATIN" | "UPPER_ALPHA" => {
+            Some(RhwpNumberFormat::LatinUpper)
+        }
+        "LATIN_SMALL" | "LATIN_LOWER" | "LOWER_LATIN" | "LOWER_ALPHA" => {
+            Some(RhwpNumberFormat::LatinLower)
+        }
+        "HANGUL_SYLLABLE" | "HANGUL_GANADA" => Some(RhwpNumberFormat::HangulGaNaDa),
+        "HANGUL_DIGIT" | "HANGUL_NUMBER" => Some(RhwpNumberFormat::HangulNumber),
+        "HANJA_DIGIT" | "HANJA_NUMBER" => Some(RhwpNumberFormat::HanjaNumber),
+        _ => None,
+    }
 }
 
 fn font_ref_family_with_warnings(
@@ -1618,6 +1974,79 @@ fn extract_hwpx_paragraph_style(para_xml: &str) -> (HwpxParagraphStyle, Vec<Stri
                             &mut warnings,
                         );
                 }
+                "lineSpacing" => {
+                    paragraph_style.style.spacing.line_percent =
+                        hwpx_percent_line_spacing_with_warning(tag.raw, &mut warnings);
+                }
+                "breakSetting" => {
+                    paragraph_style.widow_orphan = hwpx_paragraph_bool_with_warning(
+                        tag.raw,
+                        &["widowOrphan", "widow-orphan"],
+                        "widow/orphan control",
+                        &mut warnings,
+                    );
+                    paragraph_style.keep_with_next = hwpx_paragraph_bool_with_warning(
+                        tag.raw,
+                        &["keepWithNext", "keep-with-next"],
+                        "keep-with-next",
+                        &mut warnings,
+                    );
+                    paragraph_style.keep_lines = hwpx_paragraph_bool_with_warning(
+                        tag.raw,
+                        &["keepLines", "keep-lines"],
+                        "keep-lines",
+                        &mut warnings,
+                    );
+                    paragraph_style.page_break_before = hwpx_paragraph_bool_with_warning(
+                        tag.raw,
+                        &["pageBreakBefore", "page-break-before"],
+                        "page-break-before",
+                        &mut warnings,
+                    );
+                }
+                "border" => {
+                    if let Some(value) =
+                        xml_attribute_value_any(tag.raw, HWPX_BORDER_FILL_ID_REF_ATTRIBUTES)
+                    {
+                        match parse_trimmed::<u32>(value) {
+                            Some(border_fill_id) => {
+                                paragraph_style.border_fill_id = Some(border_fill_id)
+                            }
+                            None => warnings.push(format!(
+                                "HWPX paragraph border referenced unsupported borderFill id `{}`; hwp-convert omitted the paragraph border and background.",
+                                value.trim()
+                            )),
+                        }
+                    }
+                    paragraph_style.style.padding_left_pt =
+                        hwpx_paragraph_border_offset_to_pt_with_warning(
+                            tag.raw,
+                            &["offsetLeft", "leftOffset"],
+                            "left",
+                            &mut warnings,
+                        );
+                    paragraph_style.style.padding_right_pt =
+                        hwpx_paragraph_border_offset_to_pt_with_warning(
+                            tag.raw,
+                            &["offsetRight", "rightOffset"],
+                            "right",
+                            &mut warnings,
+                        );
+                    paragraph_style.style.padding_top_pt =
+                        hwpx_paragraph_border_offset_to_pt_with_warning(
+                            tag.raw,
+                            &["offsetTop", "topOffset"],
+                            "top",
+                            &mut warnings,
+                        );
+                    paragraph_style.style.padding_bottom_pt =
+                        hwpx_paragraph_border_offset_to_pt_with_warning(
+                            tag.raw,
+                            &["offsetBottom", "bottomOffset"],
+                            "bottom",
+                            &mut warnings,
+                        );
+                }
                 _ => {}
             }
         }
@@ -1649,6 +2078,46 @@ fn hwpx_paragraph_hwp_units_to_pt_with_warning(
         })
 }
 
+fn hwpx_paragraph_border_offset_to_pt_with_warning(
+    tag: &str,
+    attributes: &[&str],
+    side: &str,
+    warnings: &mut Vec<String>,
+) -> Option<LengthPt> {
+    let value = xml_attribute_value_any(tag, attributes)?;
+    match parse_trimmed::<i32>(value) {
+        Some(0) => None,
+        Some(value) if value > 0 => Some(LengthPt(value as f32 / 100.0)),
+        _ => {
+            warnings.push(format!(
+                "HWPX paragraph border referenced unsupported {side} offset `{}`; hwp-convert omitted that paragraph padding side.",
+                value.trim()
+            ));
+            None
+        }
+    }
+}
+
+fn hwpx_paragraph_bool_with_warning(
+    tag: &str,
+    attributes: &[&str],
+    label: &str,
+    warnings: &mut Vec<String>,
+) -> Option<bool> {
+    let value = xml_attribute_value_any(tag, attributes)?;
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" | "none" => Some(false),
+        _ => {
+            warnings.push(format!(
+                "HWPX paragraph style referenced unsupported {label} value `{}`; hwp-convert used the inherited or default paragraph pagination setting.",
+                value.trim()
+            ));
+            None
+        }
+    }
+}
+
 fn hwpx_direct_paragraph_style_prefix(paragraph_xml: &str) -> &str {
     let mut cursor = 0usize;
 
@@ -1671,15 +2140,27 @@ fn is_hwpx_percent_line_spacing(tag: &str) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case("PERCENT"))
 }
 
-fn hwpx_xml_has_percent_line_spacing(xml: &str) -> bool {
-    let mut cursor = 0usize;
-    while let Some(tag) = next_xml_tag(xml, cursor) {
-        cursor = tag.end;
-        if !tag.is_closing && tag.name == "lineSpacing" && is_hwpx_percent_line_spacing(tag.raw) {
-            return true;
-        }
-    }
-    false
+fn hwpx_percent_line_spacing_with_warning(
+    tag: &str,
+    warnings: &mut Vec<String>,
+) -> Option<Percent> {
+    let Some(value) = xml_attribute_value_any(tag, HWPX_HWP_UNIT_VALUE_ATTRIBUTES) else {
+        warnings.push(
+            "HWPX percent line spacing omitted its numeric value; hwp-convert omitted that line height."
+                .to_string(),
+        );
+        return None;
+    };
+    parse_trimmed::<f32>(value)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .map(Percent)
+        .or_else(|| {
+            warnings.push(format!(
+                "HWPX percent line spacing referenced unsupported value `{}`; hwp-convert omitted that line height.",
+                value.trim()
+            ));
+            None
+        })
 }
 
 fn document_from_sections(sections: Vec<Section>) -> Document {
@@ -2137,11 +2618,6 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
     let mut blocks = Vec::new();
     let mut fragment_start = 0usize;
     let mut cursor = 0usize;
-    if hwpx_xml_has_percent_line_spacing(hwpx_direct_paragraph_style_prefix(paragraph_xml)) {
-        context.add_warning_once(
-            "HWPX paragraph percent line spacing is not modeled by ParagraphStyle; hwp-convert preserved other paragraph style properties.",
-        );
-    }
     let paragraph_style = context.paragraph_style_for_paragraph(paragraph_xml);
     let paragraph_role = context.paragraph_role_for_paragraph(paragraph_xml);
     let mut pending_list = context.list_info_for_paragraph(paragraph_xml);
@@ -2172,10 +2648,16 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
             );
 
             let control_xml = &paragraph_xml[tag.start..control_end];
-            blocks.push(Block::Unknown(unknown_hwpx_control_block(
-                control_xml,
-                context,
-            )));
+            if let Some(layout_kind) = hwpx_layout_only_control_kind(control_xml) {
+                context.add_warning_once(&format!(
+                    "HWPX {layout_kind} control is not modeled by Document IR; hwp-convert omitted its layout metadata."
+                ));
+            } else {
+                blocks.push(Block::Unknown(unknown_hwpx_control_block(
+                    control_xml,
+                    context,
+                )));
+            }
             fragment_start = control_end;
             cursor = control_end;
             continue;
@@ -2343,6 +2825,13 @@ fn hwpx_control_contains_supported_content(xml: &str, control_tag: &XmlTag<'_>) 
     }
 
     false
+}
+
+fn hwpx_layout_only_control_kind(control_xml: &str) -> Option<&'static str> {
+    match first_hwpx_control_child_name(control_xml)?.as_str() {
+        "colPr" => Some("column definition"),
+        _ => None,
+    }
 }
 
 fn is_hwpx_inline_control_tag(tag_name: &str) -> bool {
@@ -5465,6 +5954,26 @@ mod tests {
     }
 
     #[test]
+    fn omits_hwpx_column_definition_control_as_layout_metadata() {
+        let xml = r#"
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+              <hp:p>
+                <hp:ctrl><hp:colPr type="NEWSPAPER" colCount="2"/></hp:ctrl>
+              </hp:p>
+            </hs:sec>
+        "#;
+
+        let mut context = HwpxFallbackContext::default();
+        let blocks = extract_section_xml_blocks(xml, &mut context);
+
+        assert!(blocks.is_empty());
+        assert!(context.warnings.iter().any(|warning| {
+            warning.message.contains("column definition")
+                && warning.message.contains("omitted its layout metadata")
+        }));
+    }
+
+    #[test]
     fn recovers_hwpx_hyperlink_field_as_link_inline() {
         let xml = r#"
             <hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
@@ -5650,6 +6159,14 @@ mod tests {
                     <hh:bullets>
                       <hh:bullet id="1" bulletMarker="*"/>
                     </hh:bullets>
+                    <hh:numberings>
+                      <hh:numbering id="1">
+                        <hh:paraHead level="1" start="3" numFormat="LATIN_CAPITAL"/>
+                      </hh:numbering>
+                      <hh:numbering id="2">
+                        <hh:paraHead level="1" start="5" numFormat="DIGIT"/>
+                      </hh:numbering>
+                    </hh:numberings>
                     <hh:paraProperties>
                       <hh:paraPr id="0"><hh:heading type="BULLET" idREF="1" level="0"/></hh:paraPr>
                       <hh:paraPr id="1"><hh:heading type="NUMBER" idRef="1" level="0"/></hh:paraPr>
@@ -5695,25 +6212,28 @@ mod tests {
             Some("*")
         );
         assert_eq!(
-            paragraphs[1]
-                .list
-                .as_ref()
-                .map(|list| (&list.kind, list.number)),
-            Some((&ListKind::Ordered, Some(1)))
+            paragraphs[1].list.as_ref().map(|list| (
+                &list.kind,
+                list.number,
+                list.marker.as_deref()
+            )),
+            Some((&ListKind::Ordered, Some(3), Some("C")))
         );
         assert_eq!(
-            paragraphs[2]
-                .list
-                .as_ref()
-                .map(|list| (&list.kind, list.number)),
-            Some((&ListKind::Ordered, Some(2)))
+            paragraphs[2].list.as_ref().map(|list| (
+                &list.kind,
+                list.number,
+                list.marker.as_deref()
+            )),
+            Some((&ListKind::Ordered, Some(4), Some("D")))
         );
         assert_eq!(
-            paragraphs[3]
-                .list
-                .as_ref()
-                .map(|list| (&list.kind, list.number)),
-            Some((&ListKind::Ordered, Some(1)))
+            paragraphs[3].list.as_ref().map(|list| (
+                &list.kind,
+                list.number,
+                list.marker.as_deref()
+            )),
+            Some((&ListKind::Ordered, Some(5), Some("5")))
         );
 
         Ok(())
@@ -5827,9 +6347,19 @@ mod tests {
         let bytes = create_archive_bytes(&[
             (
                 HEADER_XML_PATH,
-                r#"
-                <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+                r##"
+                <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"
+                         xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
                   <hh:refList>
+                    <hh:borderFills>
+                      <hh:borderFill id="3">
+                        <hh:leftBorder type="SOLID" width="1 px" color="#112233"/>
+                        <hh:rightBorder type="DASH" width="1 px" color="#223344"/>
+                        <hh:topBorder type="DOT" width="1 px" color="#334455"/>
+                        <hh:bottomBorder type="DOUBLE_SLIM" width="1 px" color="#445566"/>
+                        <hc:fillBrush><hc:winBrush faceColor="#AABBCC"/></hc:fillBrush>
+                      </hh:borderFill>
+                    </hh:borderFills>
                     <hh:paraProperties>
                       <hh:paraPr id="0">
                         <hh:align horizontalAlign="center"/>
@@ -5841,11 +6371,15 @@ mod tests {
                           <hh:next unit="HWPUNIT" val="500"/>
                         </hh:margin>
                         <hh:lineSpacing type="fixed" val="600" unit="HWPUNIT"/>
+                        <hh:breakSetting widowOrphan="1" keepWithNext="true"
+                                         keepLines="yes" pageBreakBefore="on"/>
+                        <hh:border borderFillIDRef="3" offsetLeft="100" offsetRight="200"
+                                   offsetTop="300" offsetBottom="400"/>
                       </hh:paraPr>
                     </hh:paraProperties>
                   </hh:refList>
                 </hh:head>
-                "#,
+                "##,
             ),
             (
                 "Contents/section0.xml",
@@ -5870,6 +6404,55 @@ mod tests {
         assert_eq!(paragraph.style.spacing.before_pt, Some(LengthPt(4.0)));
         assert_eq!(paragraph.style.spacing.after_pt, Some(LengthPt(5.0)));
         assert_eq!(paragraph.style.spacing.line_pt, Some(LengthPt(6.0)));
+        assert_eq!(
+            paragraph.style.background_color,
+            Some(Color {
+                r: 0xAA,
+                g: 0xBB,
+                b: 0xCC,
+                a: 255,
+            })
+        );
+        assert_eq!(paragraph.style.padding_left_pt, Some(LengthPt(1.0)));
+        assert_eq!(paragraph.style.padding_right_pt, Some(LengthPt(2.0)));
+        assert_eq!(paragraph.style.padding_top_pt, Some(LengthPt(3.0)));
+        assert_eq!(paragraph.style.padding_bottom_pt, Some(LengthPt(4.0)));
+        assert_eq!(
+            paragraph
+                .style
+                .border_left
+                .as_ref()
+                .map(|border| border.style),
+            Some(BorderStyle::Solid)
+        );
+        assert_eq!(
+            paragraph
+                .style
+                .border_right
+                .as_ref()
+                .map(|border| border.style),
+            Some(BorderStyle::Dashed)
+        );
+        assert_eq!(
+            paragraph
+                .style
+                .border_top
+                .as_ref()
+                .map(|border| border.style),
+            Some(BorderStyle::Dotted)
+        );
+        assert_eq!(
+            paragraph
+                .style
+                .border_bottom
+                .as_ref()
+                .map(|border| border.style),
+            Some(BorderStyle::Double)
+        );
+        assert!(paragraph.style.widow_orphan);
+        assert!(paragraph.style.keep_with_next);
+        assert!(paragraph.style.keep_lines);
+        assert!(paragraph.style.page_break_before);
 
         Ok(())
     }
@@ -5919,6 +6502,8 @@ mod tests {
                   <hh:left value="bad-left"/>
                 </hh:margin>
                 <hh:lineSpacing value="bad-line"/>
+                <hh:breakSetting keepLines="maybe"/>
+                <hh:border borderFillIDRef="bad-border" offsetLeft="-10" offsetRight="bad"/>
               </hh:paraPr>
             </hh:head>
             "#,
@@ -5942,10 +6527,32 @@ mod tests {
                 .message
                 .contains("unsupported line spacing value `bad-line`")
         }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported keep-lines value `maybe`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported borderFill id `bad-border`")
+        }));
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("unsupported left offset `-10`") })
+        );
+        assert!(
+            context
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("unsupported right offset `bad`") })
+        );
     }
 
     #[test]
-    fn warns_when_hwpx_percent_line_spacing_cannot_be_modeled() {
+    fn preserves_hwpx_percent_line_spacing() {
         let mut context = extract_hwpx_fallback_context(
             r#"
             <hh:head>
@@ -5957,15 +6564,12 @@ mod tests {
         );
 
         assert_eq!(
-            context
-                .warnings
-                .iter()
-                .filter(|warning| warning.message.contains("percent line spacing"))
-                .count(),
-            1
+            context.paragraph_styles[1].style.spacing.line_percent,
+            Some(Percent(160.0))
         );
+        assert!(context.warnings.is_empty());
 
-        extract_section_xml_blocks(
+        let blocks = extract_section_xml_blocks(
             r#"
             <hp:p>
               <hp:lineSpacing type="PERCENT" value="130" unit="HWPUNIT"/>
@@ -5975,15 +6579,11 @@ mod tests {
             &mut context,
         );
 
-        assert_eq!(
-            context
-                .warnings
-                .iter()
-                .filter(|warning| warning.message.contains("percent line spacing"))
-                .count(),
-            1,
-            "the same unsupported style should produce one deduplicated warning"
-        );
+        let Block::Paragraph(paragraph) = &blocks[0] else {
+            panic!("expected paragraph block");
+        };
+        assert_eq!(paragraph.style.spacing.line_percent, Some(Percent(130.0)));
+        assert!(context.warnings.is_empty());
     }
 
     #[test]
@@ -6167,8 +6767,8 @@ mod tests {
                         <hh:fontRef hangul="0"/>
                         <hh:bold/>
                         <hh:italic/>
-                        <hh:underline type="BOTTOM" lineColor="#070809"/>
-                        <hh:strikeout shape="SOLID" lineColor="#0A0B0C"/>
+                        <hh:underline type="TOP" shape="WAVE" lineColor="#070809"/>
+                        <hh:strikeout shape="DOUBLE_SLIM" lineColor="#0A0B0C"/>
                         <hh:outline type="SOLID"/>
                         <hh:shadow type="DROP"/>
                       </hh:charPr>
@@ -6221,6 +6821,15 @@ mod tests {
         assert!(text_run.style.italic);
         assert!(text_run.style.underline);
         assert!(text_run.style.strike);
+        assert!(text_run.style.underline_above);
+        assert_eq!(
+            text_run.style.underline_style,
+            Some(TextDecorationStyle::Wavy)
+        );
+        assert_eq!(
+            text_run.style.strike_style,
+            Some(TextDecorationStyle::Double)
+        );
         assert!(text_run.style.emphasis_dot);
         assert!(text_run.style.outline);
         assert!(text_run.style.shadow);
@@ -6269,6 +6878,60 @@ mod tests {
         assert!(!style.shadow);
         assert_eq!(style.underline_color, None);
         assert_eq!(style.strike_color, None);
+        assert_eq!(style.underline_style, None);
+        assert_eq!(style.strike_style, None);
+        assert!(!style.underline_above);
+    }
+
+    #[test]
+    fn recovers_uniform_hwpx_text_metrics() {
+        let (style, warnings) = extract_hwpx_text_style_with_warnings(
+            r#"hh:charPr id="0" height="1200" useKerning="1""#,
+            r#"
+              <hh:charPr id="0" height="1200" useKerning="1">
+                <hh:ratio hangul="95" latin="95" hanja="95" japanese="95" other="95" symbol="95" user="95"/>
+                <hh:spacing hangul="-5" latin="-5" hanja="-5" japanese="-5" other="-5" symbol="-5" user="-5"/>
+                <hh:relSz hangul="80" latin="80" hanja="80" japanese="80" other="80" symbol="80" user="80"/>
+                <hh:offset hangul="10" latin="10" hanja="10" japanese="10" other="10" symbol="10" user="10"/>
+              </hh:charPr>
+            "#,
+            &[],
+        );
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:#?}");
+        assert_eq!(style.font_width_percent, Some(Percent(95.0)));
+        assert_eq!(style.letter_spacing_percent, Some(Percent(-5.0)));
+        assert_eq!(style.relative_size_percent, Some(Percent(80.0)));
+        assert_eq!(style.vertical_offset_percent, Some(Percent(10.0)));
+        assert_eq!(style.font_size_pt, Some(LengthPt(9.6)));
+        assert!(style.kerning);
+    }
+
+    #[test]
+    fn warns_and_omits_script_specific_hwpx_text_metrics() {
+        let (style, warnings) = extract_hwpx_text_style_with_warnings(
+            r#"hh:charPr id="0""#,
+            r#"
+              <hh:charPr id="0">
+                <hh:ratio hangul="95" latin="100"/>
+                <hh:spacing hangul="-5" latin="0"/>
+              </hh:charPr>
+            "#,
+            &[],
+        );
+
+        assert_eq!(style.font_width_percent, None);
+        assert_eq!(style.letter_spacing_percent, None);
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| { warning.contains("script-specific horizontal ratio values") })
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| { warning.contains("script-specific character spacing values") })
+        );
     }
 
     #[test]

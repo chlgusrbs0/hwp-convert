@@ -236,13 +236,25 @@ fn list_prefix_to_plain_text(list: &ListInfo) -> String {
     let indent = "  ".repeat(list.level as usize);
 
     let marker = match list.kind {
-        ListKind::Ordered => format!("{}. ", list.number.unwrap_or(1)),
+        ListKind::Ordered => list
+            .marker
+            .as_deref()
+            .map(plain_text_marker_with_space)
+            .unwrap_or_else(|| format!("{}. ", list.number.unwrap_or(1))),
         ListKind::Unordered | ListKind::Unknown => {
-            format!("{} ", list.marker.as_deref().unwrap_or("-"))
+            plain_text_marker_with_space(list.marker.as_deref().unwrap_or("-"))
         }
     };
 
     format!("{indent}{marker}")
+}
+
+fn plain_text_marker_with_space(marker: &str) -> String {
+    if marker.chars().last().is_some_and(char::is_whitespace) {
+        marker.to_string()
+    } else {
+        format!("{marker} ")
+    }
 }
 
 fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
@@ -408,6 +420,7 @@ mod tests {
                         kind: ListKind::Ordered,
                         level: 0,
                         marker: None,
+                        marker_format: None,
                         number: Some(3),
                     }),
                 })],
