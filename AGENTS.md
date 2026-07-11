@@ -16,7 +16,7 @@
 - 현재 `IR_VERSION`: `15`.
 - 입력 형식: `.hwp`, `.hwpx`.
 - 출력 형식: `txt`, `json`, `markdown`, `html`, `svg`. PDF는 미구현.
-- 테스트 상태: `cargo test` 통과 — unit test 290개 + fixture smoke 4개. `cargo clippy --all-targets -- -D warnings` 무경고.
+- 테스트 상태: `cargo test` 통과 — unit test 292개 + fixture smoke 4개. `cargo clippy --all-targets -- -D warnings` 무경고.
 - 공식 fixture(10개), `tests/fixtures/` 아래:
   - HWP/HWPX 쌍: `basic_text`, `list`
   - HWP 단독: `equation`, `footnote`, `header_footer`, `image`, `merged_table`, `shape`, `style`, `table`

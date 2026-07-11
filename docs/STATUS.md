@@ -32,7 +32,7 @@
 | header/footer | 예 | 예 | 예 | 부분 (모두 선형화 출력) | 페이지 반복 레이아웃이 아니라 본문 앞뒤 block 묶음. HWPX 폴백은 `FirstPage`/odd/even placement와 관련 속성 alias 일부를 복구한다. |
 | footnote/endnote | 예 | 부분 | 예 | 부분 (note ref + body 출력) | paragraph offset으로 위치를 증명할 수 있으면 note ref를 해당 위치에 배치하고, 복구 불가할 때만 문단 끝에 append하며 warning을 남긴다. 페이지 하단 배치/separator 없음. |
 | link | 부분 | 부분 | 예 | 부분 (JSON/HTML/Markdown URL 보존, TXT/SVG 라벨 fallback) | hyperlink field range와 복구 가능한 control offset을 inline 위치로 사용한다. 위치가 없으면 유일한 라벨 일치 또는 문단 끝 fallback과 warning을 사용한다. HWPX 폴백은 직접 link/field link의 URL, title, parameter 이름 alias 일부를 복구한다. |
-| list | 부분 | 부분 | 예 | 부분 (JSON/TXT/Markdown prefix, HTML `<ul>/<ol>`, SVG 평문) | bullet/number/outline만 `ListInfo`로. HWPX 폴백은 list type/level/idRef, bullet marker와 numbering의 레벨별 시작값/숫자 형식을 복구한다. explicit list container 구조 없음. nested/restart fixture 없음. |
+| list | 부분 | 부분 | 예 | 부분 (JSON/TXT/Markdown prefix, HTML `<ul>/<ol>`, SVG 평문) | bullet/number/outline만 `ListInfo`로. HWPX 폴백은 list type/level/idRef, bullet marker와 numbering의 레벨별 시작값/숫자 형식을 복구하며, 동일 문단으로 확인된 rHWP 결과의 빈 marker를 보강한다. explicit list container 구조 없음. nested/restart fixture 없음. |
 | equation | 예 | 부분 | 예 | 부분 (JSON 보존, 나머지 `[equation: ...]`, Markdown은 `Latex`일 때만 `$$`) | bridge가 `EquationKind::PlainText`만 생성. LaTeX/MathML 판별, numbering, resource 연결 없음. |
 | shape | 예 | 부분 | 부분 | 부분 (모두 `[shape: ...]` placeholder) | `kind`, `fallback_text`, `description`만 남김. geometry/border/fill/text box/caption/child shape 소실. |
 | chart | 부분 | 아니오 | 예 | 부분 (exporter는 `[chart: ...]` 가능하나 bridge가 block을 못 만듦) | 로컬 rhwp에 chart tag 흔적은 있으나 bridge-visible model 없음. 현재 경로에서 직접 매핑 불가. |
