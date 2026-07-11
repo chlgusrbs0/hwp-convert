@@ -258,6 +258,12 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - 표 행 배치 IR 확장: `IR_VERSION` 15 → 16. HWP `row_sizes`와 HWPX 행 높이를 `TableRow.height`에 보존하고 HTML 행 스타일로 출력한다.
 - 방정식 표시 IR 확장: `IR_VERSION` 16 → 17. rHWP가 제공하는 방정식 글꼴·크기·색·기준선·크기·오프셋·버전 정보를 보존하고 HTML 표시 스타일에 반영한다.
 - 도형 기본 배치 IR 확장: `IR_VERSION` 17 → 18. HWP 도형의 기본 너비·높이·X/Y 오프셋을 보존하고 HTML fallback placeholder에 반영한다.
+- 이미지 transform IR 확장: `IR_VERSION` 18 → 19. HWP/HWPX 이미지의 회전과 가로·세로 반전을 보존하고 HTML CSS transform으로 출력한다.
+- 표 반복 머리글 IR 확장: `IR_VERSION` 19 → 20. HWP `repeat_header`를 보존하고 HTML 첫 행을 `<thead>`로 출력한다.
+- 표 페이지 분할 IR 확장: `IR_VERSION` 20 → 21. HWP 표의 `CellBreak`/`RowBreak` 규칙을 보존하고 `RowBreak`는 HTML `break-inside: avoid`로 출력한다.
+- 도형 단순 스타일 IR 확장: `IR_VERSION` 21 → 22. HWP 도형의 표준 선종류·굵기·색상과 패턴 없는 단색 채우기를 보존하고 HTML CSS로 출력한다. 패턴·이미지·그라데이션 채우기와 그림자는 계속 warning으로 남긴다.
+- 도형 변환 IR 확장: `IR_VERSION` 22 → 23. HWP/HWPX 도형의 회전과 가로·세로 반전을 보존하고 HTML CSS transform으로 출력한다. 이 과정에서 HWP 그림 회전각도 rHWP renderer 기준의 도 단위로 바로잡았다.
+- 도형 텍스트 상자 IR 확장: `IR_VERSION` 23 → 24. HWP 도형 텍스트 상자의 안쪽 여백과 가운데·아래 세로 정렬을 보존하고 HTML box CSS로 출력한다. HWPX 도형 텍스트 상자 속성은 fixture 검증 전까지 미매핑이다.
 
 ## 완료 선언 기준
 

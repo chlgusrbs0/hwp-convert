@@ -28,7 +28,7 @@ use rhwp::model::style::{
     Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, BorderLine as RhwpBorderLine,
     BorderLineType as RhwpBorderLineType, CharShape as RhwpCharShape, FillType as RhwpFillType,
     HeadType as RhwpHeadType, Numbering as RhwpNumbering, ParaShape as RhwpParaShape,
-    UnderlineType as RhwpUnderlineType,
+    ShapeBorderLine as RhwpShapeBorderLine, UnderlineType as RhwpUnderlineType,
 };
 use rhwp::model::table::{
     Cell as RhwpCell, Table as RhwpTable, VerticalAlign as RhwpVerticalAlign,
@@ -42,8 +42,8 @@ use crate::ir::{
     ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore,
     Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, Resource, ResourceId,
     ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell,
-    TableCellStyle, TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle, TextStyleId,
-    UnknownInline, VerticalAlign, WarningCode,
+    TableCellStyle, TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle,
+    TextStyleId, UnknownInline, VerticalAlign, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1412,6 +1412,12 @@ impl<'a> BridgeContext<'a> {
                 margin_right: i16_hwp_units_to_px_option(table.outer_margin_right),
                 margin_bottom: i16_hwp_units_to_px_option(table.outer_margin_bottom),
                 margin_left: i16_hwp_units_to_px_option(table.outer_margin_left),
+                repeat_header: table.repeat_header,
+                page_break: match table.page_break {
+                    rhwp::model::table::TablePageBreak::None => None,
+                    rhwp::model::table::TablePageBreak::CellBreak => Some(TablePageBreak::Cell),
+                    rhwp::model::table::TablePageBreak::RowBreak => Some(TablePageBreak::Row),
+                },
             },
         }
     }
@@ -1424,12 +1430,6 @@ impl<'a> BridgeContext<'a> {
         }
         if !table.zones.is_empty() {
             details.push(format!("border_fill_zones={}", table.zones.len()));
-        }
-        if table.page_break != Default::default() {
-            details.push(format!("page_break={:?}", table.page_break));
-        }
-        if table.repeat_header {
-            details.push("repeat_header=true".to_string());
         }
         if table.outer_margin_left < 0
             || table.outer_margin_right < 0
@@ -1598,6 +1598,10 @@ impl<'a> BridgeContext<'a> {
                     picture.image_attr.effect,
                     RhwpImageEffect::GrayScale | RhwpImageEffect::BlackWhite
                 ),
+                rotation_degrees: (picture.shape_attr.rotation_angle != 0)
+                    .then_some(picture.shape_attr.rotation_angle as f32),
+                flip_horizontal: picture.shape_attr.horz_flip.then_some(true),
+                flip_vertical: picture.shape_attr.vert_flip.then_some(true),
             }),
             None => {
                 self.add_warning_once(&format!(
@@ -1637,17 +1641,6 @@ impl<'a> BridgeContext<'a> {
             details.push(format!(
                 "crop={}/{}/{}/{}",
                 picture.crop.left, picture.crop.top, picture.crop.right, picture.crop.bottom
-            ));
-        }
-        if picture.shape_attr.horz_flip
-            || picture.shape_attr.vert_flip
-            || picture.shape_attr.rotation_angle != 0
-        {
-            details.push(format!(
-                "transform=flip_h:{},flip_v:{},rotation:{}",
-                picture.shape_attr.horz_flip,
-                picture.shape_attr.vert_flip,
-                picture.shape_attr.rotation_angle
             ));
         }
         if picture.shape_attr.render_b.abs() > f64::EPSILON
@@ -1715,7 +1708,7 @@ impl<'a> BridgeContext<'a> {
         }
 
         self.add_warning_once(&format!(
-            "rhwp exposed picture visual transforms that Image IR does not yet model; hwp-convert preserved the original image bytes without applying {}.",
+            "rhwp exposed picture visual properties that Image IR does not yet model; hwp-convert preserved the original image bytes without applying {}.",
             details.join(", ")
         ));
     }
@@ -1750,17 +1743,15 @@ impl<'a> BridgeContext<'a> {
             ShapeObject::Group(_) | ShapeObject::Picture(_) => ShapeKind::Unknown,
         };
         let common = shape.common();
-        let drawing_details = shape
-            .drawing()
-            .map(|drawing| {
-                format!(
-                    "border_width={}, fill={:?}, shadow_type={}",
-                    drawing.border_line.width, drawing.fill.fill_type, drawing.shadow_type
-                )
-            })
+        let drawing = shape.drawing();
+        let border = drawing.and_then(|drawing| map_shape_border_line(&drawing.border_line));
+        let background_color = drawing.and_then(map_shape_background_color);
+        let text_box = drawing.and_then(|drawing| drawing.text_box.as_ref());
+        let drawing_details = drawing
+            .map(shape_unmodeled_presentation_details)
             .unwrap_or_else(|| "drawing details unavailable".to_string());
         self.add_warning_once(&format!(
-            "rhwp shape {kind:?} presentation is not fully modeled; hwp-convert preserved kind/text and basic size/offset (z_order={}, {drawing_details}).",
+            "rhwp shape {kind:?} remains a semantic placeholder; hwp-convert preserved kind/text, basic size/offset, simple border, and solid fill when available (z_order={}, {drawing_details}).",
             common.z_order
         ));
         let description = non_empty_string(&shape.common().description);
@@ -1793,6 +1784,22 @@ impl<'a> BridgeContext<'a> {
                 Some(fallback_parts.join("\n"))
             },
             description,
+            border,
+            background_color,
+            rotation_degrees: (shape.shape_attr().rotation_angle != 0)
+                .then(|| shape.shape_attr().rotation_angle as f32),
+            flip_horizontal: shape.shape_attr().horz_flip.then_some(true),
+            flip_vertical: shape.shape_attr().vert_flip.then_some(true),
+            text_vertical_align: text_box
+                .and_then(|text_box| map_vertical_align(text_box.vertical_align)),
+            padding_top: text_box
+                .and_then(|text_box| i16_hwp_units_to_px_option(text_box.margin_top)),
+            padding_right: text_box
+                .and_then(|text_box| i16_hwp_units_to_px_option(text_box.margin_right)),
+            padding_bottom: text_box
+                .and_then(|text_box| i16_hwp_units_to_px_option(text_box.margin_bottom)),
+            padding_left: text_box
+                .and_then(|text_box| i16_hwp_units_to_px_option(text_box.margin_left)),
             width: hwp_units_to_px_option(common.width),
             height: hwp_units_to_px_option(common.height),
             offset_x: hwp_units_to_px_option(common.horizontal_offset),
@@ -3035,6 +3042,67 @@ fn map_image_border(picture: &Picture) -> Option<Border> {
     })
 }
 
+/// Map a drawing object's uniform border when its HWP line type has a direct
+/// representation in the semantic IR. HWP stores a zero width for active
+/// drawing borders as the standard 0.1 mm width.
+fn map_shape_border_line(line: &RhwpShapeBorderLine) -> Option<Border> {
+    let line_type = (line.attr & 0x3f) as u8;
+    if !picture_border_line_type_is_modeled(line_type) {
+        return None;
+    }
+
+    let width = if line.width > 0 {
+        hwp_units_to_px_option(line.width as u32)?
+    } else {
+        LengthPx(96.0 / 254.0)
+    };
+    let style = match line_type {
+        2 | 4..=6 => BorderStyle::Dashed,
+        3 | 7 => BorderStyle::Dotted,
+        8..=11 | 13 => BorderStyle::Double,
+        _ => BorderStyle::Solid,
+    };
+
+    Some(Border {
+        width,
+        style,
+        color: color_ref_to_color_option(line.color),
+    })
+}
+
+fn map_shape_background_color(drawing: &rhwp::model::shape::DrawingObjAttr) -> Option<Color> {
+    let solid = drawing.fill.solid.as_ref()?;
+    (drawing.fill.fill_type == RhwpFillType::Solid && solid.pattern_type <= 0)
+        .then(|| color_ref_to_color_option(solid.background_color))
+        .flatten()
+}
+
+fn shape_unmodeled_presentation_details(drawing: &rhwp::model::shape::DrawingObjAttr) -> String {
+    let mut details = Vec::new();
+    let line_type = (drawing.border_line.attr & 0x3f) as u8;
+    if line_type != 0 && !picture_border_line_type_is_modeled(line_type) {
+        details.push(format!("border line type={line_type}"));
+    }
+    match drawing.fill.fill_type {
+        RhwpFillType::None => {}
+        RhwpFillType::Solid => match drawing.fill.solid.as_ref() {
+            Some(solid) if solid.pattern_type <= 0 => {}
+            Some(solid) => details.push(format!("pattern fill type={}", solid.pattern_type)),
+            None => details.push("solid fill data unavailable".to_string()),
+        },
+        RhwpFillType::Image => details.push("image fill".to_string()),
+        RhwpFillType::Gradient => details.push("gradient fill".to_string()),
+    }
+    if drawing.shadow_type != 0 {
+        details.push(format!("shadow_type={}", drawing.shadow_type));
+    }
+    if details.is_empty() {
+        "no additional drawing effects".to_string()
+    } else {
+        format!("unmodeled {}", details.join(", "))
+    }
+}
+
 fn picture_border_line_type_is_modeled(line_type: u8) -> bool {
     matches!(line_type, 1..=11 | 13)
 }
@@ -3460,13 +3528,14 @@ mod tests {
     use rhwp::model::shape::{
         Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection,
         CommonObjAttr as RhwpCommonObjAttr, DrawingObjAttr as RhwpDrawingObjAttr,
-        GroupShape as RhwpGroupShape, RectangleShape as RhwpRectangleShape, TextBox as RhwpTextBox,
+        GroupShape as RhwpGroupShape, RectangleShape as RhwpRectangleShape,
+        ShapeComponentAttr as RhwpShapeComponentAttr, TextBox as RhwpTextBox,
     };
     use rhwp::model::style::{
         Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, Bullet as RhwpBullet,
         CharShape as RhwpCharShape, Fill, FillType, Font, HeadType as RhwpHeadType,
-        ParaShape as RhwpParaShape, SolidFill, Style as RhwpStyle,
-        UnderlineType as RhwpUnderlineType,
+        ParaShape as RhwpParaShape, ShapeBorderLine as RhwpShapeBorderLine, SolidFill,
+        Style as RhwpStyle, UnderlineType as RhwpUnderlineType,
     };
     use rhwp::model::table::{
         Cell as RhwpCell, Table as RhwpTable, VerticalAlign as RhwpVerticalAlign,
@@ -3585,18 +3654,15 @@ mod tests {
         assert_eq!(table.style.margin_top, Some(LengthPx(4.0)));
         assert_eq!(table.style.margin_bottom, Some(LengthPx(400.0 / 75.0)));
         assert_eq!(table.rows[0].height, Some(LengthPx(20.0)));
+        assert!(table.style.repeat_header);
+        assert_eq!(table.style.page_break, Some(TablePageBreak::Row));
 
         let warning = bridged
             .warnings
             .iter()
             .find(|warning| warning.message.contains("table layout properties"))
             .expect("table layout warning");
-        for expected in [
-            "cell_spacing=75",
-            "border_fill_zones=1",
-            "page_break=RowBreak",
-            "repeat_header=true",
-        ] {
+        for expected in ["cell_spacing=75", "border_fill_zones=1"] {
             assert!(
                 warning.message.contains(expected),
                 "missing warning fragment {expected:?}: {}",
@@ -4058,7 +4124,32 @@ mod tests {
                 ..Default::default()
             },
             drawing: RhwpDrawingObjAttr {
+                shape_attr: RhwpShapeComponentAttr {
+                    rotation_angle: 90,
+                    horz_flip: true,
+                    vert_flip: true,
+                    ..Default::default()
+                },
+                border_line: RhwpShapeBorderLine {
+                    color: 0x00332211,
+                    width: 150,
+                    attr: 3,
+                    ..Default::default()
+                },
+                fill: Fill {
+                    fill_type: FillType::Solid,
+                    solid: Some(SolidFill {
+                        background_color: 0x00665544,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
                 text_box: Some(RhwpTextBox {
+                    vertical_align: RhwpVerticalAlign::Center,
+                    margin_left: 75,
+                    margin_right: 150,
+                    margin_top: 225,
+                    margin_bottom: 300,
                     paragraphs: vec![RhwpParagraph {
                         text: "shape text".to_string(),
                         ..Default::default()
@@ -4091,6 +4182,36 @@ mod tests {
                 assert_eq!(shape.height, Some(LengthPx(24.0)));
                 assert_eq!(shape.offset_x, Some(LengthPx(4.0)));
                 assert_eq!(shape.offset_y, Some(LengthPx(400.0 / 75.0)));
+                assert_eq!(shape.rotation_degrees, Some(90.0));
+                assert_eq!(shape.flip_horizontal, Some(true));
+                assert_eq!(shape.flip_vertical, Some(true));
+                assert_eq!(shape.text_vertical_align, Some(VerticalAlign::Middle));
+                assert_eq!(shape.padding_top, Some(LengthPx(3.0)));
+                assert_eq!(shape.padding_right, Some(LengthPx(2.0)));
+                assert_eq!(shape.padding_bottom, Some(LengthPx(4.0)));
+                assert_eq!(shape.padding_left, Some(LengthPx(1.0)));
+                assert_eq!(
+                    shape.background_color,
+                    Some(Color {
+                        r: 0x44,
+                        g: 0x55,
+                        b: 0x66,
+                        a: 255,
+                    })
+                );
+                assert_eq!(
+                    shape.border,
+                    Some(Border {
+                        width: LengthPx(2.0),
+                        style: BorderStyle::Dotted,
+                        color: Some(Color {
+                            r: 0x11,
+                            g: 0x22,
+                            b: 0x33,
+                            a: 255,
+                        }),
+                    })
+                );
             }
             other => panic!("expected shape block, got {other:?}"),
         }
@@ -4101,8 +4222,8 @@ mod tests {
                 .any(|warning| { warning.message.contains("shape text box paragraphs") })
         );
         assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("shape Rectangle presentation")
-                && warning.message.contains("basic size/offset")
+            warning.message.contains("shape Rectangle remains")
+                && warning.message.contains("semantic placeholder")
         }));
     }
 
@@ -4458,7 +4579,7 @@ mod tests {
     }
 
     #[test]
-    fn warns_when_picture_visual_transforms_are_not_modeled() {
+    fn preserves_picture_rotation_and_flip_and_warns_for_remaining_effects() {
         let picture = Picture {
             image_attr: ImageAttr {
                 bin_data_id: 7,
@@ -4483,7 +4604,7 @@ mod tests {
             },
             shape_attr: rhwp::model::shape::ShapeComponentAttr {
                 horz_flip: true,
-                rotation_angle: 9000,
+                rotation_angle: 90,
                 render_b: 0.25,
                 render_c: -0.25,
                 ..Default::default()
@@ -4518,13 +4639,15 @@ mod tests {
 
         let bridged = BridgeContext::new(&document).into_document();
 
-        assert!(matches!(&bridged.sections[0].blocks[0], Block::Image(_)));
+        let Block::Image(image) = &bridged.sections[0].blocks[0] else {
+            panic!("expected image block");
+        };
+        assert_eq!(image.rotation_degrees, Some(90.0));
+        assert_eq!(image.flip_horizontal, Some(true));
+        assert_eq!(image.flip_vertical, None);
         assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("picture visual transforms")
+            warning.message.contains("picture visual properties")
                 && warning.message.contains("crop=1/2/3/4")
-                && warning
-                    .message
-                    .contains("transform=flip_h:true,flip_v:false,rotation:9000")
                 && warning
                     .message
                     .contains("affine_shear_or_rotation=0.25/-0.25")

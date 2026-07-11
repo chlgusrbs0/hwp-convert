@@ -1144,7 +1144,45 @@ fn render_html_equation(equation: &Equation) -> String {
 
 fn render_html_shape(shape: &Shape) -> String {
     let content = render_html_fallback_text(&shape_display_text(shape));
-    let mut declarations = Vec::new();
+    // Shapes carry box geometry, so an inline span would ignore their width and
+    // height. Keep the semantic placeholder while making its box CSS effective.
+    let mut declarations = vec!["display: inline-block".to_string()];
+    if let Some(background_color) = shape.background_color {
+        declarations.push(format!(
+            "background-color: {}",
+            render_css_color(background_color)
+        ));
+    }
+    if let Some(border) = &shape.border {
+        declarations.push(format!("border: {}", render_css_border(border)));
+    }
+    if let Some(transform) = render_css_transform(
+        shape.rotation_degrees,
+        shape.flip_horizontal,
+        shape.flip_vertical,
+    ) {
+        declarations.push(format!("transform: {transform}"));
+    }
+    for (padding, property) in [
+        (shape.padding_top, "padding-top"),
+        (shape.padding_right, "padding-right"),
+        (shape.padding_bottom, "padding-bottom"),
+        (shape.padding_left, "padding-left"),
+    ] {
+        if let Some(padding) = padding {
+            declarations.push(format!("{property}: {}px", padding.0));
+        }
+    }
+    if let Some(vertical_align) = shape.text_vertical_align {
+        declarations.push("display: inline-flex".to_string());
+        declarations.push("flex-direction: column".to_string());
+        let justify_content = match vertical_align {
+            VerticalAlign::Top => "flex-start",
+            VerticalAlign::Middle => "center",
+            VerticalAlign::Bottom => "flex-end",
+        };
+        declarations.push(format!("justify-content: {justify_content}"));
+    }
     if let Some(width) = shape.width {
         declarations.push(format!("width: {}px", width.0));
     }
@@ -1395,6 +1433,9 @@ fn render_html_table_style(style: &TableStyle) -> String {
         if let Some(value) = value {
             declarations.push(format!("{property}: {}px", value.0));
         }
+    }
+    if matches!(style.page_break, Some(crate::ir::TablePageBreak::Row)) {
+        declarations.push("break-inside: avoid".to_string());
     }
     declarations.join("; ")
 }
@@ -1680,6 +1721,13 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
     if image.grayscale {
         declarations.push("filter: grayscale(100%)".to_string());
     }
+    if let Some(transform) = render_css_transform(
+        image.rotation_degrees,
+        image.flip_horizontal,
+        image.flip_vertical,
+    ) {
+        declarations.push(format!("transform: {transform}"));
+    }
     let style = render_html_style_attr(&declarations.join("; "));
     let tag = format!("<img src=\"{src}\" alt=\"{alt}\"{width}{height}{style} />");
 
@@ -1693,14 +1741,38 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
     format!("{tag}\n")
 }
 
+fn render_css_transform(
+    rotation_degrees: Option<f32>,
+    flip_horizontal: Option<bool>,
+    flip_vertical: Option<bool>,
+) -> Option<String> {
+    let mut transforms = Vec::new();
+    if let Some(rotation) = rotation_degrees.filter(|value| value.is_finite()) {
+        transforms.push(format!("rotate({rotation}deg)"));
+    }
+    if flip_horizontal == Some(true) {
+        transforms.push("scaleX(-1)".to_string());
+    }
+    if flip_vertical == Some(true) {
+        transforms.push("scaleY(-1)".to_string());
+    }
+    (!transforms.is_empty()).then(|| transforms.join(" "))
+}
+
 fn render_html_table(table: &Table, resources: &ResourceStore, image_asset_prefix: &str) -> String {
     let mut html = format!(
         "<table{}>\n",
         render_html_style_attr(&render_html_table_style(&table.style))
     );
 
-    for row in &table.rows {
-        html.push_str(&render_html_table_row(row, resources, image_asset_prefix));
+    for (index, row) in table.rows.iter().enumerate() {
+        if index == 0 && table.style.repeat_header {
+            html.push_str("<thead>\n");
+            html.push_str(&render_html_table_row(row, resources, image_asset_prefix));
+            html.push_str("</thead>\n");
+        } else {
+            html.push_str(&render_html_table_row(row, resources, image_asset_prefix));
+        }
     }
 
     html.push_str("</table>\n");
@@ -3893,7 +3965,11 @@ mod tests {
                 }],
                 height: Some(LengthPx(36.0)),
             }],
-            style: TableStyle::default(),
+            style: TableStyle {
+                repeat_header: true,
+                page_break: Some(crate::ir::TablePageBreak::Row),
+                ..Default::default()
+            },
         })]);
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
@@ -3905,6 +3981,8 @@ mod tests {
         assert!(html.contains("padding-left: 2px"));
         assert!(html.contains("border-top: 2px solid #112233"));
         assert!(html.contains("<tr style=\"height: 36px\">"));
+        assert!(html.contains("<thead>\n<tr style=\"height: 36px\">"));
+        assert!(html.contains("break-inside: avoid"));
         assert!(!html.contains("<td"));
     }
 
@@ -3923,6 +4001,9 @@ mod tests {
                 }),
             }),
             grayscale: true,
+            rotation_degrees: Some(90.0),
+            flip_horizontal: Some(true),
+            flip_vertical: Some(true),
             ..Default::default()
         })]);
 
@@ -3930,6 +4011,53 @@ mod tests {
 
         assert!(html.contains("border: 2px solid #112233"));
         assert!(html.contains("filter: grayscale(100%)"));
+        assert!(html.contains("transform: rotate(90deg) scaleX(-1) scaleY(-1)"));
+    }
+
+    #[test]
+    fn renders_html_shape_simple_border_and_fill() {
+        let document = document_with_blocks(vec![Block::Shape(Shape {
+            kind: ShapeKind::Rectangle,
+            fallback_text: Some("note".to_string()),
+            border: Some(Border {
+                width: LengthPx(2.0),
+                style: BorderStyle::Dotted,
+                color: Some(Color {
+                    r: 17,
+                    g: 34,
+                    b: 51,
+                    a: 255,
+                }),
+            }),
+            background_color: Some(Color {
+                r: 68,
+                g: 85,
+                b: 102,
+                a: 255,
+            }),
+            rotation_degrees: Some(90.0),
+            flip_horizontal: Some(true),
+            flip_vertical: Some(true),
+            text_vertical_align: Some(crate::ir::VerticalAlign::Middle),
+            padding_top: Some(LengthPx(1.0)),
+            padding_right: Some(LengthPx(2.0)),
+            padding_bottom: Some(LengthPx(3.0)),
+            padding_left: Some(LengthPx(4.0)),
+            ..Default::default()
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwpx"), &document);
+
+        assert!(html.contains("background-color: #445566"));
+        assert!(html.contains("border: 2px dotted #112233"));
+        assert!(html.contains("transform: rotate(90deg) scaleX(-1) scaleY(-1)"));
+        assert!(html.contains("display: inline-block"));
+        assert!(html.contains("display: inline-flex"));
+        assert!(html.contains("padding-top: 1px"));
+        assert!(html.contains("padding-right: 2px"));
+        assert!(html.contains("padding-bottom: 3px"));
+        assert!(html.contains("padding-left: 4px"));
+        assert!(html.contains("justify-content: center"));
     }
 
     #[test]
@@ -4520,7 +4648,7 @@ mod tests {
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
         assert!(html.contains("<span class=\"equation\">[equation: x + y]</span>"));
-        assert!(html.contains("<span class=\"shape-placeholder\">[shape: callout box]</span>"));
+        assert!(html.contains("<span class=\"shape-placeholder\" style=\"display: inline-block\">[shape: callout box]</span>"));
         assert!(html.contains("<span class=\"chart-placeholder\">[chart: Sales]</span>"));
     }
 

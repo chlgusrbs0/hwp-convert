@@ -2375,6 +2375,8 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
             margin_right,
             margin_bottom,
             margin_left,
+            repeat_header: false,
+            page_break: None,
         },
     })
 }
@@ -3009,11 +3011,15 @@ fn extract_hwpx_shape_from_xml(
     ));
     let fallback_text = first_non_empty_string([description.clone(), shape_text])
         .or_else(|| Some("[shape]".to_string()));
+    let transform = hwpx_shape_transform(shape_xml);
 
     Shape {
         kind: hwpx_shape_kind(tag_name),
         fallback_text,
         description,
+        rotation_degrees: transform.rotation_degrees,
+        flip_horizontal: transform.flip_horizontal,
+        flip_vertical: transform.flip_vertical,
         ..Default::default()
     }
 }
@@ -3052,6 +3058,7 @@ fn extract_hwpx_image_from_pic_xml(
 ) -> Option<Image> {
     let binary_item_id_ref = hwpx_pic_binary_item_id_ref(pic_xml)?;
     let resource_id = context.ensure_image_resource(&binary_item_id_ref)?;
+    let transform = hwpx_shape_transform(pic_xml);
     warn_hwpx_picture_transform(pic_xml, context);
     let image_attributes = hwpx_pic_image_attributes(pic_xml, &binary_item_id_ref);
     let image_effect = image_attributes.effect;
@@ -3104,11 +3111,14 @@ fn extract_hwpx_image_from_pic_xml(
         ),
         border: hwpx_picture_border(pic_xml, context),
         grayscale,
+        rotation_degrees: transform.rotation_degrees,
+        flip_horizontal: transform.flip_horizontal,
+        flip_vertical: transform.flip_vertical,
     })
 }
 
 fn hwpx_picture_border(pic_xml: &str, context: &mut HwpxFallbackContext) -> Option<Border> {
-    let tag = hwpx_picture_direct_child_tag(pic_xml, "lineShape")?;
+    let tag = hwpx_direct_child_tag(pic_xml, "lineShape")?;
     let style_name = xml_attribute_value_any(tag.raw, HWPX_IMAGE_BORDER_STYLE_ATTRIBUTES)
         .unwrap_or("SOLID")
         .trim()
@@ -3142,32 +3152,42 @@ fn hwpx_picture_border(pic_xml: &str, context: &mut HwpxFallbackContext) -> Opti
     })
 }
 
-fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext) {
-    let flip = hwpx_picture_direct_child_tag(pic_xml, "flip");
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct HwpxShapeTransform {
+    rotation_degrees: Option<f32>,
+    flip_horizontal: Option<bool>,
+    flip_vertical: Option<bool>,
+}
+
+fn hwpx_shape_transform(shape_xml: &str) -> HwpxShapeTransform {
+    let flip = hwpx_direct_child_tag(shape_xml, "flip");
     let horizontal_flip = flip
         .and_then(|tag| xml_attribute_value_any(tag.raw, HWPX_IMAGE_FLIP_HORIZONTAL_ATTRIBUTES))
         .is_some_and(xml_boolean_is_true);
     let vertical_flip = flip
         .and_then(|tag| xml_attribute_value_any(tag.raw, HWPX_IMAGE_FLIP_VERTICAL_ATTRIBUTES))
         .is_some_and(xml_boolean_is_true);
-    let rotation = hwpx_picture_direct_child_tag(pic_xml, "rotationInfo")
+    let rotation = hwpx_direct_child_tag(shape_xml, "rotationInfo")
         .and_then(|tag| xml_attribute_value_any(tag.raw, HWPX_IMAGE_ROTATION_ANGLE_ATTRIBUTES))
-        .and_then(|value| value.trim().parse::<i32>().ok())
-        .unwrap_or(0);
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .filter(|value| value.is_finite() && *value != 0.0)
+        .map(|value| value / 100.0);
 
-    if horizontal_flip || vertical_flip || rotation != 0 {
-        context.add_warning_once(&format!(
-            "HWPX picture transform (flip_h:{horizontal_flip},flip_v:{vertical_flip},rotation:{rotation}) is not modeled; hwp-convert preserved the original image bytes without applying the transform."
-        ));
+    HwpxShapeTransform {
+        rotation_degrees: rotation,
+        flip_horizontal: horizontal_flip.then_some(true),
+        flip_vertical: vertical_flip.then_some(true),
     }
+}
 
+fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext) {
     let root = next_xml_tag(pic_xml, 0);
     let text_wrap = root
         .and_then(|tag| xml_attribute_value_any(tag.raw, HWPX_PICTURE_TEXT_WRAP_ATTRIBUTES))
         .unwrap_or("SQUARE")
         .trim()
         .to_ascii_uppercase();
-    let pos = hwpx_picture_direct_child_tag(pic_xml, "pos");
+    let pos = hwpx_direct_child_tag(pic_xml, "pos");
     if let Some(pos) = pos {
         let treat_as_char = xml_attribute_value_any(pos.raw, HWPX_PICTURE_TREAT_AS_CHAR_ATTRIBUTES)
             .is_some_and(xml_boolean_is_true);
@@ -3204,7 +3224,7 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
         ));
     }
 
-    let clip = hwpx_picture_direct_child_tag(pic_xml, "imgClip").and_then(|tag| {
+    let clip = hwpx_direct_child_tag(pic_xml, "imgClip").and_then(|tag| {
         Some([
             xml_attribute_value_any(tag.raw, HWPX_IMAGE_CROP_LEFT_ATTRIBUTES)?
                 .trim()
@@ -3224,7 +3244,7 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
                 .ok()?,
         ])
     });
-    let dimensions = hwpx_picture_direct_child_tag(pic_xml, "imgDim").and_then(|tag| {
+    let dimensions = hwpx_direct_child_tag(pic_xml, "imgDim").and_then(|tag| {
         Some([
             xml_attribute_value_any(tag.raw, &["dimwidth", "dimWidth"])?
                 .trim()
@@ -3252,7 +3272,7 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
         ));
     }
 
-    if let Some(margin) = hwpx_picture_direct_child_tag(pic_xml, "inMargin") {
+    if let Some(margin) = hwpx_direct_child_tag(pic_xml, "inMargin") {
         let values = [
             HWPX_MARGIN_LEFT_ATTRIBUTES,
             HWPX_MARGIN_RIGHT_ATTRIBUTES,
@@ -3274,7 +3294,7 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
 }
 
 fn hwpx_picture_effect_names(pic_xml: &str) -> Vec<String> {
-    let Some(effects) = hwpx_picture_direct_child_tag(pic_xml, "effects") else {
+    let Some(effects) = hwpx_direct_child_tag(pic_xml, "effects") else {
         return Vec::new();
     };
     if effects.is_self_closing {
@@ -3310,15 +3330,15 @@ fn xml_boolean_is_true(value: &str) -> bool {
     value == "1" || value.eq_ignore_ascii_case("true")
 }
 
-fn hwpx_picture_direct_child_tag<'a>(pic_xml: &'a str, child_name: &str) -> Option<XmlTag<'a>> {
-    let root = next_xml_tag(pic_xml, 0)?;
-    if root.name != "pic" || root.is_closing || root.is_self_closing {
+fn hwpx_direct_child_tag<'a>(xml: &'a str, child_name: &str) -> Option<XmlTag<'a>> {
+    let root = next_xml_tag(xml, 0)?;
+    if root.is_closing || root.is_self_closing {
         return None;
     }
-    let root_end = find_matching_element_end(pic_xml, &root)?;
+    let root_end = find_matching_element_end(xml, &root)?;
     let mut cursor = root.end;
 
-    while let Some(tag) = next_xml_tag(pic_xml, cursor) {
+    while let Some(tag) = next_xml_tag(xml, cursor) {
         if tag.start >= root_end {
             break;
         }
@@ -3329,7 +3349,7 @@ fn hwpx_picture_direct_child_tag<'a>(pic_xml: &'a str, child_name: &str) -> Opti
         let tag_end = if tag.is_self_closing {
             tag.end
         } else {
-            find_matching_element_end(pic_xml, &tag).unwrap_or(tag.end)
+            find_matching_element_end(xml, &tag).unwrap_or(tag.end)
         };
         if tag.name == child_name {
             return Some(tag);
@@ -5894,6 +5914,8 @@ mod tests {
               <hp:p>
                 <hp:ctrl>
                   <hp:rect>
+                    <hp:flip horizontal="true" vertical="1"/>
+                    <hp:rotationInfo angle="9000"/>
                     <hp:run><hp:t>shape text</hp:t></hp:run>
                   </hp:rect>
                 </hp:ctrl>
@@ -5904,12 +5926,16 @@ mod tests {
         let mut context = HwpxFallbackContext::default();
         let blocks = extract_section_xml_blocks(xml, &mut context);
 
-        assert!(matches!(
-            &blocks[0],
-            Block::Shape(shape)
-                if shape.kind == ShapeKind::Rectangle
-                    && shape.fallback_text.as_deref() == Some("shape text")
-        ));
+        match &blocks[0] {
+            Block::Shape(shape) => {
+                assert_eq!(shape.kind, ShapeKind::Rectangle);
+                assert_eq!(shape.fallback_text.as_deref(), Some("shape text"));
+                assert_eq!(shape.rotation_degrees, Some(90.0));
+                assert_eq!(shape.flip_horizontal, Some(true));
+                assert_eq!(shape.flip_vertical, Some(true));
+            }
+            other => panic!("expected shape block, got {other:?}"),
+        }
     }
 
     #[test]
@@ -7607,7 +7633,7 @@ mod tests {
     }
 
     #[test]
-    fn warns_for_hwpx_picture_flip_and_rotation_without_nested_leakage() {
+    fn preserves_hwpx_picture_flip_and_rotation_without_nested_leakage() {
         let mut context = HwpxFallbackContext::default();
         context.image_items.insert(
             "image1".to_string(),
@@ -7632,13 +7658,11 @@ mod tests {
             </hp:pic>
         "#;
 
-        extract_hwpx_image_from_pic_xml(xml, &mut context).expect("image should parse");
+        let image = extract_hwpx_image_from_pic_xml(xml, &mut context).expect("image should parse");
 
-        assert!(context.warnings.iter().any(|warning| {
-            warning
-                .message
-                .contains("flip_h:true,flip_v:false,rotation:9000")
-        }));
+        assert_eq!(image.flip_horizontal, Some(true));
+        assert_eq!(image.flip_vertical, None);
+        assert_eq!(image.rotation_degrees, Some(90.0));
         assert!(context.warnings.iter().any(|warning| {
             warning
                 .message

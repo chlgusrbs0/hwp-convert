@@ -20,7 +20,11 @@ use serde::{Deserialize, Serialize};
 /// v12: added `TableCellStyle` per-side borders (`Border`/`BorderStyle`).
 /// Additive and `#[serde(default)]`.
 /// v13: added `Image::{border, grayscale}`. Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 18;
+/// v22: added `Shape::{border, background_color}`. Additive and `#[serde(default)]`.
+/// v23: added `Shape` rotation and flip fields. Additive and `#[serde(default)]`.
+/// v24: added `Shape` text-box padding and vertical alignment. Additive and
+/// `#[serde(default)]`.
+pub const IR_VERSION: u16 = 24;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -614,6 +618,12 @@ pub struct Image {
     /// Grayscale/black-and-white rendering effect.
     #[serde(default)]
     pub grayscale: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_degrees: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_horizontal: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_vertical: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -657,6 +667,26 @@ pub struct Shape {
     pub kind: ShapeKind,
     pub fallback_text: Option<String>,
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<Border>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_degrees: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_horizontal: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_vertical: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_vertical_align: Option<VerticalAlign>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding_top: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding_right: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding_bottom: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding_left: Option<LengthPx>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<LengthPx>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -730,6 +760,15 @@ pub struct TableStyle {
     pub margin_right: Option<LengthPx>,
     pub margin_bottom: Option<LengthPx>,
     pub margin_left: Option<LengthPx>,
+    pub repeat_header: bool,
+    pub page_break: Option<TablePageBreak>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TablePageBreak {
+    Cell,
+    Row,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -1020,6 +1059,30 @@ mod tests {
             kind: ShapeKind::Rectangle,
             fallback_text: Some("boxed note".to_string()),
             description: Some("callout".to_string()),
+            border: Some(Border {
+                width: LengthPx(1.0),
+                style: BorderStyle::Solid,
+                color: Some(Color {
+                    r: 17,
+                    g: 34,
+                    b: 51,
+                    a: 255,
+                }),
+            }),
+            background_color: Some(Color {
+                r: 68,
+                g: 85,
+                b: 102,
+                a: 255,
+            }),
+            rotation_degrees: Some(90.0),
+            flip_horizontal: Some(true),
+            flip_vertical: Some(true),
+            text_vertical_align: Some(VerticalAlign::Middle),
+            padding_top: Some(LengthPx(1.0)),
+            padding_right: Some(LengthPx(2.0)),
+            padding_bottom: Some(LengthPx(3.0)),
+            padding_left: Some(LengthPx(4.0)),
             ..Default::default()
         };
 
