@@ -255,6 +255,9 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 
 - 문서 의미 보존 IR 확장: `IR_VERSION` 13 → 14. 글자 장평·자간·상대크기·기준선 위치·커닝과 밑줄·취소선 위치/선 종류, 문자권별 HWP 실행 구간, 문단 테두리·배경·안쪽 여백·페이지 나눔 속성, 실제 다단계 번호 표식을 보존한다. HWPX 폴백도 균일 글자 메트릭과 문단 border/breakSetting 및 장식 선 종류를 복구하고 HTML은 대응 CSS를 출력한다.
 - 표 배치 IR 확장: `IR_VERSION` 14 → 15. HWP와 HWPX 표의 전체 너비·높이와 4방향 바깥 여백을 `TableStyle`에 보존하고 HTML CSS로 출력한다.
+- 표 행 배치 IR 확장: `IR_VERSION` 15 → 16. HWP `row_sizes`와 HWPX 행 높이를 `TableRow.height`에 보존하고 HTML 행 스타일로 출력한다.
+- 방정식 표시 IR 확장: `IR_VERSION` 16 → 17. rHWP가 제공하는 방정식 글꼴·크기·색·기준선·크기·오프셋·버전 정보를 보존하고 HTML 표시 스타일에 반영한다.
+- 도형 기본 배치 IR 확장: `IR_VERSION` 17 → 18. HWP 도형의 기본 너비·높이·X/Y 오프셋을 보존하고 HTML fallback placeholder에 반영한다.
 
 ## 완료 선언 기준
 
