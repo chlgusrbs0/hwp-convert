@@ -253,6 +253,8 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - 이미지 테두리 + 흑백 효과: `Image.{border, grayscale}` 추가(`CellBorder`를 일반 `Border`로 리네임해 셀·이미지 공유). border_width(raw hwp단위→px)·border_color 매핑(선종류는 solid 가정), `ImageEffect::{GrayScale, BlackWhite}`→`grayscale`(→ CSS `filter: grayscale`). `IR_VERSION` 12 → 13. 이제 미지원으로 warning되는 것은 crop, 밝기/대비, opacity, 내부 padding, Pattern8x8 효과. BlackWhite는 grayscale로 근사. 실문서 fixture 검증 권장.
 - HWPX 속성 alias/fallback 보강(새 IR 없음): 이미지·링크·필드·주석·스타일 참조·글꼴명·list marker·manifest·borderFill·margin·수식/도형/차트의 생성기별 속성명 차이를 일부 흡수한다. missing image와 unsupported control/object는 내부 텍스트가 없어도 alt/title/name/description/value 계열 속성을 `UnknownBlock.fallback_text`로 남긴다. exporter는 multiline unknown fallback을 HTML/Markdown/TXT에서 읽을 수 있게 출력한다.
 
+- 문서 의미 보존 IR 확장: `IR_VERSION` 13 → 14. 글자 장평·자간·상대크기·기준선 위치·커닝과 밑줄·취소선 위치/선 종류, 문자권별 HWP 실행 구간, 문단 테두리·배경·안쪽 여백·페이지 나눔 속성, 실제 다단계 번호 표식을 보존한다. HWPX 폴백도 균일 글자 메트릭과 문단 border/breakSetting 및 장식 선 종류를 복구하고 HTML은 대응 CSS를 출력한다.
+
 ## 완료 선언 기준
 
 다음 전에는 "rHWP 수준의 쓸만한 변환기"라고 말하지 않는다.

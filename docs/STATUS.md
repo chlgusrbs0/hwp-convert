@@ -2,7 +2,7 @@
 
 이 문서는 현재 코드 기준의 bridge/exporter 지원 상태와 HWPX fixture 현황을 한곳에 정리한다. 새 기능을 지원한다고 말하기 전에 반드시 이 문서를 확인하고, 코드가 바뀌면 함께 갱신한다.
 
-기준값(crate 버전, rHWP pin, IR_VERSION, 테스트 수, fixture 목록)은 `AGENTS.md`의 "현재 프로젝트 사실" 블록을 따른다. 최종 검증: 2026-06-25.
+기준값(crate 버전, rHWP pin, IR_VERSION, 테스트 수, fixture 목록)은 `AGENTS.md`의 "현재 프로젝트 사실" 블록을 따른다. 최종 검증: 2026-07-11.
 
 근거 코드:
 
@@ -23,16 +23,16 @@
 | 요소 | rhwp parse | bridge mapping | Document IR | exporter 지원 | 현재 한계 |
 | --- | --- | --- | --- | --- | --- |
 | text | 예 | 예 | 예 | 예 (TXT/JSON/HTML/Markdown/SVG 모두) | 좌표/페이지 단위 정보 없음. unsupported control 내부 텍스트는 보존 안 될 수 있음. |
-| paragraph | 예 | 부분 | 예 | 부분 (heading/title/caption 구분 제한적) | 빈 문단은 `Paragraph { inlines: [] }`로 보존됨. outline 기반 heading은 일부 매핑되지만 title/caption 등 전체 role 추론은 아직 제한적. |
-| style | 부분 | 부분 | 부분 | 부분 (JSON 보존, HTML CSS, Markdown은 bold/italic/strike/sup/sub/link, TXT/SVG 소실) | 글자 장식은 굵기/기울임/밑줄/취소선/위·아래첨자/강조점/양각/음각/외곽선/그림자, 글꼴명/크기, 전경/배경색, 밑줄·취소선 색까지 매핑. HWPX 폴백은 스타일 참조, 글꼴명, 장식 색상, 줄간격 type 속성 alias 일부를 복구한다. 밑줄 모양, 장평/자간/커닝, table style ref, border, padding, percent line spacing, paragraph role 추론은 아직 없음. |
+| paragraph | 예 | 부분 | 예 | 부분 (heading/title/caption 구분 제한적) | 빈 문단, 정렬·간격·들여쓰기, 문단 테두리·배경·안쪽 여백, 외톨이줄 보호·다음 문단과 함께·분할 금지·문단 앞 쪽 나눔을 보존한다. outline 기반 heading은 일부 매핑되지만 title/caption 등 전체 role 추론은 아직 제한적. |
+| style | 부분 | 부분 | 부분 | 부분 (JSON 보존, HTML CSS, Markdown은 일부 장식, TXT/SVG 시각 스타일 소실) | 글자 장식과 밑줄·취소선의 위치/선 종류, 글꼴명/크기, 전경/배경색, 장평·자간·상대 크기·기준선 위치·커닝과 고정/퍼센트 줄 간격을 매핑한다. HWP 혼합 문자권은 실행 구간을 나눠 문자권별 값을 보존한다. HWPX 폴백은 균일한 문자권 메트릭과 문단 border/breakSetting을 복구한다. 서로 다른 밑줄·취소선 모양을 동시에 쓰는 HTML, table style ref, 전체 paragraph role 추론은 아직 제한적이다. |
 | table | 예 | 예 | 예 | 부분 (JSON/HTML 구조 유지, 헤더셀은 `<th>`, 셀 수직정렬 CSS, TXT/SVG 평문, Markdown 단순 표만) | 셀 `is_header`, 수직정렬, 폭/높이/padding, 4면 테두리(색·선종류·굵기)는 매핑됨. HWPX 폴백은 borderFill 색상/테두리 폭·색 속성과 셀 margin 속성 alias 일부를 복구한다. 표 전체 폭은 아직. 테두리 굵기 인덱스→px는 rhwp 임계값(0–7)+표준 HWP 표(8–15), 선종류 wave/3D는 solid로 근사(실문서 fixture로 검증 필요). |
 | merged table cell | 예 | 예 | 예 | 부분 (JSON/HTML `row_span`/`col_span`, Markdown fallback, TXT/SVG 평문) | 병합 셀 시각 배치/너비 계산 없음. Markdown 병합 표현 없음. |
 | image | 예 | 부분 | 예 | 부분 (JSON bytes 포함, HTML/Markdown asset 파일, TXT/SVG 대체 텍스트) | 이미지 테두리(색·굵기, 선종류는 solid 가정)와 흑백(grayscale) 효과는 매핑됨. crop, 밝기/대비, opacity, 내부 padding, wrap, anchor, 배치는 아직(미지원은 warning). HWPX 폴백은 이미지 참조/설명/테두리/배치/crop/inner margin 관련 속성 alias 일부를 복구한다. bin data 없으면 `UnknownBlock`으로 남기며 alt/description 계열 속성은 fallback text로 보존한다. `Resource::Binary`는 asset으로 안 씀. |
 | resource | 부분 | 부분 | 부분 | 부분 (JSON store 보존, HTML/Markdown `Resource::Image`만 파일로) | 현재 image bin data만 `ImageResource`로. `BinaryResource` 미사용. |
 | header/footer | 예 | 예 | 예 | 부분 (모두 선형화 출력) | 페이지 반복 레이아웃이 아니라 본문 앞뒤 block 묶음. HWPX 폴백은 `FirstPage`/odd/even placement와 관련 속성 alias 일부를 복구한다. |
-| footnote/endnote | 예 | 부분 | 예 | 부분 (note ref + body 출력) | rHWP가 정확한 inline 위치를 안 줘 note ref가 문단 끝에 append. 페이지 하단 배치/separator 없음. |
-| link | 부분 | 부분 | 예 | 부분 (JSON/HTML/Markdown URL 보존, TXT/SVG 라벨 fallback) | hyperlink field range는 inline으로, 일부 hyperlink control은 문단 끝 append. HWPX 폴백은 직접 link/field link의 URL, title, parameter 이름 alias 일부를 복구한다. |
-| list | 부분 | 부분 | 예 | 부분 (JSON/TXT/Markdown prefix, HTML `<ul>/<ol>`, SVG 평문) | bullet/number/outline만 `ListInfo`로. HWPX 폴백은 list type/level/idRef와 bullet marker 속성 alias 일부를 복구한다. explicit list container 구조 없음. nested/restart fixture 없음. |
+| footnote/endnote | 예 | 부분 | 예 | 부분 (note ref + body 출력) | paragraph offset으로 위치를 증명할 수 있으면 note ref를 해당 위치에 배치하고, 복구 불가할 때만 문단 끝에 append하며 warning을 남긴다. 페이지 하단 배치/separator 없음. |
+| link | 부분 | 부분 | 예 | 부분 (JSON/HTML/Markdown URL 보존, TXT/SVG 라벨 fallback) | hyperlink field range와 복구 가능한 control offset을 inline 위치로 사용한다. 위치가 없으면 유일한 라벨 일치 또는 문단 끝 fallback과 warning을 사용한다. HWPX 폴백은 직접 link/field link의 URL, title, parameter 이름 alias 일부를 복구한다. |
+| list | 부분 | 부분 | 예 | 부분 (JSON/TXT/Markdown prefix, HTML `<ul>/<ol>`, SVG 평문) | bullet/number/outline만 `ListInfo`로. HWPX 폴백은 list type/level/idRef, bullet marker와 numbering의 레벨별 시작값/숫자 형식을 복구한다. explicit list container 구조 없음. nested/restart fixture 없음. |
 | equation | 예 | 부분 | 예 | 부분 (JSON 보존, 나머지 `[equation: ...]`, Markdown은 `Latex`일 때만 `$$`) | bridge가 `EquationKind::PlainText`만 생성. LaTeX/MathML 판별, numbering, resource 연결 없음. |
 | shape | 예 | 부분 | 부분 | 부분 (모두 `[shape: ...]` placeholder) | `kind`, `fallback_text`, `description`만 남김. geometry/border/fill/text box/caption/child shape 소실. |
 | chart | 부분 | 아니오 | 예 | 부분 (exporter는 `[chart: ...]` 가능하나 bridge가 block을 못 만듦) | 로컬 rhwp에 chart tag 흔적은 있으나 bridge-visible model 없음. 현재 경로에서 직접 매핑 불가. |
@@ -52,7 +52,7 @@
 
 ### HTML list 렌더링
 
-HTML export는 연속 list 문단을 semantic `<ul>`/`<ol>`로 묶고, ordered list 번호를 `<li value="...">`로 쓴다. nested list fidelity는 IR이 list 메타데이터를 문단 단위로 저장하므로 아직 제한적이다.
+HTML export는 연속 list 문단을 semantic `<ul>`/`<ol>`로 묶고, ordered list 번호를 `<li value="...">`로 쓴다. HWP `^1`~`^7` 템플릿은 실제 다단계 표식으로 계산해 `data-marker`와 CSS `::marker`로 표시하며 원본 템플릿도 `data-marker-format`에 남긴다. nested list fidelity는 IR이 list 메타데이터를 문단 단위로 저장하므로 아직 제한적이다.
 
 ## HWPX fixture 현황
 

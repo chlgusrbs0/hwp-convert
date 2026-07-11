@@ -6,17 +6,17 @@
 
 ## 현재 프로젝트 사실 (single source of truth)
 
-> 최종 검증: 2026-06-25. 이 블록이 "현재 상태"의 기준값이다. 다른 문서는 여기를 인용하거나 링크한다.
+> 최종 검증: 2026-07-11. 이 블록이 "현재 상태"의 기준값이다. 다른 문서는 여기를 인용하거나 링크한다.
 > 숫자(테스트 수 등)를 인용하기 전에 가능하면 `cargo test`로 다시 확인한다.
 > **저장소 HEAD 커밋 해시는 자주 바뀌므로 문서에 박지 않는다.** 필요하면 `git log --oneline`으로 확인한다.
 
 - 이 프로젝트는 Rust CLI다.
 - crate 이름은 `hwp-convert`, library target은 `hwp_convert`, edition은 2024다.
 - rHWP dependency 고정: `github.com/edwardkim/rhwp` rev `bea635bd708274a51ae3f557a71b07683d7c2454` (rhwp v0.7.3).
-- 현재 `IR_VERSION`: `13`.
+- 현재 `IR_VERSION`: `14`.
 - 입력 형식: `.hwp`, `.hwpx`.
 - 출력 형식: `txt`, `json`, `markdown`, `html`, `svg`. PDF는 미구현.
-- 테스트 상태: `cargo test` 통과 — unit test 237개 + fixture smoke 4개. `cargo clippy --all-targets` 무경고.
+- 테스트 상태: `cargo test` 통과 — unit test 290개 + fixture smoke 4개. `cargo clippy --all-targets -- -D warnings` 무경고.
 - 공식 fixture(10개), `tests/fixtures/` 아래:
   - HWP/HWPX 쌍: `basic_text`, `list`
   - HWP 단독: `equation`, `footnote`, `header_footer`, `image`, `merged_table`, `shape`, `style`, `table`
