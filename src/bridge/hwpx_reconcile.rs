@@ -3,6 +3,16 @@ use crate::ir::{
 };
 
 pub(super) fn reconcile(mut primary: Document, mut fallback: Document) -> Document {
+    let recovered_markers = supplement_matching_list_markers(&mut primary, &fallback);
+    if recovered_markers > 0 {
+        primary.warnings.retain(|warning| {
+            !warning
+                .message
+                .contains("bullet paragraph referenced missing bullet id")
+                && !warning.message.contains("exposed unusable marker")
+        });
+    }
+
     let primary_coverage = SemanticCoverage::from_document(&primary);
     let fallback_coverage = SemanticCoverage::from_document(&fallback);
     let additional = fallback_coverage.additional_labels(&primary_coverage);
@@ -48,6 +58,108 @@ pub(super) fn reconcile(mut primary: Document, mut fallback: Document) -> Docume
         },
     );
     primary
+}
+
+fn supplement_matching_list_markers(primary: &mut Document, fallback: &Document) -> usize {
+    if primary.sections.len() != fallback.sections.len() {
+        return 0;
+    }
+
+    primary
+        .sections
+        .iter_mut()
+        .zip(&fallback.sections)
+        .map(|(primary, fallback)| supplement_list_markers(&mut primary.blocks, &fallback.blocks))
+        .sum()
+}
+
+fn supplement_list_markers(primary: &mut [Block], fallback: &[Block]) -> usize {
+    let mut recovered = 0;
+    for block in primary {
+        match block {
+            Block::Paragraph(paragraph) => {
+                let Some(primary_list) = paragraph.list.as_mut() else {
+                    continue;
+                };
+                let text = canonical_inlines_text(&paragraph.inlines);
+                let mut matches = Vec::new();
+                collect_matching_list_info(
+                    fallback,
+                    &text,
+                    &primary_list.kind,
+                    primary_list.level,
+                    &mut matches,
+                );
+                let [fallback_list] = matches.as_slice() else {
+                    continue;
+                };
+                if primary_list.kind == crate::ir::ListKind::Unordered
+                    && primary_list.marker.is_none()
+                    && fallback_list.marker.is_some()
+                {
+                    primary_list.marker.clone_from(&fallback_list.marker);
+                    recovered += 1;
+                }
+                if primary_list.marker_format.is_none() {
+                    primary_list
+                        .marker_format
+                        .clone_from(&fallback_list.marker_format);
+                }
+                if primary_list.number.is_none() {
+                    primary_list.number = fallback_list.number;
+                }
+            }
+            Block::Table(table) => {
+                for row in &mut table.rows {
+                    for cell in &mut row.cells {
+                        recovered += supplement_list_markers(&mut cell.blocks, fallback);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    recovered
+}
+
+fn collect_matching_list_info<'a>(
+    blocks: &'a [Block],
+    text: &str,
+    kind: &crate::ir::ListKind,
+    level: u8,
+    matches: &mut Vec<&'a crate::ir::ListInfo>,
+) {
+    for block in blocks {
+        match block {
+            Block::Paragraph(paragraph)
+                if canonical_inlines_text(&paragraph.inlines) == text
+                    && paragraph
+                        .list
+                        .as_ref()
+                        .is_some_and(|list| &list.kind == kind && list.level == level) =>
+            {
+                matches.push(paragraph.list.as_ref().expect("list checked above"));
+            }
+            Block::Table(table) => {
+                for row in &table.rows {
+                    for cell in &row.cells {
+                        collect_matching_list_info(&cell.blocks, text, kind, level, matches);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn canonical_inlines_text(inlines: &[Inline]) -> String {
+    let mut chunks = Vec::new();
+    collect_inlines_text(inlines, &mut chunks);
+    chunks
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn push_warning_once(document: &mut Document, warning: ConversionWarning) {
@@ -390,7 +502,44 @@ fn push_text(text: Option<&str>, chunks: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{Section, Table, TableCell, TableRow};
+    use crate::ir::{ListInfo, ListKind, Section, Table, TableCell, TableRow};
+
+    #[test]
+    fn supplements_missing_list_marker_when_paragraphs_match() {
+        let mut primary_paragraph = Paragraph::from_plain_text("item".to_string());
+        primary_paragraph.list = Some(ListInfo {
+            kind: ListKind::Unordered,
+            level: 0,
+            ..Default::default()
+        });
+        let mut primary = document_with_blocks(vec![Block::Paragraph(primary_paragraph)]);
+        primary.warnings.push(ConversionWarning {
+            code: WarningCode::Unknown,
+            message: "rhwp bullet paragraph referenced missing bullet id 1; hwp-convert used default unordered list marker behavior.".to_string(),
+        });
+
+        let mut fallback_paragraph = Paragraph::from_plain_text("item".to_string());
+        fallback_paragraph.list = Some(ListInfo {
+            kind: ListKind::Unordered,
+            level: 0,
+            marker: Some("•".to_string()),
+            ..Default::default()
+        });
+        let fallback = document_with_blocks(vec![Block::Paragraph(fallback_paragraph)]);
+
+        let reconciled = reconcile(primary, fallback);
+        let Block::Paragraph(paragraph) = &reconciled.sections[0].blocks[0] else {
+            panic!("expected paragraph block");
+        };
+        assert_eq!(
+            paragraph
+                .list
+                .as_ref()
+                .and_then(|list| list.marker.as_deref()),
+            Some("•")
+        );
+        assert!(reconciled.warnings.is_empty());
+    }
 
     #[test]
     fn selects_structurally_richer_fallback_when_text_matches() {

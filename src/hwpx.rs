@@ -2688,14 +2688,17 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
                 };
                 end
             };
-            push_paragraph_text_fragment_as_block(
+            let pushed_fragment = push_paragraph_text_fragment_as_block(
                 &mut blocks,
                 &paragraph_xml[fragment_start..tag.start],
-                pending_list.take(),
+                pending_list.clone(),
                 paragraph_role.clone(),
                 paragraph_style.clone(),
                 context,
             );
+            if pushed_fragment {
+                pending_list = None;
+            }
 
             let control_xml = &paragraph_xml[tag.start..control_end];
             if let Some(layout_kind) = hwpx_layout_only_control_kind(control_xml) {
@@ -2730,14 +2733,17 @@ fn extract_blocks_from_paragraph_xml_with_metadata(
             end
         };
 
-        push_paragraph_text_fragment_as_block(
+        let pushed_fragment = push_paragraph_text_fragment_as_block(
             &mut blocks,
             &paragraph_xml[fragment_start..tag.start],
-            pending_list.take(),
+            pending_list.clone(),
             paragraph_role.clone(),
             paragraph_style.clone(),
             context,
         );
+        if pushed_fragment {
+            pending_list = None;
+        }
 
         if object_kind == Some("table") {
             let table_xml = &paragraph_xml[tag.start..object_end];
@@ -6286,6 +6292,35 @@ mod tests {
             Some((&ListKind::Ordered, Some(5), Some("5")))
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_unordered_marker_from_official_hwpx_list_fixture() -> Result<(), Box<dyn Error>> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/list/input.hwpx");
+        let bytes = fs::read(path)?;
+        let document = read_section_document_from_archive(&bytes)?;
+        let paragraph = document.sections[0]
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                Block::Paragraph(paragraph) => Some(paragraph),
+                _ => None,
+            })
+            .expect("list fixture paragraph");
+
+        assert_eq!(
+            paragraph.list.as_ref().map(|list| &list.kind),
+            Some(&ListKind::Unordered),
+            "fallback paragraph: {paragraph:#?}"
+        );
+        assert_eq!(
+            paragraph
+                .list
+                .as_ref()
+                .and_then(|list| list.marker.as_deref()),
+            Some("•")
+        );
         Ok(())
     }
 
