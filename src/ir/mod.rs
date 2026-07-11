@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// v12: added `TableCellStyle` per-side borders (`Border`/`BorderStyle`).
 /// Additive and `#[serde(default)]`.
 /// v13: added `Image::{border, grayscale}`. Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 15;
+pub const IR_VERSION: u16 = 18;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -622,6 +622,24 @@ pub struct Equation {
     pub content: Option<String>,
     pub fallback_text: Option<String>,
     pub resource_id: Option<ResourceId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_pt: Option<LengthPt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_pt: Option<LengthPt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_x: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_y: Option<LengthPx>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -639,6 +657,14 @@ pub struct Shape {
     pub kind: ShapeKind,
     pub fallback_text: Option<String>,
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_x: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_y: Option<LengthPx>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -669,6 +695,7 @@ pub struct Table {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct TableRow {
     pub cells: Vec<TableCell>,
+    pub height: Option<LengthPx>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -916,7 +943,10 @@ mod tests {
         };
 
         let table = Table {
-            rows: vec![TableRow { cells: vec![cell] }],
+            rows: vec![TableRow {
+                cells: vec![cell],
+                height: None,
+            }],
             style: TableStyle::default(),
         };
 
@@ -975,6 +1005,7 @@ mod tests {
             content: Some("E = mc^2".to_string()),
             fallback_text: Some("E = mc^2".to_string()),
             resource_id: Some(ResourceId("equation-1".to_string())),
+            ..Default::default()
         };
 
         let json = serde_json::to_string(&equation).expect("equation should serialize");
@@ -989,6 +1020,7 @@ mod tests {
             kind: ShapeKind::Rectangle,
             fallback_text: Some("boxed note".to_string()),
             description: Some("callout".to_string()),
+            ..Default::default()
         };
 
         let json = serde_json::to_string(&shape).expect("shape should serialize");

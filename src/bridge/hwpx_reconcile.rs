@@ -587,6 +587,7 @@ mod tests {
                     blocks: vec![Block::Paragraph(heading)],
                     ..Default::default()
                 }],
+                height: None,
             }],
             ..Default::default()
         })]);
@@ -670,6 +671,7 @@ mod tests {
                         ..Default::default()
                     })
                     .collect(),
+                height: None,
             }],
             ..Default::default()
         })

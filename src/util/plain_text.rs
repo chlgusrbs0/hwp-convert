@@ -342,9 +342,11 @@ mod tests {
                     rows: vec![
                         TableRow {
                             cells: vec![table_cell("cell1"), table_cell("cell2")],
+                            height: None,
                         },
                         TableRow {
                             cells: vec![table_cell("cell3"), table_cell("cell4")],
+                            height: None,
                         },
                     ],
                     style: TableStyle::default(),
@@ -553,11 +555,13 @@ mod tests {
                         content: None,
                         fallback_text: Some("x + y".to_string()),
                         resource_id: None,
+                        ..Default::default()
                     }),
                     Block::Shape(Shape {
                         kind: ShapeKind::Rectangle,
                         fallback_text: None,
                         description: Some("callout box".to_string()),
+                        ..Default::default()
                     }),
                     Block::Chart(Chart {
                         title: Some("Sales".to_string()),

@@ -1393,6 +1393,11 @@ impl<'a> BridgeContext<'a> {
                     .into_iter()
                     .map(|cell| self.map_table_cell(cell, &table.padding))
                     .collect(),
+                height: table
+                    .row_sizes
+                    .get(row_index as usize)
+                    .copied()
+                    .and_then(i16_hwp_units_to_px_option),
             });
         }
 
@@ -1416,9 +1421,6 @@ impl<'a> BridgeContext<'a> {
 
         if table.cell_spacing != 0 {
             details.push(format!("cell_spacing={}", table.cell_spacing));
-        }
-        if !table.row_sizes.is_empty() {
-            details.push(format!("row_sizes={:?}", table.row_sizes));
         }
         if !table.zones.is_empty() {
             details.push(format!("border_fill_zones={}", table.zones.len()));
@@ -1720,23 +1722,22 @@ impl<'a> BridgeContext<'a> {
 
     fn map_equation(&mut self, equation: &RhwpEquation) -> Equation {
         let content = non_empty_string(&equation.script);
-        self.add_warning_once(&format!(
-            "rhwp equation presentation metadata is not modeled; hwp-convert preserved the script fallback but omitted font_size={}, color={:#010x}, baseline={}, font_name={:?}, version={:?}, size={}x{}, offset={}/{}.",
-            equation.font_size,
-            equation.color,
-            equation.baseline,
-            equation.font_name,
-            equation.version_info,
-            equation.common.width,
-            equation.common.height,
-            equation.common.horizontal_offset,
-            equation.common.vertical_offset
-        ));
         Equation {
             kind: EquationKind::PlainText,
             fallback_text: content.clone().or_else(|| Some("[equation]".to_string())),
             content,
             resource_id: None,
+            font_size_pt: (equation.font_size > 0)
+                .then(|| LengthPt(equation.font_size as f32 / 100.0)),
+            color: color_ref_to_color_option(equation.color),
+            baseline_pt: (equation.baseline != 0)
+                .then(|| LengthPt(equation.baseline as f32 / 100.0)),
+            font_family: non_empty_string(&equation.font_name),
+            version: non_empty_string(&equation.version_info),
+            width: hwp_units_to_px_option(equation.common.width),
+            height: hwp_units_to_px_option(equation.common.height),
+            offset_x: hwp_units_to_px_option(equation.common.horizontal_offset),
+            offset_y: hwp_units_to_px_option(equation.common.vertical_offset),
         }
     }
 
@@ -1759,11 +1760,7 @@ impl<'a> BridgeContext<'a> {
             })
             .unwrap_or_else(|| "drawing details unavailable".to_string());
         self.add_warning_once(&format!(
-            "rhwp shape {kind:?} geometry and presentation are not modeled; hwp-convert preserved only kind/text fallback (size={}x{}, offset={}/{}, z_order={}, {drawing_details}).",
-            common.width,
-            common.height,
-            common.horizontal_offset,
-            common.vertical_offset,
+            "rhwp shape {kind:?} presentation is not fully modeled; hwp-convert preserved kind/text and basic size/offset (z_order={}, {drawing_details}).",
             common.z_order
         ));
         let description = non_empty_string(&shape.common().description);
@@ -1796,6 +1793,10 @@ impl<'a> BridgeContext<'a> {
                 Some(fallback_parts.join("\n"))
             },
             description,
+            width: hwp_units_to_px_option(common.width),
+            height: hwp_units_to_px_option(common.height),
+            offset_x: hwp_units_to_px_option(common.horizontal_offset),
+            offset_y: hwp_units_to_px_option(common.vertical_offset),
         }
     }
 
@@ -1813,6 +1814,7 @@ impl<'a> BridgeContext<'a> {
                         kind: ShapeKind::Unknown,
                         fallback_text: Some(description.clone()),
                         description: Some(description),
+                        ..Default::default()
                     }));
                 }
 
@@ -3582,6 +3584,7 @@ mod tests {
         assert_eq!(table.style.margin_right, Some(LengthPx(200.0 / 75.0)));
         assert_eq!(table.style.margin_top, Some(LengthPx(4.0)));
         assert_eq!(table.style.margin_bottom, Some(LengthPx(400.0 / 75.0)));
+        assert_eq!(table.rows[0].height, Some(LengthPx(20.0)));
 
         let warning = bridged
             .warnings
@@ -3590,7 +3593,6 @@ mod tests {
             .expect("table layout warning");
         for expected in [
             "cell_spacing=75",
-            "row_sizes=[1500]",
             "border_fill_zones=1",
             "page_break=RowBreak",
             "repeat_header=true",
@@ -4049,6 +4051,10 @@ mod tests {
         let shape = ShapeObject::Rectangle(RhwpRectangleShape {
             common: rhwp::model::shape::CommonObjAttr {
                 description: "callout".to_string(),
+                width: 3600,
+                height: 1800,
+                horizontal_offset: 300,
+                vertical_offset: 400,
                 ..Default::default()
             },
             drawing: RhwpDrawingObjAttr {
@@ -4081,6 +4087,10 @@ mod tests {
                 assert_eq!(shape.kind, ShapeKind::Rectangle);
                 assert_eq!(shape.description.as_deref(), Some("callout"));
                 assert_eq!(shape.fallback_text.as_deref(), Some("callout\nshape text"));
+                assert_eq!(shape.width, Some(LengthPx(48.0)));
+                assert_eq!(shape.height, Some(LengthPx(24.0)));
+                assert_eq!(shape.offset_x, Some(LengthPx(4.0)));
+                assert_eq!(shape.offset_y, Some(LengthPx(400.0 / 75.0)));
             }
             other => panic!("expected shape block, got {other:?}"),
         }
@@ -4091,15 +4101,13 @@ mod tests {
                 .any(|warning| { warning.message.contains("shape text box paragraphs") })
         );
         assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("shape Rectangle geometry")
-                && warning
-                    .message
-                    .contains("preserved only kind/text fallback")
+            warning.message.contains("shape Rectangle presentation")
+                && warning.message.contains("basic size/offset")
         }));
     }
 
     #[test]
-    fn warns_when_equation_presentation_metadata_is_omitted() {
+    fn preserves_equation_presentation_metadata() {
         let equation = RhwpEquation {
             common: RhwpCommonObjAttr {
                 width: 7500,
@@ -4134,12 +4142,22 @@ mod tests {
             Block::Equation(equation)
                 if equation.content.as_deref() == Some("x over y")
                     && equation.fallback_text.as_deref() == Some("x over y")
+                    && equation.font_size_pt == Some(LengthPt(12.0))
+                    && equation.color == Some(Color { r: 0x33, g: 0x22, b: 0x11, a: 255 })
+                    && equation.baseline_pt == Some(LengthPt(-0.1))
+                    && equation.font_family.as_deref() == Some("HancomEQN")
+                    && equation.version.as_deref() == Some("60")
+                    && equation.width == Some(LengthPx(100.0))
+                    && equation.height == Some(LengthPx(20.0))
+                    && equation.offset_x == Some(LengthPx(4.0))
+                    && equation.offset_y == Some(LengthPx(400.0 / 75.0))
         ));
-        assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("equation presentation metadata")
-                && warning.message.contains("font_size=1200")
-                && warning.message.contains("size=7500x1500")
-        }));
+        assert!(
+            !bridged
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("equation presentation metadata"))
+        );
     }
 
     #[test]

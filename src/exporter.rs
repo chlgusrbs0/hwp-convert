@@ -1117,12 +1117,48 @@ fn render_html_note_ref(note_id: &NoteId, kind: NoteKind) -> String {
 
 fn render_html_equation(equation: &Equation) -> String {
     let content = render_html_fallback_text(&equation_display_text(equation));
-    format!("<p><span class=\"equation\">{content}</span></p>\n")
+    let mut declarations = Vec::new();
+    if let Some(font_size) = equation.font_size_pt {
+        declarations.push(format!("font-size: {}pt", font_size.0));
+    }
+    if let Some(color) = equation.color {
+        declarations.push(format!("color: {}", render_css_color(color)));
+    }
+    if let Some(baseline) = equation.baseline_pt {
+        declarations.push(format!("vertical-align: {}pt", baseline.0));
+    }
+    if let Some(font_family) = &equation.font_family
+        && let Some(font_family) = sanitize_css_font_family(font_family)
+    {
+        declarations.push(format!("font-family: {font_family}"));
+    }
+    if let Some(width) = equation.width {
+        declarations.push(format!("width: {}px", width.0));
+    }
+    if let Some(height) = equation.height {
+        declarations.push(format!("height: {}px", height.0));
+    }
+    let style = render_html_style_attr(&declarations.join("; "));
+    format!("<p><span class=\"equation\"{style}>{content}</span></p>\n")
 }
 
 fn render_html_shape(shape: &Shape) -> String {
     let content = render_html_fallback_text(&shape_display_text(shape));
-    format!("<p><span class=\"shape-placeholder\">{content}</span></p>\n")
+    let mut declarations = Vec::new();
+    if let Some(width) = shape.width {
+        declarations.push(format!("width: {}px", width.0));
+    }
+    if let Some(height) = shape.height {
+        declarations.push(format!("height: {}px", height.0));
+    }
+    if let Some(offset_x) = shape.offset_x {
+        declarations.push(format!("margin-left: {}px", offset_x.0));
+    }
+    if let Some(offset_y) = shape.offset_y {
+        declarations.push(format!("margin-top: {}px", offset_y.0));
+    }
+    let style = render_html_style_attr(&declarations.join("; "));
+    format!("<p><span class=\"shape-placeholder\"{style}>{content}</span></p>\n")
 }
 
 fn render_html_chart(chart: &Chart) -> String {
@@ -1676,7 +1712,12 @@ fn render_html_table_row(
     resources: &ResourceStore,
     image_asset_prefix: &str,
 ) -> String {
-    let mut html = String::from("<tr>\n");
+    let style = row
+        .height
+        .map(|height| format!("height: {}px", height.0))
+        .map(|style| render_html_style_attr(&style))
+        .unwrap_or_default();
+    let mut html = format!("<tr{style}>\n");
 
     for cell in &row.cells {
         html.push_str(&render_html_table_cell(cell, resources, image_asset_prefix));
@@ -2870,6 +2911,7 @@ mod tests {
                         })],
                         style: TableCellStyle::default(),
                     }],
+                    height: None,
                 }],
                 style: TableStyle::default(),
             }),
@@ -3849,6 +3891,7 @@ mod tests {
                     },
                     ..Default::default()
                 }],
+                height: Some(LengthPx(36.0)),
             }],
             style: TableStyle::default(),
         })]);
@@ -3861,6 +3904,7 @@ mod tests {
         assert!(html.contains("height: 20px"));
         assert!(html.contains("padding-left: 2px"));
         assert!(html.contains("border-top: 2px solid #112233"));
+        assert!(html.contains("<tr style=\"height: 36px\">"));
         assert!(!html.contains("<td"));
     }
 
@@ -4442,6 +4486,7 @@ mod tests {
             content: Some(r"\frac{a}{b}".to_string()),
             fallback_text: None,
             resource_id: None,
+            ..Default::default()
         })]);
 
         let markdown = render_markdown_document(&document);
@@ -4457,11 +4502,13 @@ mod tests {
                 content: Some("x + y".to_string()),
                 fallback_text: None,
                 resource_id: None,
+                ..Default::default()
             }),
             Block::Shape(Shape {
                 kind: ShapeKind::Rectangle,
                 fallback_text: None,
                 description: Some("callout box".to_string()),
+                ..Default::default()
             }),
             Block::Chart(Chart {
                 title: Some("Sales".to_string()),
@@ -4603,9 +4650,11 @@ mod tests {
             rows: vec![
                 TableRow {
                     cells: vec![table_cell("cell1"), table_cell("cell2")],
+                    height: None,
                 },
                 TableRow {
                     cells: vec![table_cell("cell3"), table_cell("cell4")],
+                    height: None,
                 },
             ],
             style: TableStyle::default(),

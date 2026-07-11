@@ -2289,7 +2289,19 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
         let row_xml = &table_xml[tag.start..row_end];
         let cells = extract_table_cells_from_row_xml(row_xml, context, &table_padding);
         if !cells.is_empty() {
-            rows.push((hwpx_table_row_addr(row_xml), next_order, TableRow { cells }));
+            rows.push((
+                hwpx_table_row_addr(row_xml),
+                next_order,
+                TableRow {
+                    cells,
+                    height: hwpx_table_row_hwp_units_to_px_with_warning(
+                        row_xml,
+                        HWPX_HEIGHT_ATTRIBUTES,
+                        "height",
+                        context,
+                    ),
+                },
+            ));
             next_order += 1;
         }
         cursor = row_end;
@@ -2394,6 +2406,29 @@ fn hwpx_table_row_addr(row_xml: &str) -> Option<u32> {
         }
         None
     })
+}
+
+fn hwpx_table_row_hwp_units_to_px_with_warning(
+    row_xml: &str,
+    attribute_names: &[&str],
+    label: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<LengthPx> {
+    let value = root_or_direct_child_xml_attribute_value_any(
+        row_xml,
+        "tr",
+        &["trPr", "sz", "size", "extent"],
+        attribute_names,
+    )?;
+    parse_trimmed::<u32>(value)
+        .and_then(hwp_units_to_px_option)
+        .or_else(|| {
+            context.add_warning_once(&format!(
+                "HWPX table row referenced unsupported {label} value `{}`; hwp-convert omitted that row height.",
+                value.trim()
+            ));
+            None
+        })
 }
 
 fn extract_table_blocks_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) -> Vec<Block> {
@@ -2959,6 +2994,7 @@ fn extract_hwpx_equation_from_xml(
         fallback_text: content.clone().or_else(|| Some("[equation]".to_string())),
         content,
         resource_id: None,
+        ..Default::default()
     }
 }
 
@@ -2978,6 +3014,7 @@ fn extract_hwpx_shape_from_xml(
         kind: hwpx_shape_kind(tag_name),
         fallback_text,
         description,
+        ..Default::default()
     }
 }
 
@@ -5176,7 +5213,7 @@ mod tests {
                 <hp:run><hp:t>table lead</hp:t></hp:run>
                 <hp:ctrl>
                   <hp:tbl>
-                    <hp:tr>
+                    <hp:tr h="1500">
                       <hp:tc>
                         <hp:cellSpan rowSpan="1" colSpan="2"/>
                         <hp:subList>
@@ -5218,6 +5255,7 @@ mod tests {
         match &blocks[2] {
             Block::Table(table) => {
                 assert_eq!(table.rows.len(), 1);
+                assert_eq!(table.rows[0].height, Some(LengthPx(20.0)));
                 assert_eq!(table.rows[0].cells.len(), 2);
                 assert_eq!(table.rows[0].cells[0].col_span, 2);
                 assert_eq!(table.rows[0].cells[1].row_span, 2);
