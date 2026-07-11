@@ -2310,10 +2310,60 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
         HWPX_BORDER_FILL_ID_REF_ATTRIBUTES,
     )
     .and_then(|border_fill_id| context.border_fill_background_color(border_fill_id));
+    let width = hwpx_table_hwp_units_to_px_with_warning(
+        table_xml,
+        &["sz", "size", "extent"],
+        HWPX_WIDTH_ATTRIBUTES,
+        "width",
+        context,
+    );
+    let height = hwpx_table_hwp_units_to_px_with_warning(
+        table_xml,
+        &["sz", "size", "extent"],
+        HWPX_HEIGHT_ATTRIBUTES,
+        "height",
+        context,
+    );
+    let margin_top = hwpx_table_hwp_units_to_px_with_warning(
+        table_xml,
+        &["outMargin"],
+        HWPX_MARGIN_TOP_ATTRIBUTES,
+        "top outer margin",
+        context,
+    );
+    let margin_right = hwpx_table_hwp_units_to_px_with_warning(
+        table_xml,
+        &["outMargin"],
+        HWPX_MARGIN_RIGHT_ATTRIBUTES,
+        "right outer margin",
+        context,
+    );
+    let margin_bottom = hwpx_table_hwp_units_to_px_with_warning(
+        table_xml,
+        &["outMargin"],
+        HWPX_MARGIN_BOTTOM_ATTRIBUTES,
+        "bottom outer margin",
+        context,
+    );
+    let margin_left = hwpx_table_hwp_units_to_px_with_warning(
+        table_xml,
+        &["outMargin"],
+        HWPX_MARGIN_LEFT_ATTRIBUTES,
+        "left outer margin",
+        context,
+    );
 
     Some(Table {
         rows,
-        style: TableStyle { background_color },
+        style: TableStyle {
+            background_color,
+            width,
+            height,
+            margin_top,
+            margin_right,
+            margin_bottom,
+            margin_left,
+        },
     })
 }
 

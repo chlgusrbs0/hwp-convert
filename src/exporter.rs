@@ -1340,11 +1340,27 @@ fn render_html_paragraph_style(style: &ParagraphStyle) -> String {
 }
 
 fn render_html_table_style(style: &TableStyle) -> String {
-    style
-        .background_color
-        .map(render_css_color)
-        .map(|color| format!("background-color: {color}"))
-        .unwrap_or_default()
+    let mut declarations = Vec::new();
+    if let Some(color) = style.background_color.map(render_css_color) {
+        declarations.push(format!("background-color: {color}"));
+    }
+    if let Some(width) = style.width {
+        declarations.push(format!("width: {}px", width.0));
+    }
+    if let Some(height) = style.height {
+        declarations.push(format!("height: {}px", height.0));
+    }
+    for (property, value) in [
+        ("margin-top", style.margin_top),
+        ("margin-right", style.margin_right),
+        ("margin-bottom", style.margin_bottom),
+        ("margin-left", style.margin_left),
+    ] {
+        if let Some(value) = value {
+            declarations.push(format!("{property}: {}px", value.0));
+        }
+    }
+    declarations.join("; ")
 }
 
 fn render_html_table_cell_style(style: &TableCellStyle) -> String {

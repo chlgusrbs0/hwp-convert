@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// v12: added `TableCellStyle` per-side borders (`Border`/`BorderStyle`).
 /// Additive and `#[serde(default)]`.
 /// v13: added `Image::{border, grayscale}`. Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 14;
+pub const IR_VERSION: u16 = 15;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -697,6 +697,12 @@ impl Default for TableCell {
 #[serde(default)]
 pub struct TableStyle {
     pub background_color: Option<Color>,
+    pub width: Option<LengthPx>,
+    pub height: Option<LengthPx>,
+    pub margin_top: Option<LengthPx>,
+    pub margin_right: Option<LengthPx>,
+    pub margin_bottom: Option<LengthPx>,
+    pub margin_left: Option<LengthPx>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

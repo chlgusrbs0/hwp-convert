@@ -1401,6 +1401,12 @@ impl<'a> BridgeContext<'a> {
             style: TableStyle {
                 background_color: self
                     .border_fill_background_color(table.border_fill_id, "table background"),
+                width: hwp_units_to_px_option(table.common.width),
+                height: hwp_units_to_px_option(table.common.height),
+                margin_top: i16_hwp_units_to_px_option(table.outer_margin_top),
+                margin_right: i16_hwp_units_to_px_option(table.outer_margin_right),
+                margin_bottom: i16_hwp_units_to_px_option(table.outer_margin_bottom),
+                margin_left: i16_hwp_units_to_px_option(table.outer_margin_left),
             },
         }
     }
@@ -1423,13 +1429,13 @@ impl<'a> BridgeContext<'a> {
         if table.repeat_header {
             details.push("repeat_header=true".to_string());
         }
-        if table.outer_margin_left != 0
-            || table.outer_margin_right != 0
-            || table.outer_margin_top != 0
-            || table.outer_margin_bottom != 0
+        if table.outer_margin_left < 0
+            || table.outer_margin_right < 0
+            || table.outer_margin_top < 0
+            || table.outer_margin_bottom < 0
         {
             details.push(format!(
-                "outer_margins={}/{}/{}/{}",
+                "negative_outer_margins={}/{}/{}/{}",
                 table.outer_margin_left,
                 table.outer_margin_right,
                 table.outer_margin_top,
@@ -1438,9 +1444,7 @@ impl<'a> BridgeContext<'a> {
         }
 
         let common = &table.common;
-        if common.width != 0
-            || common.height != 0
-            || common.horizontal_offset != 0
+        if common.horizontal_offset != 0
             || common.vertical_offset != 0
             || common.z_order != 0
             || common.margin.left != 0
@@ -1455,9 +1459,7 @@ impl<'a> BridgeContext<'a> {
             || common.horz_align != rhwp::model::shape::HorzAlign::Left
         {
             details.push(format!(
-                "layout=size:{}x{},offset:{}/{},z:{},treat_as_char:{},wrap:{:?}",
-                common.width,
-                common.height,
+                "layout=offset:{}/{},z:{},treat_as_char:{},wrap:{:?}",
                 common.horizontal_offset,
                 common.vertical_offset,
                 common.z_order,
@@ -3520,7 +3522,7 @@ mod tests {
     }
 
     #[test]
-    fn warns_when_table_layout_properties_are_omitted() {
+    fn preserves_table_size_and_outer_margins_and_warns_for_remaining_layout() {
         let table = RhwpTable {
             row_count: 1,
             col_count: 1,
@@ -3571,6 +3573,16 @@ mod tests {
 
         let bridged = BridgeContext::new(&document).into_document();
 
+        let Block::Table(table) = &bridged.sections[0].blocks[0] else {
+            panic!("expected table block");
+        };
+        assert_eq!(table.style.width, Some(LengthPx(100.0)));
+        assert_eq!(table.style.height, Some(LengthPx(40.0)));
+        assert_eq!(table.style.margin_left, Some(LengthPx(100.0 / 75.0)));
+        assert_eq!(table.style.margin_right, Some(LengthPx(200.0 / 75.0)));
+        assert_eq!(table.style.margin_top, Some(LengthPx(4.0)));
+        assert_eq!(table.style.margin_bottom, Some(LengthPx(400.0 / 75.0)));
+
         let warning = bridged
             .warnings
             .iter()
@@ -3582,8 +3594,6 @@ mod tests {
             "border_fill_zones=1",
             "page_break=RowBreak",
             "repeat_header=true",
-            "outer_margins=100/200/300/400",
-            "layout=size:7500x3000",
         ] {
             assert!(
                 warning.message.contains(expected),
