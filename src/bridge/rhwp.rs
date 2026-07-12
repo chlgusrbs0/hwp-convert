@@ -1607,6 +1607,10 @@ impl<'a> BridgeContext<'a> {
                 crop: map_picture_crop(picture),
                 width: hwp_units_to_px_option(picture.common.width),
                 height: hwp_units_to_px_option(picture.common.height),
+                original_width: hwp_units_to_px_option(picture.shape_attr.original_width),
+                original_height: hwp_units_to_px_option(picture.shape_attr.original_height),
+                current_width: hwp_units_to_px_option(picture.shape_attr.current_width),
+                current_height: hwp_units_to_px_option(picture.shape_attr.current_height),
                 border: map_image_border(picture),
                 grayscale: matches!(
                     picture.image_attr.effect,
@@ -4724,6 +4728,10 @@ mod tests {
             shape_attr: rhwp::model::shape::ShapeComponentAttr {
                 horz_flip: true,
                 rotation_angle: 90,
+                original_width: 30000,
+                original_height: 15000,
+                current_width: 22500,
+                current_height: 11250,
                 render_b: 0.25,
                 render_c: -0.25,
                 ..Default::default()
@@ -4775,6 +4783,10 @@ mod tests {
         assert_eq!(image.brightness, Some(10));
         assert_eq!(image.contrast, Some(-5));
         assert_eq!(image.effect, Some(IrImageEffect::Grayscale));
+        assert_eq!(image.original_width, Some(LengthPx(400.0)));
+        assert_eq!(image.original_height, Some(LengthPx(200.0)));
+        assert_eq!(image.current_width, Some(LengthPx(300.0)));
+        assert_eq!(image.current_height, Some(LengthPx(150.0)));
         assert_eq!(
             image.placement,
             Some(ImagePlacement {

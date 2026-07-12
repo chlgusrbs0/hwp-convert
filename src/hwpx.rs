@@ -3278,6 +3278,34 @@ fn extract_hwpx_image_from_pic_xml(
             "height",
             context,
         ),
+        original_width: hwpx_picture_component_dimension(
+            pic_xml,
+            "orgSz",
+            &["width", "w"],
+            "original width",
+            context,
+        ),
+        original_height: hwpx_picture_component_dimension(
+            pic_xml,
+            "orgSz",
+            &["height", "h"],
+            "original height",
+            context,
+        ),
+        current_width: hwpx_picture_component_dimension(
+            pic_xml,
+            "curSz",
+            &["width", "w"],
+            "current width",
+            context,
+        ),
+        current_height: hwpx_picture_component_dimension(
+            pic_xml,
+            "curSz",
+            &["height", "h"],
+            "current height",
+            context,
+        ),
         border: hwpx_object_border(pic_xml, "picture", context),
         grayscale,
         effect,
@@ -4072,6 +4100,26 @@ fn hwpx_object_dimension_to_px_with_warning(
             attribute_name,
         )
     })?;
+    parse_trimmed::<u32>(value)
+        .and_then(hwp_units_to_px_option)
+        .or_else(|| {
+            context.add_warning_once(&format!(
+                "HWPX picture referenced unsupported {label} value `{}`; hwp-convert omitted that picture dimension.",
+                value.trim()
+            ));
+            None
+        })
+}
+
+fn hwpx_picture_component_dimension(
+    pic_xml: &str,
+    child_name: &str,
+    attribute_names: &[&str],
+    label: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<LengthPx> {
+    let tag = hwpx_direct_child_tag(pic_xml, child_name)?;
+    let value = xml_attribute_value_any(tag.raw, attribute_names)?;
     parse_trimmed::<u32>(value)
         .and_then(hwp_units_to_px_option)
         .or_else(|| {
@@ -8338,6 +8386,8 @@ mod tests {
               <hp:caption><hp:pic><hp:rotationInfo angle="1234"/></hp:pic></hp:caption>
               <hp:flip horizontalFlip="1" verticalFlip="false"/>
               <hp:rotationInfo rotateAngle="9000"/>
+              <hp:orgSz width="30000" height="15000"/>
+              <hp:curSz w="22500" h="11250"/>
               <hc:img binaryItemIDRef="image1"/>
               <hp:imgClip l="10" r="900" t="20" b="700"/>
               <hp:imgDim dimWidth="1000" dimHeight="800"/>
@@ -8354,6 +8404,10 @@ mod tests {
         assert_eq!(image.flip_horizontal, Some(true));
         assert_eq!(image.flip_vertical, None);
         assert_eq!(image.rotation_degrees, Some(90.0));
+        assert_eq!(image.original_width, Some(LengthPx(400.0)));
+        assert_eq!(image.original_height, Some(LengthPx(200.0)));
+        assert_eq!(image.current_width, Some(LengthPx(300.0)));
+        assert_eq!(image.current_height, Some(LengthPx(150.0)));
         assert_eq!(
             image.placement,
             Some(ImagePlacement {

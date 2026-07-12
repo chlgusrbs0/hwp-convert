@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// v25: added `TableStyle::cell_spacing`. Additive and `#[serde(default)]`.
 /// v26: added `Image` padding fields. Additive and `#[serde(default)]`.
 /// v27: added `Image::caption_placement`. Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 33;
+pub const IR_VERSION: u16 = 34;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -619,6 +619,14 @@ pub struct Image {
     pub width: Option<LengthPx>,
     /// Display hint in px until Layout IR defines document-space units.
     pub height: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_width: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_height: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_width: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_height: Option<LengthPx>,
     /// Uniform border around the image, if any.
     #[serde(default)]
     pub border: Option<Border>,
@@ -1135,6 +1143,10 @@ mod tests {
         assert!(!image.grayscale);
         assert_eq!(image.effect, None);
         assert_eq!(image.placement, None);
+        assert_eq!(image.original_width, None);
+        assert_eq!(image.original_height, None);
+        assert_eq!(image.current_width, None);
+        assert_eq!(image.current_height, None);
         assert_eq!(image.crop, None);
         assert_eq!(image.brightness, None);
         assert_eq!(image.contrast, None);

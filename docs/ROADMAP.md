@@ -275,6 +275,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - 이미지 효과 IR 확장: `IR_VERSION` 30 → 31. 일반 회색조·임계 흑백·Pattern8x8을 구분해 보존하고, exporter의 근사 또는 미적용 여부를 warning으로 남긴다.
 - 이미지 배치 IR 확장: `IR_VERSION` 31 → 32. HWP/HWPX의 글자처럼 취급, 텍스트 감싸기, 가로·세로 기준·정렬·오프셋을 보존한다. semantic exporter는 페이지 좌표계를 임의로 근사하지 않고 선형화 warning을 유지한다.
 - 이미지 배치 부가 정보 확장: `IR_VERSION` 32 → 33. HWP/HWPX Z-order와 바깥 여백, HWPX `flowWithText`·`allowOverlap`, HWP 쪽 나눔 방지를 보존한다.
+- 이미지 변형 크기 IR 확장: `IR_VERSION` 33 → 34. HWP/HWPX 원본 크기와 현재 변형 크기를 표시 크기와 별도로 보존해 crop·변환 계산 근거를 유지한다.
 
 ## 완료 선언 기준
 
