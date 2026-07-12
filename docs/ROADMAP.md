@@ -264,6 +264,15 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - 도형 단순 스타일 IR 확장: `IR_VERSION` 21 → 22. HWP 도형의 표준 선종류·굵기·색상과 패턴 없는 단색 채우기를 보존하고 HTML CSS로 출력한다. 패턴·이미지·그라데이션 채우기와 그림자는 계속 warning으로 남긴다.
 - 도형 변환 IR 확장: `IR_VERSION` 22 → 23. HWP/HWPX 도형의 회전과 가로·세로 반전을 보존하고 HTML CSS transform으로 출력한다. 이 과정에서 HWP 그림 회전각도 rHWP renderer 기준의 도 단위로 바로잡았다.
 - 도형 텍스트 상자 IR 확장: `IR_VERSION` 23 → 24. HWP 도형 텍스트 상자의 안쪽 여백과 가운데·아래 세로 정렬을 보존하고 HTML box CSS로 출력한다. HWPX 도형 텍스트 상자 속성은 fixture 검증 전까지 미매핑이다.
+- HWPX 도형 기본 표시 보강: OWPML `AbstractShapeObjectType`의 `sz`/`pos`를 기준으로 도형 너비·높이와 X/Y 오프셋을 복구하고, `AbstractDrawingObjectType`의 `lineShape`, `fillBrush`, `drawText`에서 표준 테두리·단색 채우기·텍스트 상자 여백과 세로 정렬을 복구한다. 기존 Shape IR 필드 매핑이므로 `IR_VERSION`은 유지한다.
+- HWPX 표 페이지 속성 보강: 공식 OWPML 값 `repeatHeader`와 `pageBreak=TABLE/CELL/NONE`을 기존 Table IR에 매핑한다. `TABLE`은 행 단위 분할로 보존하며 호환 별칭 `ROW/ROW_BREAK`도 허용한다.
+- 표 셀 간격 IR 확장: `IR_VERSION` 24 → 25. HWP/HWPX `cell_spacing`/`cellSpacing`을 보존하고 HTML `border-spacing`으로 출력한다.
+- 이미지 안쪽 여백 IR 확장: `IR_VERSION` 25 → 26. HWP `Picture.padding`과 HWPX `inMargin`을 보존하고 HTML 이미지 padding으로 출력한다.
+- 이미지 캡션 배치 IR 확장: `IR_VERSION` 26 → 27. HWP/HWPX 이미지 캡션의 왼쪽·오른쪽·위·아래 방향을 보존하고 HTML 순서와 좌우 배치에 반영한다.
+- 이미지 crop IR 확장: `IR_VERSION` 27 → 28. HWP/HWPX 원본 이미지의 자르기 사각형과 HWPX 원본 크기를 보존한다. 원본 크기가 명확한 HWPX crop은 HTML에 반영하고, 적용할 수 없는 출력은 원본 바이트와 warning을 유지한다.
+- 이미지 조정값 IR 확장: `IR_VERSION` 28 → 29. HWP/HWPX 밝기·대비 원시 값을 보존한다. exporter별 임의 근사는 하지 않고 미적용 warning을 유지한다.
+- HWPX 이미지 투명도 IR 확장: `IR_VERSION` 29 → 30. 표준 `alpha`와 호환 `opacity`의 반대 의미를 구분해 불투명도로 정규화하고 HTML에 반영한다.
+- 이미지 효과 IR 확장: `IR_VERSION` 30 → 31. 일반 회색조·임계 흑백·Pattern8x8을 구분해 보존하고, exporter의 근사 또는 미적용 여부를 warning으로 남긴다.
 
 ## 완료 선언 기준
 

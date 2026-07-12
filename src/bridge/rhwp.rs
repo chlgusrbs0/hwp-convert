@@ -37,13 +37,14 @@ use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_r
 
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
-    Block, Border, BorderStyle, Color, ConversionWarning, Document, Equation, EquationKind,
-    HeaderFooter, HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt, LengthPx, Link,
-    ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore,
-    Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, Resource, ResourceId,
-    ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell,
-    TableCellStyle, TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle,
-    TextStyleId, UnknownInline, VerticalAlign, WarningCode,
+    Block, Border, BorderStyle, CaptionPlacement, Color, ConversionWarning, Document, Equation,
+    EquationKind, HeaderFooter, HeaderFooterPlacement, Image, ImageCrop,
+    ImageEffect as IrImageEffect, ImageResource, Inline, LengthPt, LengthPx, Link, ListInfo,
+    ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore, Paragraph,
+    ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, Resource, ResourceId, ResourceStore,
+    Section, Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell, TableCellStyle,
+    TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle, TextStyleId,
+    UnknownInline, VerticalAlign, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1412,6 +1413,7 @@ impl<'a> BridgeContext<'a> {
                 margin_right: i16_hwp_units_to_px_option(table.outer_margin_right),
                 margin_bottom: i16_hwp_units_to_px_option(table.outer_margin_bottom),
                 margin_left: i16_hwp_units_to_px_option(table.outer_margin_left),
+                cell_spacing: i16_hwp_units_to_px_option(table.cell_spacing),
                 repeat_header: table.repeat_header,
                 page_break: match table.page_break {
                     rhwp::model::table::TablePageBreak::None => None,
@@ -1425,8 +1427,8 @@ impl<'a> BridgeContext<'a> {
     fn warn_unmodeled_table_properties(&mut self, table: &RhwpTable) {
         let mut details = Vec::new();
 
-        if table.cell_spacing != 0 {
-            details.push(format!("cell_spacing={}", table.cell_spacing));
+        if table.cell_spacing < 0 {
+            details.push(format!("negative_cell_spacing={}", table.cell_spacing));
         }
         if !table.zones.is_empty() {
             details.push(format!("border_fill_zones={}", table.zones.len()));
@@ -1583,6 +1585,15 @@ impl<'a> BridgeContext<'a> {
 
     fn map_picture_block(&mut self, picture: &Picture) -> Block {
         self.warn_unsupported_picture_transform(picture);
+        let caption_placement = picture
+            .caption
+            .as_ref()
+            .map(|caption| match caption.direction {
+                RhwpCaptionDirection::Left => CaptionPlacement::Left,
+                RhwpCaptionDirection::Right => CaptionPlacement::Right,
+                RhwpCaptionDirection::Top => CaptionPlacement::Top,
+                RhwpCaptionDirection::Bottom => CaptionPlacement::Bottom,
+            });
 
         match self.ensure_image_resource(picture.image_attr.bin_data_id) {
             Some(resource_id) => Block::Image(Image {
@@ -1591,6 +1602,8 @@ impl<'a> BridgeContext<'a> {
                 caption: self.caption_plain_text(
                     picture.caption.as_ref().map(|caption| &caption.paragraphs),
                 ),
+                caption_placement,
+                crop: map_picture_crop(picture),
                 width: hwp_units_to_px_option(picture.common.width),
                 height: hwp_units_to_px_option(picture.common.height),
                 border: map_image_border(picture),
@@ -1598,10 +1611,25 @@ impl<'a> BridgeContext<'a> {
                     picture.image_attr.effect,
                     RhwpImageEffect::GrayScale | RhwpImageEffect::BlackWhite
                 ),
+                effect: match picture.image_attr.effect {
+                    RhwpImageEffect::RealPic => None,
+                    RhwpImageEffect::GrayScale => Some(IrImageEffect::Grayscale),
+                    RhwpImageEffect::BlackWhite => Some(IrImageEffect::BlackWhite),
+                    RhwpImageEffect::Pattern8x8 => Some(IrImageEffect::Pattern8x8),
+                },
+                brightness: (picture.image_attr.brightness != 0)
+                    .then_some(i32::from(picture.image_attr.brightness)),
+                contrast: (picture.image_attr.contrast != 0)
+                    .then_some(i32::from(picture.image_attr.contrast)),
+                opacity: None,
                 rotation_degrees: (picture.shape_attr.rotation_angle != 0)
                     .then_some(picture.shape_attr.rotation_angle as f32),
                 flip_horizontal: picture.shape_attr.horz_flip.then_some(true),
                 flip_vertical: picture.shape_attr.vert_flip.then_some(true),
+                padding_top: i16_hwp_units_to_px_option(picture.padding.top),
+                padding_right: i16_hwp_units_to_px_option(picture.padding.right),
+                padding_bottom: i16_hwp_units_to_px_option(picture.padding.bottom),
+                padding_left: i16_hwp_units_to_px_option(picture.padding.left),
             }),
             None => {
                 self.add_warning_once(&format!(
@@ -1636,10 +1664,23 @@ impl<'a> BridgeContext<'a> {
                 "rhwp picture BlackWhite effect was represented as a grayscale approximation because Image IR does not distinguish threshold black-and-white.",
             );
         }
+        if picture.image_attr.effect == RhwpImageEffect::Pattern8x8 {
+            self.add_warning_once(
+                "rhwp picture Pattern8x8 effect was preserved in Image IR; semantic exporters currently use the unfiltered source bytes.",
+            );
+        }
 
-        if !picture_crop_is_empty(picture) {
+        if map_picture_crop(picture).is_some() {
+            self.add_warning_once(&format!(
+                "rhwp picture crop ({}/{}/{}/{}) was preserved in Image IR; semantic image exporters currently use the uncropped source bytes.",
+                picture.crop.left,
+                picture.crop.top,
+                picture.crop.right,
+                picture.crop.bottom
+            ));
+        } else if !picture_crop_is_empty(picture) {
             details.push(format!(
-                "crop={}/{}/{}/{}",
+                "invalid_crop={}/{}/{}/{}",
                 picture.crop.left, picture.crop.top, picture.crop.right, picture.crop.bottom
             ));
         }
@@ -1674,28 +1715,22 @@ impl<'a> BridgeContext<'a> {
         }
         // GrayScale is modeled directly. BlackWhite is retained as a visible
         // grayscale approximation with the warning above.
-        if matches!(picture.image_attr.effect, RhwpImageEffect::Pattern8x8)
-            || picture.image_attr.brightness != 0
-            || picture.image_attr.contrast != 0
-        {
-            details.push(format!(
-                "image_attr=effect:{},brightness:{},contrast:{}",
-                image_effect_name(picture.image_attr.effect),
-                picture.image_attr.brightness,
-                picture.image_attr.contrast
+        if picture.image_attr.brightness != 0 || picture.image_attr.contrast != 0 {
+            self.add_warning_once(&format!(
+                "rhwp picture brightness/contrast (brightness:{},contrast:{}) was preserved in Image IR; semantic exporters currently use the unadjusted source bytes.",
+                picture.image_attr.brightness, picture.image_attr.contrast
             ));
         }
-        // border_width/border_color are now mapped to Image.border; opacity and
-        // inner padding are still unsupported.
-        if picture.border_opacity != 0
-            || picture.padding.left != 0
-            || picture.padding.right != 0
-            || picture.padding.top != 0
-            || picture.padding.bottom != 0
+        if picture.border_opacity != 0 {
+            details.push(format!("border_opacity={}", picture.border_opacity));
+        }
+        if picture.padding.left < 0
+            || picture.padding.right < 0
+            || picture.padding.top < 0
+            || picture.padding.bottom < 0
         {
             details.push(format!(
-                "border_opacity={},padding={}/{}/{}/{}",
-                picture.border_opacity,
+                "negative_padding={}/{}/{}/{}",
                 picture.padding.left,
                 picture.padding.right,
                 picture.padding.top,
@@ -3363,13 +3398,18 @@ fn picture_crop_is_empty(picture: &Picture) -> bool {
         && picture.crop.bottom == 0
 }
 
-fn image_effect_name(effect: RhwpImageEffect) -> &'static str {
-    match effect {
-        RhwpImageEffect::RealPic => "real_pic",
-        RhwpImageEffect::GrayScale => "gray_scale",
-        RhwpImageEffect::BlackWhite => "black_white",
-        RhwpImageEffect::Pattern8x8 => "pattern_8x8",
-    }
+fn map_picture_crop(picture: &Picture) -> Option<ImageCrop> {
+    let crop = picture.crop;
+    (crop.left >= 0 && crop.top >= 0 && crop.right > crop.left && crop.bottom > crop.top).then_some(
+        ImageCrop {
+            left: LengthPx(crop.left as f32 / 75.0),
+            top: LengthPx(crop.top as f32 / 75.0),
+            right: LengthPx(crop.right as f32 / 75.0),
+            bottom: LengthPx(crop.bottom as f32 / 75.0),
+            source_width: None,
+            source_height: None,
+        },
+    )
 }
 
 fn page_hide_fallback_text(page_hide: &RhwpPageHide) -> String {
@@ -3654,6 +3694,7 @@ mod tests {
         assert_eq!(table.style.margin_top, Some(LengthPx(4.0)));
         assert_eq!(table.style.margin_bottom, Some(LengthPx(400.0 / 75.0)));
         assert_eq!(table.rows[0].height, Some(LengthPx(20.0)));
+        assert_eq!(table.style.cell_spacing, Some(LengthPx(1.0)));
         assert!(table.style.repeat_header);
         assert_eq!(table.style.page_break, Some(TablePageBreak::Row));
 
@@ -3662,13 +3703,11 @@ mod tests {
             .iter()
             .find(|warning| warning.message.contains("table layout properties"))
             .expect("table layout warning");
-        for expected in ["cell_spacing=75", "border_fill_zones=1"] {
-            assert!(
-                warning.message.contains(expected),
-                "missing warning fragment {expected:?}: {}",
-                warning.message
-            );
-        }
+        assert!(
+            warning.message.contains("border_fill_zones=1"),
+            "missing border fill zone warning: {}",
+            warning.message
+        );
     }
 
     #[test]
@@ -4540,6 +4579,7 @@ mod tests {
                 ..Default::default()
             },
             caption: Some(RhwpCaption {
+                direction: RhwpCaptionDirection::Left,
                 paragraphs: vec![RhwpParagraph {
                     controls: vec![Control::Field(RhwpField {
                         field_type: RhwpFieldType::ClickHere,
@@ -4573,6 +4613,7 @@ mod tests {
         match &bridged.sections[0].blocks[0] {
             Block::Image(image) => {
                 assert_eq!(image.caption.as_deref(), Some("caption field"));
+                assert_eq!(image.caption_placement, Some(CaptionPlacement::Left));
             }
             other => panic!("expected image block, got {other:?}"),
         }
@@ -4597,7 +4638,7 @@ mod tests {
             border_color: 0x00112233,
             border_opacity: 128,
             padding: rhwp::model::Padding {
-                left: 10,
+                left: -10,
                 right: 20,
                 top: 30,
                 bottom: 40,
@@ -4645,17 +4686,42 @@ mod tests {
         assert_eq!(image.rotation_degrees, Some(90.0));
         assert_eq!(image.flip_horizontal, Some(true));
         assert_eq!(image.flip_vertical, None);
+        assert_eq!(image.brightness, Some(10));
+        assert_eq!(image.contrast, Some(-5));
+        assert_eq!(image.effect, Some(IrImageEffect::Grayscale));
+        assert_eq!(image.padding_top, Some(LengthPx(30.0 / 75.0)));
+        assert_eq!(image.padding_right, Some(LengthPx(20.0 / 75.0)));
+        assert_eq!(image.padding_bottom, Some(LengthPx(40.0 / 75.0)));
+        assert_eq!(image.padding_left, None);
+        assert_eq!(
+            image.crop,
+            Some(ImageCrop {
+                left: LengthPx(1.0 / 75.0),
+                top: LengthPx(2.0 / 75.0),
+                right: LengthPx(3.0 / 75.0),
+                bottom: LengthPx(4.0 / 75.0),
+                source_width: None,
+                source_height: None,
+            })
+        );
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("picture crop")
+                && warning.message.contains("preserved in Image IR")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("brightness:10,contrast:-5")
+                && warning.message.contains("preserved in Image IR")
+        }));
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("picture visual properties")
-                && warning.message.contains("crop=1/2/3/4")
                 && warning
                     .message
                     .contains("affine_shear_or_rotation=0.25/-0.25")
                 && warning.message.contains("treat_as_char:false")
                 && warning.message.contains("vertical:Page/Center/120")
                 && warning.message.contains("horizontal:Column/Right/240")
-                && warning.message.contains("effect:gray_scale")
-                && warning.message.contains("padding=10/20/30/40")
+                && warning.message.contains("border_opacity=128")
+                && warning.message.contains("negative_padding=-10/20/30/40")
         }));
     }
 

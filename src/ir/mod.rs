@@ -24,7 +24,10 @@ use serde::{Deserialize, Serialize};
 /// v23: added `Shape` rotation and flip fields. Additive and `#[serde(default)]`.
 /// v24: added `Shape` text-box padding and vertical alignment. Additive and
 /// `#[serde(default)]`.
-pub const IR_VERSION: u16 = 24;
+/// v25: added `TableStyle::cell_spacing`. Additive and `#[serde(default)]`.
+/// v26: added `Image` padding fields. Additive and `#[serde(default)]`.
+/// v27: added `Image::caption_placement`. Additive and `#[serde(default)]`.
+pub const IR_VERSION: u16 = 31;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -608,6 +611,10 @@ pub struct Image {
     pub resource_id: ResourceId,
     pub alt: Option<String>,
     pub caption: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption_placement: Option<CaptionPlacement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<ImageCrop>,
     /// Display hint in px until Layout IR defines document-space units.
     pub width: Option<LengthPx>,
     /// Display hint in px until Layout IR defines document-space units.
@@ -619,11 +626,60 @@ pub struct Image {
     #[serde(default)]
     pub grayscale: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<ImageEffect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contrast: Option<i32>,
+    /// Display opacity in the inclusive range 0.0..=1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_degrees: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_horizontal: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_vertical: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding_top: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding_right: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding_bottom: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding_left: Option<LengthPx>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptionPlacement {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageEffect {
+    Grayscale,
+    BlackWhite,
+    Pattern8x8,
+}
+
+/// Source-image crop rectangle. Coordinates are measured from the source
+/// image's top-left corner and use the same px conversion as other HWPUNIT
+/// dimensions in Document IR.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ImageCrop {
+    pub left: LengthPx,
+    pub top: LengthPx,
+    pub right: LengthPx,
+    pub bottom: LengthPx,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_width: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_height: Option<LengthPx>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -760,6 +816,7 @@ pub struct TableStyle {
     pub margin_right: Option<LengthPx>,
     pub margin_bottom: Option<LengthPx>,
     pub margin_left: Option<LengthPx>,
+    pub cell_spacing: Option<LengthPx>,
     pub repeat_header: bool,
     pub page_break: Option<TablePageBreak>,
 }
@@ -1006,6 +1063,11 @@ mod tests {
 
         assert_eq!(image.border, None);
         assert!(!image.grayscale);
+        assert_eq!(image.effect, None);
+        assert_eq!(image.crop, None);
+        assert_eq!(image.brightness, None);
+        assert_eq!(image.contrast, None);
+        assert_eq!(image.opacity, None);
     }
 
     #[test]

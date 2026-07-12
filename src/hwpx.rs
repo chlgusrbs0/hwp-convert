@@ -9,13 +9,13 @@ use zip::ZipArchive;
 use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_rhwp_number};
 
 use crate::ir::{
-    Alignment, Block, Border, BorderStyle, Chart, Color, ConversionWarning, Document, Equation,
-    EquationKind, HeaderFooter, HeaderFooterPlacement, Image, ImageResource, Inline, LengthPt,
-    LengthPx, Link, ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph,
-    ParagraphRole, ParagraphStyle, Percent, Resource, ResourceId, ResourceStore, Section, Shape,
-    ShapeKind, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle,
-    TextDecorationStyle, TextRun, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
-    WarningCode,
+    Alignment, Block, Border, BorderStyle, CaptionPlacement, Chart, Color, ConversionWarning,
+    Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement, Image, ImageCrop,
+    ImageEffect, ImageResource, Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, Metadata,
+    Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource,
+    ResourceId, ResourceStore, Section, Shape, ShapeKind, StyleSheet, Table, TableCell,
+    TableCellStyle, TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle,
+    UnknownBlock, UnknownInline, VerticalAlign, WarningCode,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -90,7 +90,6 @@ const HWPX_MARGIN_RIGHT_ATTRIBUTES: &[&str] = &["right", "r"];
 const HWPX_MARGIN_TOP_ATTRIBUTES: &[&str] = &["top", "t"];
 const HWPX_NOTE_ID_ATTRIBUTES: &[&str] = &["instId", "id"];
 const HWPX_PARAGRAPH_PR_ID_REF_ATTRIBUTES: &[&str] = &["paraPrIDRef", "paraPrIdRef", "paraPrIDREF"];
-const HWPX_IMAGE_ALPHA_ATTRIBUTES: &[&str] = &["alpha", "opacity"];
 const HWPX_IMAGE_BRIGHTNESS_ATTRIBUTES: &[&str] = &["bright", "brightness"];
 const HWPX_IMAGE_BORDER_COLOR_ATTRIBUTES: &[&str] = &["color", "lineColor"];
 const HWPX_IMAGE_BORDER_STYLE_ATTRIBUTES: &[&str] = &["style", "type"];
@@ -2364,6 +2363,23 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
         "left outer margin",
         context,
     );
+    let repeat_header =
+        root_xml_attribute_value(table_xml, "repeatHeader").is_some_and(xml_boolean_is_true);
+    let page_break = root_xml_attribute_value(table_xml, "pageBreak")
+        .and_then(|value| map_hwpx_table_page_break(value, context));
+    let cell_spacing = root_xml_attribute_value(table_xml, "cellSpacing").and_then(|value| {
+        parse_trimmed::<u32>(value)
+            .and_then(hwp_units_to_px_option)
+            .or_else(|| {
+                if value.trim() != "0" {
+                    context.add_warning_once(&format!(
+                        "HWPX table referenced unsupported cellSpacing value `{}`; hwp-convert omitted the table cell spacing.",
+                        value.trim()
+                    ));
+                }
+                None
+            })
+    });
 
     Some(Table {
         rows,
@@ -2375,10 +2391,28 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
             margin_right,
             margin_bottom,
             margin_left,
-            repeat_header: false,
-            page_break: None,
+            cell_spacing,
+            repeat_header,
+            page_break,
         },
     })
+}
+
+fn map_hwpx_table_page_break(
+    value: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<TablePageBreak> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "NONE" => None,
+        "CELL" | "CELL_BREAK" => Some(TablePageBreak::Cell),
+        "TABLE" | "ROW" | "ROW_BREAK" => Some(TablePageBreak::Row),
+        other => {
+            context.add_warning_once(&format!(
+                "HWPX table referenced unsupported pageBreak value `{other}`; hwp-convert omitted the table page-break rule."
+            ));
+            None
+        }
+    }
 }
 
 fn hwpx_table_row_addr(row_xml: &str) -> Option<u32> {
@@ -2443,12 +2477,12 @@ fn extract_table_blocks_from_xml(table_xml: &str, context: &mut HwpxFallbackCont
     };
 
     match caption.placement {
-        HwpxCaptionPlacement::Before => {
+        HwpxCaptionPlacement::Left | HwpxCaptionPlacement::Top => {
             let mut blocks = caption.blocks;
             blocks.push(table_block);
             blocks
         }
-        HwpxCaptionPlacement::After => {
+        HwpxCaptionPlacement::Right | HwpxCaptionPlacement::Bottom => {
             let mut blocks = vec![table_block];
             blocks.extend(caption.blocks);
             blocks
@@ -3012,15 +3046,94 @@ fn extract_hwpx_shape_from_xml(
     let fallback_text = first_non_empty_string([description.clone(), shape_text])
         .or_else(|| Some("[shape]".to_string()));
     let transform = hwpx_shape_transform(shape_xml);
+    let text_box_style = hwpx_shape_text_box_style(shape_xml, context);
 
     Shape {
         kind: hwpx_shape_kind(tag_name),
         fallback_text,
         description,
+        border: hwpx_object_border(shape_xml, "shape", context),
+        background_color: hwpx_shape_background_color(shape_xml, context),
         rotation_degrees: transform.rotation_degrees,
         flip_horizontal: transform.flip_horizontal,
         flip_vertical: transform.flip_vertical,
-        ..Default::default()
+        text_vertical_align: text_box_style.vertical_align,
+        padding_top: text_box_style.padding_top,
+        padding_right: text_box_style.padding_right,
+        padding_bottom: text_box_style.padding_bottom,
+        padding_left: text_box_style.padding_left,
+        width: hwpx_shape_hwp_units_to_px(
+            shape_xml,
+            &["sz", "size", "extent"],
+            HWPX_WIDTH_ATTRIBUTES,
+        ),
+        height: hwpx_shape_hwp_units_to_px(
+            shape_xml,
+            &["sz", "size", "extent"],
+            HWPX_HEIGHT_ATTRIBUTES,
+        ),
+        offset_x: hwpx_shape_hwp_units_to_px(
+            shape_xml,
+            &["pos"],
+            HWPX_PICTURE_HORIZONTAL_OFFSET_ATTRIBUTES,
+        ),
+        offset_y: hwpx_shape_hwp_units_to_px(
+            shape_xml,
+            &["pos"],
+            HWPX_PICTURE_VERTICAL_OFFSET_ATTRIBUTES,
+        ),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct HwpxShapeTextBoxStyle {
+    vertical_align: Option<VerticalAlign>,
+    padding_top: Option<LengthPx>,
+    padding_right: Option<LengthPx>,
+    padding_bottom: Option<LengthPx>,
+    padding_left: Option<LengthPx>,
+}
+
+fn hwpx_shape_text_box_style(
+    shape_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> HwpxShapeTextBoxStyle {
+    let Some(draw_text) = hwpx_direct_child_tag(shape_xml, "drawText") else {
+        return HwpxShapeTextBoxStyle::default();
+    };
+    let Some(draw_text_end) = (!draw_text.is_self_closing)
+        .then(|| find_matching_element_end(shape_xml, &draw_text))
+        .flatten()
+    else {
+        return HwpxShapeTextBoxStyle::default();
+    };
+    let draw_text_xml = &shape_xml[draw_text.start..draw_text_end];
+    let vertical_align = hwpx_direct_child_tag(draw_text_xml, "subList")
+        .and_then(|tag| xml_attribute_value_any(tag.raw, HWPX_VERTICAL_ALIGN_ATTRIBUTES))
+        .and_then(|value| map_hwpx_vertical_align_with_warning(value, context));
+
+    HwpxShapeTextBoxStyle {
+        vertical_align,
+        padding_top: hwpx_shape_hwp_units_to_px(
+            draw_text_xml,
+            &["textMargin"],
+            HWPX_MARGIN_TOP_ATTRIBUTES,
+        ),
+        padding_right: hwpx_shape_hwp_units_to_px(
+            draw_text_xml,
+            &["textMargin"],
+            HWPX_MARGIN_RIGHT_ATTRIBUTES,
+        ),
+        padding_bottom: hwpx_shape_hwp_units_to_px(
+            draw_text_xml,
+            &["textMargin"],
+            HWPX_MARGIN_BOTTOM_ATTRIBUTES,
+        ),
+        padding_left: hwpx_shape_hwp_units_to_px(
+            draw_text_xml,
+            &["textMargin"],
+            HWPX_MARGIN_LEFT_ATTRIBUTES,
+        ),
     }
 }
 
@@ -3032,6 +3145,54 @@ fn hwpx_shape_kind(tag_name: &str) -> ShapeKind {
         "polygon" | "curve" => ShapeKind::Polygon,
         _ => ShapeKind::Unknown,
     }
+}
+
+fn hwpx_shape_background_color(
+    shape_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<Color> {
+    let fill = hwpx_direct_child_tag(shape_xml, "fillBrush")?;
+    let fill_end = if fill.is_self_closing {
+        fill.end
+    } else {
+        find_matching_element_end(shape_xml, &fill)?
+    };
+    let fill_xml = &shape_xml[fill.start..fill_end];
+    let Some(brush) = hwpx_direct_child_tag(fill_xml, "winBrush") else {
+        context.add_warning_once(
+            "HWPX shape uses a gradient or image fill that Shape IR does not yet model; hwp-convert omitted the shape background.",
+        );
+        return None;
+    };
+    if xml_attribute_value(brush.raw, "hatchStyle").is_some() {
+        context.add_warning_once(
+            "HWPX shape uses a hatch fill; hwp-convert preserved its face color but omitted the hatch pattern.",
+        );
+    }
+    if xml_attribute_value(brush.raw, "alpha")
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .is_some_and(|alpha| alpha.abs() > f64::EPSILON)
+    {
+        context.add_warning_once(
+            "HWPX shape fill transparency is not modeled; hwp-convert preserved the opaque face color.",
+        );
+    }
+    xml_attribute_value_any(brush.raw, HWPX_FILL_COLOR_ATTRIBUTES).and_then(parse_hwpx_hex_color)
+}
+
+fn hwpx_shape_hwp_units_to_px(
+    shape_xml: &str,
+    child_names: &[&str],
+    attribute_names: &[&str],
+) -> Option<LengthPx> {
+    child_names
+        .iter()
+        .find_map(|child_name| {
+            hwpx_direct_child_tag(shape_xml, child_name)
+                .and_then(|tag| xml_attribute_value_any(tag.raw, attribute_names))
+        })
+        .and_then(parse_trimmed::<u32>)
+        .and_then(hwp_units_to_px_option)
 }
 
 fn extract_hwpx_chart_from_xml(chart_xml: &str, context: &mut HwpxFallbackContext) -> Chart {
@@ -3059,35 +3220,38 @@ fn extract_hwpx_image_from_pic_xml(
     let binary_item_id_ref = hwpx_pic_binary_item_id_ref(pic_xml)?;
     let resource_id = context.ensure_image_resource(&binary_item_id_ref)?;
     let transform = hwpx_shape_transform(pic_xml);
-    warn_hwpx_picture_transform(pic_xml, context);
+    let padding = hwpx_picture_padding(pic_xml, context);
+    let caption = extract_hwpx_object_caption(pic_xml, context);
+    let crop = warn_hwpx_picture_transform(pic_xml, context);
     let image_attributes = hwpx_pic_image_attributes(pic_xml, &binary_item_id_ref);
+    let opacity = hwpx_image_opacity(&image_attributes, context);
     let image_effect = image_attributes.effect;
     if image_attributes.brightness != 0 || image_attributes.contrast != 0 {
         context.add_warning_once(&format!(
-            "HWPX picture brightness/contrast (brightness:{},contrast:{}) is not modeled; hwp-convert preserved the original image bytes without applying the adjustment.",
+            "HWPX picture brightness/contrast (brightness:{},contrast:{}) was preserved in Image IR; semantic exporters currently use the unadjusted source bytes.",
             image_attributes.brightness, image_attributes.contrast
         ));
     }
-    if image_attributes.alpha.abs() > f64::EPSILON {
-        context.add_warning_once(&format!(
-            "HWPX picture alpha {} is not modeled; hwp-convert preserved the original image bytes without applying transparency.",
-            image_attributes.alpha
-        ));
-    }
-    let grayscale = match image_effect.as_deref() {
-        Some("GRAY_SCALE") => true,
+    let (grayscale, effect) = match image_effect.as_deref() {
+        Some("GRAY_SCALE") => (true, Some(ImageEffect::Grayscale)),
         Some("BLACK_WHITE") => {
             context.add_warning_once(
                 "HWPX picture BLACK_WHITE effect was represented as a grayscale approximation because Image IR does not distinguish threshold black-and-white.",
             );
-            true
+            (true, Some(ImageEffect::BlackWhite))
         }
-        Some("REAL_PIC" | "NONE") | None => false,
+        Some("PATTERN8X8" | "PATTERN_8X8") => {
+            context.add_warning_once(
+                "HWPX picture Pattern8x8 effect was preserved in Image IR; semantic exporters currently use the unfiltered source bytes.",
+            );
+            (false, Some(ImageEffect::Pattern8x8))
+        }
+        Some("REAL_PIC" | "NONE") | None => (false, None),
         Some(effect) => {
             context.add_warning_once(&format!(
                 "HWPX picture effect `{effect}` is not modeled; hwp-convert preserved the original image bytes without applying the effect."
             ));
-            false
+            (false, None)
         }
     };
 
@@ -3101,7 +3265,9 @@ fn extract_hwpx_image_from_pic_xml(
             ),
             first_hwpx_direct_child_element_text(pic_xml, &["shapeComment"]),
         ]),
-        caption: extract_hwpx_object_caption(pic_xml, context),
+        caption: caption.as_ref().map(|(text, _)| text.clone()),
+        caption_placement: caption.map(|(_, placement)| placement),
+        crop,
         width: hwpx_object_dimension_to_px_with_warning(pic_xml, &["width", "w"], "width", context),
         height: hwpx_object_dimension_to_px_with_warning(
             pic_xml,
@@ -3109,16 +3275,54 @@ fn extract_hwpx_image_from_pic_xml(
             "height",
             context,
         ),
-        border: hwpx_picture_border(pic_xml, context),
+        border: hwpx_object_border(pic_xml, "picture", context),
         grayscale,
+        effect,
+        brightness: (image_attributes.brightness != 0).then_some(image_attributes.brightness),
+        contrast: (image_attributes.contrast != 0).then_some(image_attributes.contrast),
+        opacity,
         rotation_degrees: transform.rotation_degrees,
         flip_horizontal: transform.flip_horizontal,
         flip_vertical: transform.flip_vertical,
+        padding_top: padding[0],
+        padding_right: padding[1],
+        padding_bottom: padding[2],
+        padding_left: padding[3],
     })
 }
 
-fn hwpx_picture_border(pic_xml: &str, context: &mut HwpxFallbackContext) -> Option<Border> {
-    let tag = hwpx_direct_child_tag(pic_xml, "lineShape")?;
+fn hwpx_picture_padding(pic_xml: &str, context: &mut HwpxFallbackContext) -> [Option<LengthPx>; 4] {
+    let Some(margin) = hwpx_direct_child_tag(pic_xml, "inMargin") else {
+        return [None; 4];
+    };
+    [
+        (HWPX_MARGIN_TOP_ATTRIBUTES, "top"),
+        (HWPX_MARGIN_RIGHT_ATTRIBUTES, "right"),
+        (HWPX_MARGIN_BOTTOM_ATTRIBUTES, "bottom"),
+        (HWPX_MARGIN_LEFT_ATTRIBUTES, "left"),
+    ]
+    .map(|(attributes, label)| {
+        let value = xml_attribute_value_any(margin.raw, attributes)?;
+        parse_trimmed::<u32>(value)
+            .and_then(hwp_units_to_px_option)
+            .or_else(|| {
+                if value.trim() != "0" {
+                    context.add_warning_once(&format!(
+                        "HWPX picture referenced unsupported {label} inner margin `{}`; hwp-convert omitted that image padding value.",
+                        value.trim()
+                    ));
+                }
+                None
+            })
+    })
+}
+
+fn hwpx_object_border(
+    object_xml: &str,
+    object_label: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<Border> {
+    let tag = hwpx_direct_child_tag(object_xml, "lineShape")?;
     let style_name = xml_attribute_value_any(tag.raw, HWPX_IMAGE_BORDER_STYLE_ATTRIBUTES)
         .unwrap_or("SOLID")
         .trim()
@@ -3134,13 +3338,17 @@ fn hwpx_picture_border(pic_xml: &str, context: &mut HwpxFallbackContext) -> Opti
         .and_then(hwp_units_to_px_option)
     else {
         context.add_warning_once(&format!(
-            "HWPX picture lineShape referenced unsupported border width `{}`; hwp-convert omitted the picture border.",
+            "HWPX {object_label} lineShape referenced unsupported border width `{}`; hwp-convert omitted the {object_label} border.",
             width_value.trim()
         ));
         return None;
     };
     let mut warnings = Vec::new();
-    let style = map_hwpx_border_style_with_warning(&style_name, "picture lineShape", &mut warnings);
+    let style = map_hwpx_border_style_with_warning(
+        &style_name,
+        &format!("{object_label} lineShape"),
+        &mut warnings,
+    );
     for warning in warnings {
         context.add_warning_once(&warning);
     }
@@ -3180,7 +3388,10 @@ fn hwpx_shape_transform(shape_xml: &str) -> HwpxShapeTransform {
     }
 }
 
-fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext) {
+fn warn_hwpx_picture_transform(
+    pic_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<ImageCrop> {
     let root = next_xml_tag(pic_xml, 0);
     let text_wrap = root
         .and_then(|tag| xml_attribute_value_any(tag.raw, HWPX_PICTURE_TEXT_WRAP_ATTRIBUTES))
@@ -3224,45 +3435,7 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
         ));
     }
 
-    let clip = hwpx_direct_child_tag(pic_xml, "imgClip").and_then(|tag| {
-        Some([
-            xml_attribute_value_any(tag.raw, HWPX_IMAGE_CROP_LEFT_ATTRIBUTES)?
-                .trim()
-                .parse::<i64>()
-                .ok()?,
-            xml_attribute_value_any(tag.raw, HWPX_IMAGE_CROP_RIGHT_ATTRIBUTES)?
-                .trim()
-                .parse::<i64>()
-                .ok()?,
-            xml_attribute_value_any(tag.raw, HWPX_IMAGE_CROP_TOP_ATTRIBUTES)?
-                .trim()
-                .parse::<i64>()
-                .ok()?,
-            xml_attribute_value_any(tag.raw, HWPX_IMAGE_CROP_BOTTOM_ATTRIBUTES)?
-                .trim()
-                .parse::<i64>()
-                .ok()?,
-        ])
-    });
-    let dimensions = hwpx_direct_child_tag(pic_xml, "imgDim").and_then(|tag| {
-        Some([
-            xml_attribute_value_any(tag.raw, &["dimwidth", "dimWidth"])?
-                .trim()
-                .parse::<i64>()
-                .ok()?,
-            xml_attribute_value_any(tag.raw, &["dimheight", "dimHeight"])?
-                .trim()
-                .parse::<i64>()
-                .ok()?,
-        ])
-    });
-    if let (Some([left, right, top, bottom]), Some([width, height])) = (clip, dimensions)
-        && (left != 0 || top != 0 || right != width || bottom != height)
-    {
-        context.add_warning_once(&format!(
-            "HWPX picture crop (left:{left},right:{right},top:{top},bottom:{bottom},source:{width}x{height}) is not modeled; hwp-convert preserved the uncropped original image bytes."
-        ));
-    }
+    let crop = hwpx_picture_crop(pic_xml, context);
 
     let effect_names = hwpx_picture_effect_names(pic_xml);
     if !effect_names.is_empty() {
@@ -3271,26 +3444,68 @@ fn warn_hwpx_picture_transform(pic_xml: &str, context: &mut HwpxFallbackContext)
             effect_names.join(",")
         ));
     }
+    crop
+}
 
-    if let Some(margin) = hwpx_direct_child_tag(pic_xml, "inMargin") {
-        let values = [
-            HWPX_MARGIN_LEFT_ATTRIBUTES,
-            HWPX_MARGIN_RIGHT_ATTRIBUTES,
-            HWPX_MARGIN_TOP_ATTRIBUTES,
-            HWPX_MARGIN_BOTTOM_ATTRIBUTES,
-        ]
-        .map(|attributes| {
-            xml_attribute_value_any(margin.raw, attributes)
-                .and_then(|value| value.trim().parse::<u32>().ok())
-                .unwrap_or(0)
-        });
-        if values.iter().any(|value| *value != 0) {
-            context.add_warning_once(&format!(
-                "HWPX picture inner margin ({}/{}/{}/{}) is not modeled; hwp-convert preserved the image without applying the margin.",
-                values[0], values[1], values[2], values[3]
-            ));
-        }
+fn hwpx_picture_crop(pic_xml: &str, context: &mut HwpxFallbackContext) -> Option<ImageCrop> {
+    let clip_tag = hwpx_direct_child_tag(pic_xml, "imgClip")?;
+    let Some(dimension_tag) = hwpx_direct_child_tag(pic_xml, "imgDim") else {
+        context.add_warning_once(
+            "HWPX picture imgClip has no imgDim source size; hwp-convert could not preserve the crop rectangle.",
+        );
+        return None;
+    };
+    let parse = |tag: &XmlTag<'_>, names: &[&str]| {
+        xml_attribute_value_any(tag.raw, names)?
+            .trim()
+            .parse::<i64>()
+            .ok()
+    };
+    let values = (
+        parse(&clip_tag, HWPX_IMAGE_CROP_LEFT_ATTRIBUTES),
+        parse(&clip_tag, HWPX_IMAGE_CROP_TOP_ATTRIBUTES),
+        parse(&clip_tag, HWPX_IMAGE_CROP_RIGHT_ATTRIBUTES),
+        parse(&clip_tag, HWPX_IMAGE_CROP_BOTTOM_ATTRIBUTES),
+        parse(&dimension_tag, &["dimwidth", "dimWidth"]),
+        parse(&dimension_tag, &["dimheight", "dimHeight"]),
+    );
+    let (Some(left), Some(top), Some(right), Some(bottom), Some(width), Some(height)) = values
+    else {
+        context.add_warning_once(
+            "HWPX picture crop contains missing or invalid coordinates; hwp-convert could not preserve the crop rectangle.",
+        );
+        return None;
+    };
+    if left == 0 && top == 0 && right == width && bottom == height {
+        return None;
     }
+    if left < 0
+        || top < 0
+        || right <= left
+        || bottom <= top
+        || width <= 0
+        || height <= 0
+        || right > width
+        || bottom > height
+    {
+        context.add_warning_once(&format!(
+            "HWPX picture crop has an invalid rectangle (left:{left},right:{right},top:{top},bottom:{bottom},source:{width}x{height}); hwp-convert omitted it from Image IR."
+        ));
+        return None;
+    }
+
+    context.add_warning_once(&format!(
+        "HWPX picture crop (left:{left},right:{right},top:{top},bottom:{bottom},source:{width}x{height}) was preserved in Image IR and can be applied by HTML; non-HTML semantic exporters currently use the uncropped source bytes."
+    ));
+    let px = |value: i64| LengthPx(value as f32 / 75.0);
+    Some(ImageCrop {
+        left: px(left),
+        top: px(top),
+        right: px(right),
+        bottom: px(bottom),
+        source_width: Some(px(width)),
+        source_height: Some(px(height)),
+    })
 }
 
 fn hwpx_picture_effect_names(pic_xml: &str) -> Vec<String> {
@@ -3365,7 +3580,8 @@ struct HwpxPictureImageAttributes {
     effect: Option<String>,
     brightness: i32,
     contrast: i32,
-    alpha: f64,
+    alpha: Option<String>,
+    opacity: Option<String>,
 }
 
 fn hwpx_pic_image_attributes(
@@ -3396,12 +3612,49 @@ fn hwpx_pic_image_attributes(
             contrast: xml_attribute_value_any(tag.raw, HWPX_IMAGE_CONTRAST_ATTRIBUTES)
                 .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(0),
-            alpha: xml_attribute_value_any(tag.raw, HWPX_IMAGE_ALPHA_ATTRIBUTES)
-                .and_then(|value| value.trim().parse().ok())
-                .unwrap_or(0.0),
+            alpha: xml_attribute_value(tag.raw, "alpha").map(str::to_string),
+            opacity: xml_attribute_value(tag.raw, "opacity").map(str::to_string),
         };
     }
     HwpxPictureImageAttributes::default()
+}
+
+fn hwpx_image_opacity(
+    attributes: &HwpxPictureImageAttributes,
+    context: &mut HwpxFallbackContext,
+) -> Option<f32> {
+    if attributes.alpha.is_some() && attributes.opacity.is_some() {
+        context.add_warning_once(
+            "HWPX picture contains both alpha and opacity; hwp-convert used the standard alpha attribute.",
+        );
+    }
+    let (name, raw, is_transparency) = if let Some(alpha) = attributes.alpha.as_deref() {
+        ("alpha", alpha, true)
+    } else if let Some(opacity) = attributes.opacity.as_deref() {
+        ("opacity", opacity, false)
+    } else {
+        return None;
+    };
+    let Ok(value) = raw.trim().parse::<f64>() else {
+        context.add_warning_once(&format!(
+            "HWPX picture {name} value `{raw}` is invalid; hwp-convert omitted image opacity."
+        ));
+        return None;
+    };
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        context.add_warning_once(&format!(
+            "HWPX picture {name} value `{raw}` is outside 0..=1; hwp-convert omitted image opacity."
+        ));
+        return None;
+    }
+    let opacity = if is_transparency { 1.0 - value } else { value };
+    if (opacity - 1.0).abs() <= f64::EPSILON {
+        return None;
+    }
+    context.add_warning_once(&format!(
+        "HWPX picture {name} {value} was preserved as opacity {opacity} in Image IR and HTML; non-HTML semantic exporters do not apply display opacity."
+    ));
+    Some(opacity as f32)
 }
 
 fn hwpx_pic_binary_item_id_ref(pic_xml: &str) -> Option<String> {
@@ -3449,8 +3702,10 @@ fn hwpx_pic_binary_item_id_ref(pic_xml: &str) -> Option<String> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HwpxCaptionPlacement {
-    Before,
-    After,
+    Left,
+    Right,
+    Top,
+    Bottom,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -3462,11 +3717,17 @@ struct HwpxObjectCaption {
 fn extract_hwpx_object_caption(
     object_xml: &str,
     context: &mut HwpxFallbackContext,
-) -> Option<String> {
+) -> Option<(String, CaptionPlacement)> {
     let caption = extract_hwpx_object_caption_blocks(object_xml, context)?;
     let text = crate::util::plain_text::blocks_to_plain_text(&caption.blocks);
+    let placement = match caption.placement {
+        HwpxCaptionPlacement::Left => CaptionPlacement::Left,
+        HwpxCaptionPlacement::Right => CaptionPlacement::Right,
+        HwpxCaptionPlacement::Top => CaptionPlacement::Top,
+        HwpxCaptionPlacement::Bottom => CaptionPlacement::Bottom,
+    };
 
-    non_empty_string_owned(text)
+    non_empty_string_owned(text).map(|text| (text, placement))
 }
 
 fn extract_hwpx_object_caption_blocks(
@@ -3527,8 +3788,10 @@ fn hwpx_caption_placement(caption_tag: &str) -> HwpxCaptionPlacement {
     let normalized = value.as_deref().map(str::to_ascii_uppercase);
 
     match normalized.as_deref() {
-        Some("LEFT" | "TOP" | "L" | "T" | "BEFORE") => HwpxCaptionPlacement::Before,
-        _ => HwpxCaptionPlacement::After,
+        Some("LEFT" | "L") => HwpxCaptionPlacement::Left,
+        Some("RIGHT" | "R") => HwpxCaptionPlacement::Right,
+        Some("TOP" | "T" | "BEFORE") => HwpxCaptionPlacement::Top,
+        _ => HwpxCaptionPlacement::Bottom,
     }
 }
 
@@ -5100,7 +5363,8 @@ mod tests {
     #[test]
     fn extracts_paragraphs_from_section_xml_text() {
         let xml = r#"
-            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+            <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+                    xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
               <hp:p><hp:run><hp:t>first &amp; second</hp:t></hp:run></hp:p>
               <hp:p><hp:run><hp:t>line 앞<hp:lineBreak/>line 뒤</hp:t></hp:run></hp:p>
               <hp:p><hp:run><hp:t>tab 앞<hp:tab width="4000"/>tab 뒤</hp:t></hp:run></hp:p>
@@ -5232,7 +5496,7 @@ mod tests {
               <hp:p>
                 <hp:run><hp:t>table lead</hp:t></hp:run>
                 <hp:ctrl>
-                  <hp:tbl>
+                  <hp:tbl repeatHeader="1" pageBreak="TABLE" cellSpacing="75">
                     <hp:tr h="1500">
                       <hp:tc>
                         <hp:cellSpan rowSpan="1" colSpan="2"/>
@@ -5275,6 +5539,9 @@ mod tests {
         match &blocks[2] {
             Block::Table(table) => {
                 assert_eq!(table.rows.len(), 1);
+                assert_eq!(table.style.cell_spacing, Some(LengthPx(1.0)));
+                assert!(table.style.repeat_header);
+                assert_eq!(table.style.page_break, Some(TablePageBreak::Row));
                 assert_eq!(table.rows[0].height, Some(LengthPx(20.0)));
                 assert_eq!(table.rows[0].cells.len(), 2);
                 assert_eq!(table.rows[0].cells[0].col_span, 2);
@@ -5416,6 +5683,30 @@ mod tests {
             warning
                 .message
                 .contains("unsupported top padding value `bad-top`")
+        }));
+    }
+
+    #[test]
+    fn warns_when_hwpx_table_cell_spacing_is_invalid() {
+        let xml = r#"
+            <hp:tbl xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" cellSpacing="-1" pageBreak="UNKNOWN">
+              <hp:tr><hp:tc><hp:subList><hp:p><hp:run><hp:t>cell</hp:t></hp:run></hp:p></hp:subList></hp:tc></hp:tr>
+            </hp:tbl>
+        "#;
+        let mut context = HwpxFallbackContext::default();
+
+        let table = extract_table_from_xml(xml, &mut context).expect("table should be parsed");
+
+        assert_eq!(table.style.cell_spacing, None);
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported cellSpacing value `-1`")
+        }));
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("unsupported pageBreak value `UNKNOWN`")
         }));
     }
 
@@ -5914,9 +6205,18 @@ mod tests {
               <hp:p>
                 <hp:ctrl>
                   <hp:rect>
+                    <hp:lineShape color="112233" width="150" style="DASH"/>
+                    <hp:fillBrush><hc:winBrush faceColor="445566"/></hp:fillBrush>
                     <hp:flip horizontal="true" vertical="1"/>
                     <hp:rotationInfo angle="9000"/>
-                    <hp:run><hp:t>shape text</hp:t></hp:run>
+                    <hp:sz w="7500" h="3750"/>
+                    <hp:pos horzOffset="300" vertOffset="150"/>
+                    <hp:drawText>
+                      <hp:subList verticalAlign="CENTER">
+                        <hp:p><hp:run><hp:t>shape text</hp:t></hp:run></hp:p>
+                      </hp:subList>
+                      <hp:textMargin l="75" r="150" t="225" b="300"/>
+                    </hp:drawText>
                   </hp:rect>
                 </hp:ctrl>
               </hp:p>
@@ -5933,6 +6233,37 @@ mod tests {
                 assert_eq!(shape.rotation_degrees, Some(90.0));
                 assert_eq!(shape.flip_horizontal, Some(true));
                 assert_eq!(shape.flip_vertical, Some(true));
+                assert_eq!(shape.width, Some(LengthPx(100.0)));
+                assert_eq!(shape.height, Some(LengthPx(50.0)));
+                assert_eq!(shape.offset_x, Some(LengthPx(4.0)));
+                assert_eq!(shape.offset_y, Some(LengthPx(2.0)));
+                assert_eq!(shape.text_vertical_align, Some(VerticalAlign::Middle));
+                assert_eq!(shape.padding_top, Some(LengthPx(3.0)));
+                assert_eq!(shape.padding_right, Some(LengthPx(2.0)));
+                assert_eq!(shape.padding_bottom, Some(LengthPx(4.0)));
+                assert_eq!(shape.padding_left, Some(LengthPx(1.0)));
+                assert_eq!(
+                    shape.border.as_ref().map(|border| border.style),
+                    Some(BorderStyle::Dashed)
+                );
+                assert_eq!(
+                    shape.border.as_ref().and_then(|border| border.color),
+                    Some(Color {
+                        r: 0x11,
+                        g: 0x22,
+                        b: 0x33,
+                        a: 255
+                    })
+                );
+                assert_eq!(
+                    shape.background_color,
+                    Some(Color {
+                        r: 0x44,
+                        g: 0x55,
+                        b: 0x66,
+                        a: 255
+                    })
+                );
             }
             other => panic!("expected shape block, got {other:?}"),
         }
@@ -5958,6 +6289,51 @@ mod tests {
             }
             other => panic!("expected shape block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn does_not_flatten_complex_hwpx_shape_fills_silently() {
+        let mut gradient_context = HwpxFallbackContext::default();
+        let gradient = extract_hwpx_shape_from_xml(
+            "rect",
+            r#"<hp:rect><hp:fillBrush><hc:gradation><hc:color value="112233"/></hc:gradation></hp:fillBrush></hp:rect>"#,
+            &mut gradient_context,
+        );
+        assert_eq!(gradient.background_color, None);
+        assert!(
+            gradient_context
+                .warnings
+                .iter()
+                .any(|warning| { warning.message.contains("gradient or image fill") })
+        );
+
+        let mut hatch_context = HwpxFallbackContext::default();
+        let hatch = extract_hwpx_shape_from_xml(
+            "rect",
+            r#"<hp:rect><hp:fillBrush><hc:winBrush faceColor="445566" hatchStyle="CROSS" alpha="0.5"/></hp:fillBrush></hp:rect>"#,
+            &mut hatch_context,
+        );
+        assert_eq!(
+            hatch.background_color,
+            Some(Color {
+                r: 0x44,
+                g: 0x55,
+                b: 0x66,
+                a: 255,
+            })
+        );
+        assert!(
+            hatch_context
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("hatch fill"))
+        );
+        assert!(
+            hatch_context
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("transparency"))
+        );
     }
 
     #[test]
@@ -7329,7 +7705,7 @@ mod tests {
                         <hp:altText><hp:run><hp:t>sample image</hp:t></hp:run></hp:altText>
                         <hp:sz w="7500" h="3750"/>
                         <hp:img><hc:img binItem="image1" effect="GRAY_SCALE"/></hp:img>
-                        <hp:caption>
+                        <hp:caption side="TOP">
                           <hp:subList>
                             <hp:p><hp:run><hp:t>image caption</hp:t></hp:run></hp:p>
                           </hp:subList>
@@ -7354,6 +7730,7 @@ mod tests {
         assert_eq!(image.resource_id.as_str(), "image1");
         assert_eq!(image.alt.as_deref(), Some("sample image"));
         assert_eq!(image.caption.as_deref(), Some("image caption"));
+        assert_eq!(image.caption_placement, Some(CaptionPlacement::Top));
         assert_eq!(image.width, Some(LengthPx(100.0)));
         assert_eq!(image.height, Some(LengthPx(50.0)));
         assert!(image.grayscale);
@@ -7426,14 +7803,27 @@ mod tests {
         .expect("image should be recovered");
 
         assert!(image.grayscale);
+        assert_eq!(image.effect, Some(ImageEffect::BlackWhite));
         assert!(context.warnings.iter().any(|warning| {
             warning.message.contains("BLACK_WHITE effect")
                 && warning.message.contains("grayscale approximation")
         }));
+
+        let pattern_image = extract_hwpx_image_from_pic_xml(
+            r#"<hp:pic><hc:img binaryItemIDRef="image1" effect="PATTERN_8X8"/></hp:pic>"#,
+            &mut context,
+        )
+        .expect("pattern image should be recovered");
+        assert!(!pattern_image.grayscale);
+        assert_eq!(pattern_image.effect, Some(ImageEffect::Pattern8x8));
+        assert!(context.warnings.iter().any(|warning| {
+            warning.message.contains("Pattern8x8 effect")
+                && warning.message.contains("preserved in Image IR")
+        }));
     }
 
     #[test]
-    fn warns_when_hwpx_image_brightness_or_contrast_is_not_applied() {
+    fn preserves_hwpx_image_brightness_and_contrast() {
         let mut context = HwpxFallbackContext::default();
         context.image_items.insert(
             "image1".to_string(),
@@ -7451,14 +7841,16 @@ mod tests {
         .expect("image should be recovered");
 
         assert!(!image.grayscale);
+        assert_eq!(image.brightness, Some(12));
+        assert_eq!(image.contrast, Some(-4));
         assert!(context.warnings.iter().any(|warning| {
             warning.message.contains("brightness:12,contrast:-4")
-                && warning.message.contains("without applying the adjustment")
+                && warning.message.contains("preserved in Image IR")
         }));
     }
 
     #[test]
-    fn warns_when_hwpx_image_alpha_or_inner_margin_is_not_applied() {
+    fn preserves_hwpx_image_inner_margin_and_opacity() {
         let mut context = HwpxFallbackContext::default();
         context.image_items.insert(
             "image1".to_string(),
@@ -7476,15 +7868,47 @@ mod tests {
             </hp:pic>
         "#;
 
-        extract_hwpx_image_from_pic_xml(xml, &mut context).expect("image should parse");
+        let image = extract_hwpx_image_from_pic_xml(xml, &mut context).expect("image should parse");
+
+        assert_eq!(image.padding_top, Some(LengthPx(30.0 / 75.0)));
+        assert_eq!(image.padding_right, Some(LengthPx(20.0 / 75.0)));
+        assert_eq!(image.padding_bottom, Some(LengthPx(40.0 / 75.0)));
+        assert_eq!(image.padding_left, Some(LengthPx(10.0 / 75.0)));
+        assert_eq!(image.opacity, Some(0.5));
 
         assert!(context.warnings.iter().any(|warning| {
-            warning.message.contains("alpha 0.5")
-                && warning.message.contains("without applying transparency")
+            warning.message.contains("opacity 0.5")
+                && warning.message.contains("preserved as opacity 0.5")
         }));
+        assert!(
+            !context
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("inner margin"))
+        );
+
+        let alpha_image = extract_hwpx_image_from_pic_xml(
+            r#"<hp:pic><hc:img binaryItemIDRef="image1" alpha="0.25"/></hp:pic>"#,
+            &mut context,
+        )
+        .expect("image with alpha should parse");
+        assert_eq!(alpha_image.opacity, Some(0.75));
         assert!(context.warnings.iter().any(|warning| {
-            warning.message.contains("inner margin (10/20/30/40)")
-                && warning.message.contains("without applying the margin")
+            warning.message.contains("alpha 0.25")
+                && warning.message.contains("preserved as opacity 0.75")
+        }));
+
+        let invalid_image = extract_hwpx_image_from_pic_xml(
+            r#"<hp:pic><hc:img binaryItemIDRef="image1" opacity="2"/></hp:pic>"#,
+            &mut context,
+        )
+        .expect("image with invalid opacity should remain recoverable");
+        assert_eq!(invalid_image.opacity, None);
+        assert!(context.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("opacity value `2` is outside 0..=1")
+                && warning.message.contains("omitted image opacity")
         }));
     }
 
@@ -7593,15 +8017,16 @@ mod tests {
         "##;
         let mut context = HwpxFallbackContext::default();
 
-        assert_eq!(hwpx_picture_border(disabled, &mut context), None);
-        assert_eq!(hwpx_picture_border(nested, &mut context), None);
+        assert_eq!(hwpx_object_border(disabled, "picture", &mut context), None);
+        assert_eq!(hwpx_object_border(nested, "picture", &mut context), None);
     }
 
     #[test]
     fn warns_when_hwpx_picture_border_style_is_approximated() {
         let mut context = HwpxFallbackContext::default();
-        let border = hwpx_picture_border(
+        let border = hwpx_object_border(
             r##"<hp:pic><hp:lineShape color="#123456" width="150" style="WAVE"/></hp:pic>"##,
+            "picture",
             &mut context,
         )
         .expect("picture border should be recovered");
@@ -7618,8 +8043,9 @@ mod tests {
     #[test]
     fn warns_when_hwpx_picture_border_width_is_invalid() {
         let mut context = HwpxFallbackContext::default();
-        let border = hwpx_picture_border(
+        let border = hwpx_object_border(
             r##"<hp:pic><hp:lineShape color="#123456" width="-1" style="SOLID"/></hp:pic>"##,
+            "picture",
             &mut context,
         );
 
@@ -7663,6 +8089,17 @@ mod tests {
         assert_eq!(image.flip_horizontal, Some(true));
         assert_eq!(image.flip_vertical, None);
         assert_eq!(image.rotation_degrees, Some(90.0));
+        assert_eq!(
+            image.crop,
+            Some(ImageCrop {
+                left: LengthPx(10.0 / 75.0),
+                top: LengthPx(20.0 / 75.0),
+                right: LengthPx(12.0),
+                bottom: LengthPx(700.0 / 75.0),
+                source_width: Some(LengthPx(1000.0 / 75.0)),
+                source_height: Some(LengthPx(800.0 / 75.0)),
+            })
+        );
         assert!(context.warnings.iter().any(|warning| {
             warning
                 .message
@@ -7674,7 +8111,7 @@ mod tests {
             warning
                 .message
                 .contains("left:10,right:900,top:20,bottom:700,source:1000x800")
-                && warning.message.contains("uncropped original image bytes")
+                && warning.message.contains("preserved in Image IR")
         }));
         assert!(context.warnings.iter().any(|warning| {
             warning.message.contains("visual effects (shadow,glow)")
@@ -7688,10 +8125,11 @@ mod tests {
         );
 
         let mut full_frame_context = HwpxFallbackContext::default();
-        warn_hwpx_picture_transform(
+        let full_frame_crop = warn_hwpx_picture_transform(
             r#"<hp:pic><hp:imgClip left="0" right="1000" top="0" bottom="800"/><hp:imgDim dimwidth="1000" dimheight="800"/><hp:effects/></hp:pic>"#,
             &mut full_frame_context,
         );
+        assert_eq!(full_frame_crop, None);
         assert!(
             full_frame_context
                 .warnings

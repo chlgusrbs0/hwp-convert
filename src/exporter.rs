@@ -1424,6 +1424,10 @@ fn render_html_table_style(style: &TableStyle) -> String {
     if let Some(height) = style.height {
         declarations.push(format!("height: {}px", height.0));
     }
+    if let Some(cell_spacing) = style.cell_spacing {
+        declarations.push("border-collapse: separate".to_string());
+        declarations.push(format!("border-spacing: {}px", cell_spacing.0));
+    }
     for (property, value) in [
         ("margin-top", style.margin_top),
         ("margin-right", style.margin_right),
@@ -1721,6 +1725,22 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
     if image.grayscale {
         declarations.push("filter: grayscale(100%)".to_string());
     }
+    if let Some(opacity) = image
+        .opacity
+        .filter(|value| value.is_finite() && (0.0..=1.0).contains(value))
+    {
+        declarations.push(format!("opacity: {opacity}"));
+    }
+    for (padding, property) in [
+        (image.padding_top, "padding-top"),
+        (image.padding_right, "padding-right"),
+        (image.padding_bottom, "padding-bottom"),
+        (image.padding_left, "padding-left"),
+    ] {
+        if let Some(padding) = padding {
+            declarations.push(format!("{property}: {}px", padding.0));
+        }
+    }
     if let Some(transform) = render_css_transform(
         image.rotation_degrees,
         image.flip_horizontal,
@@ -1728,17 +1748,85 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
     ) {
         declarations.push(format!("transform: {transform}"));
     }
-    let style = render_html_style_attr(&declarations.join("; "));
-    let tag = format!("<img src=\"{src}\" alt=\"{alt}\"{width}{height}{style} />");
+    let tag = render_html_cropped_image(image, &src, &alt, &declarations).unwrap_or_else(|| {
+        let style = render_html_style_attr(&declarations.join("; "));
+        format!("<img src=\"{src}\" alt=\"{alt}\"{width}{height}{style} />")
+    });
 
     if let Some(caption) = &image.caption {
-        return format!(
-            "<figure>{tag}<figcaption>{}</figcaption></figure>\n",
+        let caption = format!(
+            "<figcaption>{}</figcaption>",
             render_html_fallback_text(caption)
         );
+        return match image.caption_placement {
+            Some(crate::ir::CaptionPlacement::Top) => {
+                format!("<figure>{caption}{tag}</figure>\n")
+            }
+            Some(crate::ir::CaptionPlacement::Left) => format!(
+                "<figure style=\"display: inline-flex; align-items: center; gap: 0.5em\">{caption}{tag}</figure>\n"
+            ),
+            Some(crate::ir::CaptionPlacement::Right) => format!(
+                "<figure style=\"display: inline-flex; align-items: center; gap: 0.5em\">{tag}{caption}</figure>\n"
+            ),
+            Some(crate::ir::CaptionPlacement::Bottom) | None => {
+                format!("<figure>{tag}{caption}</figure>\n")
+            }
+        };
     }
 
     format!("{tag}\n")
+}
+
+fn render_html_cropped_image(
+    image: &Image,
+    src: &str,
+    alt: &str,
+    declarations: &[String],
+) -> Option<String> {
+    let crop = image.crop?;
+    let display_width = image.width?.0;
+    let display_height = image.height?.0;
+    let source_width = crop.source_width?.0;
+    let source_height = crop.source_height?.0;
+    let crop_width = crop.right.0 - crop.left.0;
+    let crop_height = crop.bottom.0 - crop.top.0;
+    let values = [
+        display_width,
+        display_height,
+        source_width,
+        source_height,
+        crop.left.0,
+        crop.top.0,
+        crop_width,
+        crop_height,
+    ];
+    if values.iter().any(|value| !value.is_finite())
+        || display_width <= 0.0
+        || display_height <= 0.0
+        || source_width <= 0.0
+        || source_height <= 0.0
+        || crop.left.0 < 0.0
+        || crop.top.0 < 0.0
+        || crop_width <= 0.0
+        || crop_height <= 0.0
+        || crop.right.0 > source_width
+        || crop.bottom.0 > source_height
+    {
+        return None;
+    }
+
+    let scale_x = display_width / crop_width;
+    let scale_y = display_height / crop_height;
+    let mut outer_declarations = declarations.to_vec();
+    outer_declarations.push("display: inline-block".to_string());
+    let outer_style = render_html_style_attr(&outer_declarations.join("; "));
+    Some(format!(
+        "<span{outer_style}><span style=\"position: relative; display: inline-block; overflow: hidden; width: {display_width}px; height: {display_height}px\"><img src=\"{src}\" alt=\"{alt}\" style=\"position: absolute; max-width: none; left: {}px; top: {}px; width: {}px; height: {}px\" /></span></span>",
+        -crop.left.0 * scale_x,
+        -crop.top.0 * scale_y,
+        source_width * scale_x,
+        source_height * scale_y,
+    ))
 }
 
 fn render_css_transform(
@@ -2591,11 +2679,11 @@ mod tests {
     use super::*;
     use crate::ir::{
         Alignment, Chart, Color, ConversionWarning, Equation, EquationKind, HeaderFooter,
-        HeaderFooterPlacement, IR_VERSION, Image, ImageResource, Indent, LengthPt, LengthPx, Link,
-        ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
-        ParagraphStyle, Percent, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind,
-        Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun,
-        TextStyle, UnknownInline, WarningCode,
+        HeaderFooterPlacement, IR_VERSION, Image, ImageCrop, ImageResource, Indent, LengthPt,
+        LengthPx, Link, ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph,
+        ParagraphRole, ParagraphStyle, Percent, Resource, ResourceId, ResourceStore, Section,
+        Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow,
+        TableStyle, TextRun, TextStyle, UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -3631,11 +3719,25 @@ mod tests {
 
     #[test]
     fn renders_html_image_from_document_ir() {
-        let document = document_with_image_block("image-1", Some("로고"), Some("png"));
+        let mut document = document_with_image_block("image-1", Some("로고"), Some("png"));
+        if let Block::Image(image) = &mut document.sections[0].blocks[0] {
+            image.width = Some(LengthPx(200.0));
+            image.height = Some(LengthPx(100.0));
+            image.crop = Some(ImageCrop {
+                left: LengthPx(10.0),
+                top: LengthPx(20.0),
+                right: LengthPx(90.0),
+                bottom: LengthPx(70.0),
+                source_width: Some(LengthPx(100.0)),
+                source_height: Some(LengthPx(80.0)),
+            });
+        }
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
         assert!(html.contains("<img src=\"sample_assets/images/image-1.png\" alt=\"로고\""));
+        assert!(html.contains("overflow: hidden; width: 200px; height: 100px"));
+        assert!(html.contains("left: -25px; top: -40px; width: 250px; height: 160px"));
     }
 
     #[test]
@@ -3643,11 +3745,16 @@ mod tests {
         let mut document = document_with_image_block("image-1", Some("logo"), Some("png"));
         if let Block::Image(image) = &mut document.sections[0].blocks[0] {
             image.caption = Some("first line\nsecond line".to_string());
+            image.caption_placement = Some(crate::ir::CaptionPlacement::Top);
         }
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
         assert!(html.contains("<figcaption>first line<br />second line</figcaption>"));
+        assert!(
+            html.find("<figcaption>").expect("caption should render")
+                < html.find("<img ").expect("image should render")
+        );
     }
 
     #[test]
@@ -3966,6 +4073,7 @@ mod tests {
                 height: Some(LengthPx(36.0)),
             }],
             style: TableStyle {
+                cell_spacing: Some(LengthPx(3.0)),
                 repeat_header: true,
                 page_break: Some(crate::ir::TablePageBreak::Row),
                 ..Default::default()
@@ -3983,6 +4091,8 @@ mod tests {
         assert!(html.contains("<tr style=\"height: 36px\">"));
         assert!(html.contains("<thead>\n<tr style=\"height: 36px\">"));
         assert!(html.contains("break-inside: avoid"));
+        assert!(html.contains("border-collapse: separate"));
+        assert!(html.contains("border-spacing: 3px"));
         assert!(!html.contains("<td"));
     }
 
@@ -4001,9 +4111,14 @@ mod tests {
                 }),
             }),
             grayscale: true,
+            opacity: Some(0.5),
             rotation_degrees: Some(90.0),
             flip_horizontal: Some(true),
             flip_vertical: Some(true),
+            padding_top: Some(LengthPx(1.0)),
+            padding_right: Some(LengthPx(2.0)),
+            padding_bottom: Some(LengthPx(3.0)),
+            padding_left: Some(LengthPx(4.0)),
             ..Default::default()
         })]);
 
@@ -4011,7 +4126,12 @@ mod tests {
 
         assert!(html.contains("border: 2px solid #112233"));
         assert!(html.contains("filter: grayscale(100%)"));
+        assert!(html.contains("opacity: 0.5"));
         assert!(html.contains("transform: rotate(90deg) scaleX(-1) scaleY(-1)"));
+        assert!(html.contains("padding-top: 1px"));
+        assert!(html.contains("padding-right: 2px"));
+        assert!(html.contains("padding-bottom: 3px"));
+        assert!(html.contains("padding-left: 4px"));
     }
 
     #[test]
