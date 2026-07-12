@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::io;
 use std::path::Path;
@@ -37,15 +37,16 @@ use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_r
 
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
-    Block, Border, BorderStyle, CaptionPlacement, Color, ConversionWarning, Document, Equation,
-    EquationKind, HeaderFooter, HeaderFooterPlacement, HorizontalObjectAlignment,
-    HorizontalRelativeTo, Image, ImageCrop, ImageEffect as IrImageEffect, ImagePlacement,
-    ImageResource, ImageTextWrap, Inline, LengthPt, LengthPx, Link, ListInfo, ListKind,
-    NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore, Paragraph,
-    ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, Resource, ResourceId, ResourceStore,
-    Section, Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell, TableCellStyle,
-    TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle, TextStyleId,
-    UnknownInline, VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    BinaryResource, Block, Border, BorderStyle, CaptionPlacement, Color, ConversionWarning,
+    Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
+    HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
+    ImageEffect as IrImageEffect, ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt,
+    LengthPx, Link, ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
+    NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent,
+    Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table,
+    TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun,
+    TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
+    VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -150,6 +151,7 @@ struct BridgeContext<'a> {
     resources: ResourceStore,
     notes: NoteStore,
     warnings: Vec<ConversionWarning>,
+    image_bin_data_content_ids: BTreeSet<u16>,
     next_footnote_id: usize,
     next_endnote_id: usize,
 }
@@ -161,6 +163,7 @@ impl<'a> BridgeContext<'a> {
             resources: ResourceStore::default(),
             notes: NoteStore::default(),
             warnings: Vec::new(),
+            image_bin_data_content_ids: BTreeSet::new(),
             next_footnote_id: 1,
             next_endnote_id: 1,
         }
@@ -174,6 +177,7 @@ impl<'a> BridgeContext<'a> {
             .map(|section| self.map_section(section))
             .collect();
         let styles = self.map_style_sheet();
+        self.preserve_unreferenced_binary_resources();
 
         Document {
             ir_version: crate::ir::IR_VERSION,
@@ -1951,6 +1955,8 @@ impl<'a> BridgeContext<'a> {
         }
 
         let bin_data = self.find_bin_data_content(bin_data_id)?;
+        let content_id = bin_data.id;
+        let data = bin_data.data.clone();
         let extension = non_empty_string(&bin_data.extension);
         let media_type = extension
             .as_deref()
@@ -1962,11 +1968,37 @@ impl<'a> BridgeContext<'a> {
                 id: resource_id.clone(),
                 media_type,
                 extension,
-                bytes: bin_data.data.clone(),
+                bytes: data,
             }))
             .ok()?;
+        self.image_bin_data_content_ids.insert(content_id);
 
         Some(resource_id)
+    }
+
+    fn preserve_unreferenced_binary_resources(&mut self) {
+        for content in &self.source.bin_data_content {
+            if self.image_bin_data_content_ids.contains(&content.id) {
+                continue;
+            }
+            let id = ResourceId(format!("binary-{}", content.id));
+            if self.resources.get(&id).is_some() {
+                continue;
+            }
+            let extension = non_empty_string(&content.extension);
+            let media_type = extension
+                .as_deref()
+                .and_then(media_type_for_extension)
+                .map(ToOwned::to_owned);
+            let _ = self
+                .resources
+                .insert_unique(Resource::Binary(BinaryResource {
+                    id,
+                    media_type,
+                    extension,
+                    bytes: content.data.clone(),
+                }));
+        }
     }
 
     fn find_bin_data_content(
@@ -4480,11 +4512,18 @@ mod tests {
                 }],
                 ..Default::default()
             }],
-            bin_data_content: vec![BinDataContent {
-                id: 7,
-                data: vec![137, 80, 78, 71],
-                extension: "png".to_string(),
-            }],
+            bin_data_content: vec![
+                BinDataContent {
+                    id: 7,
+                    data: vec![137, 80, 78, 71],
+                    extension: "png".to_string(),
+                },
+                BinDataContent {
+                    id: 8,
+                    data: vec![1, 2, 3, 4],
+                    extension: "bin".to_string(),
+                },
+            ],
             ..Default::default()
         };
 
@@ -4507,6 +4546,15 @@ mod tests {
                 assert_eq!(resource.media_type.as_deref(), Some("image/png"));
             }
             other => panic!("expected image resource, got {other:?}"),
+        }
+        assert_eq!(bridged.resources.entries.len(), 2);
+        match &bridged.resources.entries[1] {
+            Resource::Binary(resource) => {
+                assert_eq!(resource.id.as_str(), "binary-8");
+                assert_eq!(resource.extension.as_deref(), Some("bin"));
+                assert_eq!(resource.bytes, vec![1, 2, 3, 4]);
+            }
+            other => panic!("expected binary resource, got {other:?}"),
         }
     }
 
