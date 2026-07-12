@@ -38,13 +38,14 @@ use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_r
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
     Block, Border, BorderStyle, CaptionPlacement, Color, ConversionWarning, Document, Equation,
-    EquationKind, HeaderFooter, HeaderFooterPlacement, Image, ImageCrop,
-    ImageEffect as IrImageEffect, ImageResource, Inline, LengthPt, LengthPx, Link, ListInfo,
-    ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore, Paragraph,
+    EquationKind, HeaderFooter, HeaderFooterPlacement, HorizontalObjectAlignment,
+    HorizontalRelativeTo, Image, ImageCrop, ImageEffect as IrImageEffect, ImagePlacement,
+    ImageResource, ImageTextWrap, Inline, LengthPt, LengthPx, Link, ListInfo, ListKind,
+    NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteStore, Paragraph,
     ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, Resource, ResourceId, ResourceStore,
     Section, Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell, TableCellStyle,
     TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle, TextStyleId,
-    UnknownInline, VerticalAlign, WarningCode,
+    UnknownInline, VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1617,6 +1618,7 @@ impl<'a> BridgeContext<'a> {
                     RhwpImageEffect::BlackWhite => Some(IrImageEffect::BlackWhite),
                     RhwpImageEffect::Pattern8x8 => Some(IrImageEffect::Pattern8x8),
                 },
+                placement: map_picture_placement(picture),
                 brightness: (picture.image_attr.brightness != 0)
                     .then_some(i32::from(picture.image_attr.brightness)),
                 contrast: (picture.image_attr.contrast != 0)
@@ -1701,8 +1703,8 @@ impl<'a> BridgeContext<'a> {
             || picture.common.vert_align != rhwp::model::shape::VertAlign::Top
             || picture.common.horz_align != rhwp::model::shape::HorzAlign::Left;
         if has_unmodeled_layout {
-            details.push(format!(
-                "layout=treat_as_char:{},wrap:{:?},vertical:{:?}/{:?}/{},horizontal:{:?}/{:?}/{}",
+            self.add_warning_once(&format!(
+                "rhwp picture layout (treat_as_char:{},wrap:{:?},vertical:{:?}/{:?}/{},horizontal:{:?}/{:?}/{}) was preserved in Image IR; semantic exporters currently linearize the image without floating placement.",
                 picture.common.treat_as_char,
                 picture.common.text_wrap,
                 picture.common.vert_rel_to,
@@ -3412,6 +3414,56 @@ fn map_picture_crop(picture: &Picture) -> Option<ImageCrop> {
     )
 }
 
+fn map_picture_placement(picture: &Picture) -> Option<ImagePlacement> {
+    let common = &picture.common;
+    let has_layout = !common.treat_as_char
+        || common.horizontal_offset != 0
+        || common.vertical_offset != 0
+        || common.text_wrap != rhwp::model::shape::TextWrap::Square
+        || common.vert_rel_to != rhwp::model::shape::VertRelTo::Paper
+        || common.horz_rel_to != rhwp::model::shape::HorzRelTo::Paper
+        || common.vert_align != rhwp::model::shape::VertAlign::Top
+        || common.horz_align != rhwp::model::shape::HorzAlign::Left;
+    has_layout.then_some(ImagePlacement {
+        treat_as_character: common.treat_as_char,
+        text_wrap: match common.text_wrap {
+            rhwp::model::shape::TextWrap::Square => ImageTextWrap::Square,
+            rhwp::model::shape::TextWrap::Tight => ImageTextWrap::Tight,
+            rhwp::model::shape::TextWrap::Through => ImageTextWrap::Through,
+            rhwp::model::shape::TextWrap::TopAndBottom => ImageTextWrap::TopAndBottom,
+            rhwp::model::shape::TextWrap::BehindText => ImageTextWrap::BehindText,
+            rhwp::model::shape::TextWrap::InFrontOfText => ImageTextWrap::InFrontOfText,
+        },
+        vertical_relative_to: match common.vert_rel_to {
+            rhwp::model::shape::VertRelTo::Paper => VerticalRelativeTo::Paper,
+            rhwp::model::shape::VertRelTo::Page => VerticalRelativeTo::Page,
+            rhwp::model::shape::VertRelTo::Para => VerticalRelativeTo::Paragraph,
+        },
+        vertical_alignment: match common.vert_align {
+            rhwp::model::shape::VertAlign::Top => VerticalObjectAlignment::Top,
+            rhwp::model::shape::VertAlign::Center => VerticalObjectAlignment::Center,
+            rhwp::model::shape::VertAlign::Bottom => VerticalObjectAlignment::Bottom,
+            rhwp::model::shape::VertAlign::Inside => VerticalObjectAlignment::Inside,
+            rhwp::model::shape::VertAlign::Outside => VerticalObjectAlignment::Outside,
+        },
+        vertical_offset: LengthPx(common.vertical_offset as f32 / 75.0),
+        horizontal_relative_to: match common.horz_rel_to {
+            rhwp::model::shape::HorzRelTo::Paper => HorizontalRelativeTo::Paper,
+            rhwp::model::shape::HorzRelTo::Page => HorizontalRelativeTo::Page,
+            rhwp::model::shape::HorzRelTo::Column => HorizontalRelativeTo::Column,
+            rhwp::model::shape::HorzRelTo::Para => HorizontalRelativeTo::Paragraph,
+        },
+        horizontal_alignment: match common.horz_align {
+            rhwp::model::shape::HorzAlign::Left => HorizontalObjectAlignment::Left,
+            rhwp::model::shape::HorzAlign::Center => HorizontalObjectAlignment::Center,
+            rhwp::model::shape::HorzAlign::Right => HorizontalObjectAlignment::Right,
+            rhwp::model::shape::HorzAlign::Inside => HorizontalObjectAlignment::Inside,
+            rhwp::model::shape::HorzAlign::Outside => HorizontalObjectAlignment::Outside,
+        },
+        horizontal_offset: LengthPx(common.horizontal_offset as f32 / 75.0),
+    })
+}
+
 fn page_hide_fallback_text(page_hide: &RhwpPageHide) -> String {
     let mut flags = Vec::new();
     if page_hide.hide_header {
@@ -4689,6 +4741,19 @@ mod tests {
         assert_eq!(image.brightness, Some(10));
         assert_eq!(image.contrast, Some(-5));
         assert_eq!(image.effect, Some(IrImageEffect::Grayscale));
+        assert_eq!(
+            image.placement,
+            Some(ImagePlacement {
+                treat_as_character: false,
+                text_wrap: ImageTextWrap::TopAndBottom,
+                vertical_relative_to: VerticalRelativeTo::Page,
+                vertical_alignment: VerticalObjectAlignment::Center,
+                vertical_offset: LengthPx(120.0 / 75.0),
+                horizontal_relative_to: HorizontalRelativeTo::Column,
+                horizontal_alignment: HorizontalObjectAlignment::Right,
+                horizontal_offset: LengthPx(240.0 / 75.0),
+            })
+        );
         assert_eq!(image.padding_top, Some(LengthPx(30.0 / 75.0)));
         assert_eq!(image.padding_right, Some(LengthPx(20.0 / 75.0)));
         assert_eq!(image.padding_bottom, Some(LengthPx(40.0 / 75.0)));
@@ -4713,13 +4778,16 @@ mod tests {
                 && warning.message.contains("preserved in Image IR")
         }));
         assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("picture layout")
+                && warning.message.contains("preserved in Image IR")
+                && warning.message.contains("vertical:Page/Center/120")
+                && warning.message.contains("horizontal:Column/Right/240")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("picture visual properties")
                 && warning
                     .message
                     .contains("affine_shear_or_rotation=0.25/-0.25")
-                && warning.message.contains("treat_as_char:false")
-                && warning.message.contains("vertical:Page/Center/120")
-                && warning.message.contains("horizontal:Column/Right/240")
                 && warning.message.contains("border_opacity=128")
                 && warning.message.contains("negative_padding=-10/20/30/40")
         }));

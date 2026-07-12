@@ -273,6 +273,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - 이미지 조정값 IR 확장: `IR_VERSION` 28 → 29. HWP/HWPX 밝기·대비 원시 값을 보존한다. exporter별 임의 근사는 하지 않고 미적용 warning을 유지한다.
 - HWPX 이미지 투명도 IR 확장: `IR_VERSION` 29 → 30. 표준 `alpha`와 호환 `opacity`의 반대 의미를 구분해 불투명도로 정규화하고 HTML에 반영한다.
 - 이미지 효과 IR 확장: `IR_VERSION` 30 → 31. 일반 회색조·임계 흑백·Pattern8x8을 구분해 보존하고, exporter의 근사 또는 미적용 여부를 warning으로 남긴다.
+- 이미지 배치 IR 확장: `IR_VERSION` 31 → 32. HWP/HWPX의 글자처럼 취급, 텍스트 감싸기, 가로·세로 기준·정렬·오프셋을 보존한다. semantic exporter는 페이지 좌표계를 임의로 근사하지 않고 선형화 warning을 유지한다.
 
 ## 완료 선언 기준
 

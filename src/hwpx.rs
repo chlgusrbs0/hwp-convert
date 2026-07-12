@@ -10,12 +10,14 @@ use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_r
 
 use crate::ir::{
     Alignment, Block, Border, BorderStyle, CaptionPlacement, Chart, Color, ConversionWarning,
-    Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement, Image, ImageCrop,
-    ImageEffect, ImageResource, Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, Metadata,
+    Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
+    HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop, ImageEffect, ImagePlacement,
+    ImageResource, ImageTextWrap, Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, Metadata,
     Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource,
     ResourceId, ResourceStore, Section, Shape, ShapeKind, StyleSheet, Table, TableCell,
     TableCellStyle, TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle,
-    UnknownBlock, UnknownInline, VerticalAlign, WarningCode,
+    UnknownBlock, UnknownInline, VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo,
+    WarningCode,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -3223,6 +3225,7 @@ fn extract_hwpx_image_from_pic_xml(
     let padding = hwpx_picture_padding(pic_xml, context);
     let caption = extract_hwpx_object_caption(pic_xml, context);
     let crop = warn_hwpx_picture_transform(pic_xml, context);
+    let placement = hwpx_picture_placement(pic_xml, context);
     let image_attributes = hwpx_pic_image_attributes(pic_xml, &binary_item_id_ref);
     let opacity = hwpx_image_opacity(&image_attributes, context);
     let image_effect = image_attributes.effect;
@@ -3278,6 +3281,7 @@ fn extract_hwpx_image_from_pic_xml(
         border: hwpx_object_border(pic_xml, "picture", context),
         grayscale,
         effect,
+        placement,
         brightness: (image_attributes.brightness != 0).then_some(image_attributes.brightness),
         contrast: (image_attributes.contrast != 0).then_some(image_attributes.contrast),
         opacity,
@@ -3426,12 +3430,12 @@ fn warn_hwpx_picture_transform(
             || horz_offset != "0";
         if has_layout {
             context.add_warning_once(&format!(
-                "HWPX picture layout (treat_as_char:{treat_as_char},wrap:{text_wrap},vertical:{vert_rel_to}/{vert_align}/{vert_offset},horizontal:{horz_rel_to}/{horz_align}/{horz_offset}) is not modeled; block order and image dimensions were preserved without floating placement."
+                "HWPX picture layout (treat_as_char:{treat_as_char},wrap:{text_wrap},vertical:{vert_rel_to}/{vert_align}/{vert_offset},horizontal:{horz_rel_to}/{horz_align}/{horz_offset}) was preserved in Image IR when supported; semantic exporters linearize the image without floating placement."
             ));
         }
     } else if text_wrap != "SQUARE" {
         context.add_warning_once(&format!(
-            "HWPX picture text wrap `{text_wrap}` is not modeled; block order and image dimensions were preserved without floating placement."
+            "HWPX picture text wrap `{text_wrap}` was preserved in Image IR when supported; semantic exporters linearize the image without floating placement."
         ));
     }
 
@@ -3445,6 +3449,172 @@ fn warn_hwpx_picture_transform(
         ));
     }
     crop
+}
+
+fn hwpx_picture_placement(
+    pic_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<ImagePlacement> {
+    let root = next_xml_tag(pic_xml, 0)?;
+    let wrap_raw = xml_attribute_value_any(root.raw, HWPX_PICTURE_TEXT_WRAP_ATTRIBUTES)
+        .unwrap_or("SQUARE")
+        .trim()
+        .to_ascii_uppercase();
+    let text_wrap = match wrap_raw.as_str() {
+        "SQUARE" => ImageTextWrap::Square,
+        "TIGHT" => ImageTextWrap::Tight,
+        "THROUGH" => ImageTextWrap::Through,
+        "TOP_AND_BOTTOM" | "TOPANDBOTTOM" => ImageTextWrap::TopAndBottom,
+        "BEHIND_TEXT" | "BEHINDTEXT" => ImageTextWrap::BehindText,
+        "IN_FRONT_OF_TEXT" | "INFRONTOFTEXT" => ImageTextWrap::InFrontOfText,
+        _ => {
+            context.add_warning_once(&format!(
+                "HWPX picture text wrap `{wrap_raw}` is unsupported; hwp-convert could not preserve structured image placement."
+            ));
+            return None;
+        }
+    };
+    let Some(pos) = hwpx_direct_child_tag(pic_xml, "pos") else {
+        return (text_wrap != ImageTextWrap::Square).then_some(ImagePlacement {
+            treat_as_character: true,
+            text_wrap,
+            vertical_relative_to: VerticalRelativeTo::Paper,
+            vertical_alignment: VerticalObjectAlignment::Top,
+            vertical_offset: LengthPx(0.0),
+            horizontal_relative_to: HorizontalRelativeTo::Paper,
+            horizontal_alignment: HorizontalObjectAlignment::Left,
+            horizontal_offset: LengthPx(0.0),
+        });
+    };
+
+    let treat_as_character = match xml_attribute_value_any(
+        pos.raw,
+        HWPX_PICTURE_TREAT_AS_CHAR_ATTRIBUTES,
+    ) {
+        Some(value) if xml_boolean_is_true(value) => true,
+        Some(value) if value.trim() == "0" || value.trim().eq_ignore_ascii_case("false") => false,
+        Some(value) => {
+            context.add_warning_once(&format!(
+                "HWPX picture treat-as-character value `{value}` is invalid; hwp-convert could not preserve structured image placement."
+            ));
+            return None;
+        }
+        None => false,
+    };
+    let vertical_relative_to =
+        match normalized_hwpx_attribute(pos.raw, HWPX_PICTURE_VERTICAL_REL_TO_ATTRIBUTES, "PAPER")
+            .as_str()
+        {
+            "PAPER" => VerticalRelativeTo::Paper,
+            "PAGE" => VerticalRelativeTo::Page,
+            "PARA" | "PARAGRAPH" => VerticalRelativeTo::Paragraph,
+            value => {
+                return unsupported_hwpx_picture_placement("vertical relative-to", value, context);
+            }
+        };
+    let vertical_alignment =
+        match normalized_hwpx_attribute(pos.raw, HWPX_PICTURE_VERTICAL_ALIGN_ATTRIBUTES, "TOP")
+            .as_str()
+        {
+            "TOP" => VerticalObjectAlignment::Top,
+            "CENTER" => VerticalObjectAlignment::Center,
+            "BOTTOM" => VerticalObjectAlignment::Bottom,
+            "INSIDE" => VerticalObjectAlignment::Inside,
+            "OUTSIDE" => VerticalObjectAlignment::Outside,
+            value => {
+                return unsupported_hwpx_picture_placement("vertical alignment", value, context);
+            }
+        };
+    let horizontal_relative_to = match normalized_hwpx_attribute(
+        pos.raw,
+        HWPX_PICTURE_HORIZONTAL_REL_TO_ATTRIBUTES,
+        "PAPER",
+    )
+    .as_str()
+    {
+        "PAPER" => HorizontalRelativeTo::Paper,
+        "PAGE" => HorizontalRelativeTo::Page,
+        "COLUMN" => HorizontalRelativeTo::Column,
+        "PARA" | "PARAGRAPH" => HorizontalRelativeTo::Paragraph,
+        value => {
+            return unsupported_hwpx_picture_placement("horizontal relative-to", value, context);
+        }
+    };
+    let horizontal_alignment =
+        match normalized_hwpx_attribute(pos.raw, HWPX_PICTURE_HORIZONTAL_ALIGN_ATTRIBUTES, "LEFT")
+            .as_str()
+        {
+            "LEFT" => HorizontalObjectAlignment::Left,
+            "CENTER" => HorizontalObjectAlignment::Center,
+            "RIGHT" => HorizontalObjectAlignment::Right,
+            "INSIDE" => HorizontalObjectAlignment::Inside,
+            "OUTSIDE" => HorizontalObjectAlignment::Outside,
+            value => {
+                return unsupported_hwpx_picture_placement("horizontal alignment", value, context);
+            }
+        };
+    let vertical_offset = hwpx_picture_placement_offset(
+        xml_attribute_value_any(pos.raw, HWPX_PICTURE_VERTICAL_OFFSET_ATTRIBUTES).unwrap_or("0"),
+        "vertical",
+        context,
+    )?;
+    let horizontal_offset = hwpx_picture_placement_offset(
+        xml_attribute_value_any(pos.raw, HWPX_PICTURE_HORIZONTAL_OFFSET_ATTRIBUTES).unwrap_or("0"),
+        "horizontal",
+        context,
+    )?;
+
+    let placement = ImagePlacement {
+        treat_as_character,
+        text_wrap,
+        vertical_relative_to,
+        vertical_alignment,
+        vertical_offset,
+        horizontal_relative_to,
+        horizontal_alignment,
+        horizontal_offset,
+    };
+    let is_default = placement.treat_as_character
+        && placement.text_wrap == ImageTextWrap::Square
+        && placement.vertical_relative_to == VerticalRelativeTo::Paper
+        && placement.vertical_alignment == VerticalObjectAlignment::Top
+        && placement.vertical_offset.0 == 0.0
+        && placement.horizontal_relative_to == HorizontalRelativeTo::Paper
+        && placement.horizontal_alignment == HorizontalObjectAlignment::Left
+        && placement.horizontal_offset.0 == 0.0;
+    (!is_default).then_some(placement)
+}
+
+fn normalized_hwpx_attribute(tag: &str, names: &[&str], default: &str) -> String {
+    xml_attribute_value_any(tag, names)
+        .unwrap_or(default)
+        .trim()
+        .to_ascii_uppercase()
+}
+
+fn unsupported_hwpx_picture_placement<T>(
+    property: &str,
+    value: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<T> {
+    context.add_warning_once(&format!(
+        "HWPX picture {property} `{value}` is unsupported; hwp-convert could not preserve structured image placement."
+    ));
+    None
+}
+
+fn hwpx_picture_placement_offset(
+    raw: &str,
+    axis: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<LengthPx> {
+    let Ok(value) = raw.trim().parse::<i64>() else {
+        context.add_warning_once(&format!(
+            "HWPX picture {axis} offset `{raw}` is invalid; hwp-convert could not preserve structured image placement."
+        ));
+        return None;
+    };
+    Some(LengthPx(value as f32 / 75.0))
 }
 
 fn hwpx_picture_crop(pic_xml: &str, context: &mut HwpxFallbackContext) -> Option<ImageCrop> {
@@ -8089,6 +8259,19 @@ mod tests {
         assert_eq!(image.flip_horizontal, Some(true));
         assert_eq!(image.flip_vertical, None);
         assert_eq!(image.rotation_degrees, Some(90.0));
+        assert_eq!(
+            image.placement,
+            Some(ImagePlacement {
+                treat_as_character: false,
+                text_wrap: ImageTextWrap::TopAndBottom,
+                vertical_relative_to: VerticalRelativeTo::Page,
+                vertical_alignment: VerticalObjectAlignment::Center,
+                vertical_offset: LengthPx(120.0 / 75.0),
+                horizontal_relative_to: HorizontalRelativeTo::Column,
+                horizontal_alignment: HorizontalObjectAlignment::Right,
+                horizontal_offset: LengthPx(240.0 / 75.0),
+            })
+        );
         assert_eq!(
             image.crop,
             Some(ImageCrop {

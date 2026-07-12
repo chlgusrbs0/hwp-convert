@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// v25: added `TableStyle::cell_spacing`. Additive and `#[serde(default)]`.
 /// v26: added `Image` padding fields. Additive and `#[serde(default)]`.
 /// v27: added `Image::caption_placement`. Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 31;
+pub const IR_VERSION: u16 = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -628,6 +628,8 @@ pub struct Image {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect: Option<ImageEffect>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<ImagePlacement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brightness: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contrast: Option<i32>,
@@ -665,6 +667,66 @@ pub enum ImageEffect {
     Grayscale,
     BlackWhite,
     Pattern8x8,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ImagePlacement {
+    pub treat_as_character: bool,
+    pub text_wrap: ImageTextWrap,
+    pub vertical_relative_to: VerticalRelativeTo,
+    pub vertical_alignment: VerticalObjectAlignment,
+    pub vertical_offset: LengthPx,
+    pub horizontal_relative_to: HorizontalRelativeTo,
+    pub horizontal_alignment: HorizontalObjectAlignment,
+    pub horizontal_offset: LengthPx,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageTextWrap {
+    Square,
+    Tight,
+    Through,
+    TopAndBottom,
+    BehindText,
+    InFrontOfText,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VerticalRelativeTo {
+    Paper,
+    Page,
+    Paragraph,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HorizontalRelativeTo {
+    Paper,
+    Page,
+    Column,
+    Paragraph,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VerticalObjectAlignment {
+    Top,
+    Center,
+    Bottom,
+    Inside,
+    Outside,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HorizontalObjectAlignment {
+    Left,
+    Center,
+    Right,
+    Inside,
+    Outside,
 }
 
 /// Source-image crop rectangle. Coordinates are measured from the source
@@ -1064,6 +1126,7 @@ mod tests {
         assert_eq!(image.border, None);
         assert!(!image.grayscale);
         assert_eq!(image.effect, None);
+        assert_eq!(image.placement, None);
         assert_eq!(image.crop, None);
         assert_eq!(image.brightness, None);
         assert_eq!(image.contrast, None);
