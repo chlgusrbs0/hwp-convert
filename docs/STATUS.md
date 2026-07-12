@@ -48,7 +48,7 @@
 
 ### 미지원 control warning 동작
 
-`src/bridge/rhwp.rs`는 parser가 노출하지만 아직 완전히 매핑하지 못한 known control에 대해 `ConversionWarning`을 기록한다. 현재 대상: auto number, new number, page number position, page hide, hidden comment, non-hyperlink fields, form objects. 이름 있는 bookmark는 `Anchor` inline으로 보존하고, 복구 가능한 command string이 있는 non-hyperlink field는 `UnknownInline` fallback text로 남긴다. 복구 가능한 텍스트가 있는 visible unsupported control(ruby, character overlap)과 paragraph 내용이 있는 hidden comment는 `UnknownBlock` fallback text로 남긴다.
+`src/bridge/rhwp.rs`는 parser가 노출하지만 아직 완전히 매핑하지 못한 known control에 대해 `ConversionWarning`을 기록한다. 현재 대상: auto number, new number, page number position, page hide, hidden comment, non-hyperlink fields, form objects. 이름 있는 bookmark는 `Anchor` inline으로 보존하고, 복구 가능한 command string이 있는 non-hyperlink field는 `UnknownInline` fallback text로 남긴다. 자동번호·쪽번호 fallback에는 형식과 장식 문자를, ruby·글자겹침 fallback에는 정렬·테두리·크기·글자속성 참조를 함께 남긴다. 복구 가능한 텍스트가 있는 visible unsupported control과 paragraph 내용이 있는 hidden comment는 `UnknownBlock` fallback text로 남긴다.
 
 ### HTML list 렌더링
 

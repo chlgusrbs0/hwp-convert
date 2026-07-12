@@ -1224,10 +1224,15 @@ impl<'a> BridgeContext<'a> {
                 .warn_unsupported_control_with_fallback(
                     "auto_number",
                     format!(
-                        "[auto number: type={}, number={}, assigned={}]",
+                        "[auto number: type={}, number={}, assigned={}, format={}, superscript={}, user_symbol={}, prefix={}, suffix={}]",
                         auto_number_type_name(number.number_type),
                         number.number,
-                        number.assigned_number
+                        number.assigned_number,
+                        number.format,
+                        number.superscript,
+                        fallback_char_value(number.user_symbol),
+                        fallback_char_value(number.prefix_char),
+                        fallback_char_value(number.suffix_char),
                     ),
                 )
                 .into_iter()
@@ -1247,8 +1252,13 @@ impl<'a> BridgeContext<'a> {
                 .warn_unsupported_control_with_fallback(
                     "page_number_position",
                     format!(
-                        "[page number position: format={}, position={}]",
-                        position.format, position.position
+                        "[page number position: format={}, position={}, user_symbol={}, prefix={}, suffix={}, dash={}]",
+                        position.format,
+                        position.position,
+                        fallback_char_value(position.user_symbol),
+                        fallback_char_value(position.prefix_char),
+                        fallback_char_value(position.suffix_char),
+                        fallback_char_value(position.dash_char),
                     ),
                 )
                 .into_iter()
@@ -1258,8 +1268,8 @@ impl<'a> BridgeContext<'a> {
                 .warn_unsupported_visible_control(
                     "ruby",
                     non_empty_string(&ruby.ruby_text)
-                        .map(|text| format!("[ruby: {text}]"))
-                        .unwrap_or_else(|| "[ruby]".to_string()),
+                        .map(|text| format!("[ruby: text={text}, alignment={}]", ruby.alignment))
+                        .unwrap_or_else(|| format!("[ruby: alignment={}]", ruby.alignment)),
                 )
                 .into_iter()
                 .collect(),
@@ -1268,8 +1278,24 @@ impl<'a> BridgeContext<'a> {
                 self.warn_unsupported_visible_control(
                     "char_overlap",
                     non_empty_string(&chars)
-                        .map(|text| format!("[char overlap: {text}]"))
-                        .unwrap_or_else(|| "[char overlap]".to_string()),
+                        .map(|text| {
+                            format!(
+                                "[char overlap: text={text}, border_type={}, inner_char_size={}, expansion={}, char_shape_ids={:?}]",
+                                overlap.border_type,
+                                overlap.inner_char_size,
+                                overlap.expansion,
+                                overlap.char_shape_ids
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            format!(
+                                "[char overlap: border_type={}, inner_char_size={}, expansion={}, char_shape_ids={:?}]",
+                                overlap.border_type,
+                                overlap.inner_char_size,
+                                overlap.expansion,
+                                overlap.char_shape_ids
+                            )
+                        }),
                 )
                 .into_iter()
                 .collect()
@@ -3332,6 +3358,16 @@ fn auto_number_type_name(number_type: RhwpAutoNumberType) -> &'static str {
         RhwpAutoNumberType::Picture => "picture",
         RhwpAutoNumberType::Table => "table",
         RhwpAutoNumberType::Equation => "equation",
+    }
+}
+
+fn fallback_char_value(value: char) -> String {
+    if value == '\0' {
+        "none".to_string()
+    } else if value.is_control() {
+        format!("U+{:04X}", u32::from(value))
+    } else {
+        value.to_string()
     }
 }
 
@@ -6223,11 +6259,14 @@ mod tests {
                     controls: vec![
                         Control::Ruby(RhwpRuby {
                             ruby_text: "덧말".to_string(),
-                            ..Default::default()
+                            alignment: 2,
                         }),
                         Control::CharOverlap(RhwpCharOverlap {
                             chars: vec!['겹', '침'],
-                            ..Default::default()
+                            border_type: 3,
+                            inner_char_size: 80,
+                            expansion: 1,
+                            char_shape_ids: vec![4, 5],
                         }),
                     ],
                     ..Default::default()
@@ -6241,10 +6280,10 @@ mod tests {
         let blocks = &bridged.sections[0].blocks;
 
         assert!(
-            matches!(&blocks[1], Block::Unknown(unknown) if unknown.kind == "ruby" && unknown.fallback_text.as_deref() == Some("[ruby: 덧말]"))
+            matches!(&blocks[1], Block::Unknown(unknown) if unknown.kind == "ruby" && unknown.fallback_text.as_deref() == Some("[ruby: text=덧말, alignment=2]"))
         );
         assert!(
-            matches!(&blocks[2], Block::Unknown(unknown) if unknown.kind == "char_overlap" && unknown.fallback_text.as_deref() == Some("[char overlap: 겹침]"))
+            matches!(&blocks[2], Block::Unknown(unknown) if unknown.kind == "char_overlap" && unknown.fallback_text.as_deref() == Some("[char overlap: text=겹침, border_type=3, inner_char_size=80, expansion=1, char_shape_ids=[4, 5]]"))
         );
         assert!(bridged.warnings.iter().any(|warning| {
             warning
@@ -6297,7 +6336,11 @@ mod tests {
                             number_type: RhwpAutoNumberType::Table,
                             number: 2,
                             assigned_number: 7,
-                            ..Default::default()
+                            format: 4,
+                            superscript: true,
+                            user_symbol: '※',
+                            prefix_char: '(',
+                            suffix_char: ')',
                         }),
                         Control::NewNumber(RhwpNewNumber {
                             number_type: RhwpAutoNumberType::Picture,
@@ -6306,7 +6349,10 @@ mod tests {
                         Control::PageNumberPos(RhwpPageNumberPos {
                             format: 4,
                             position: 5,
-                            ..Default::default()
+                            user_symbol: '#',
+                            prefix_char: '[',
+                            suffix_char: ']',
+                            dash_char: '-',
                         }),
                     ],
                     ..Default::default()
@@ -6320,13 +6366,13 @@ mod tests {
         let blocks = &bridged.sections[0].blocks;
 
         assert!(
-            matches!(&blocks[1], Block::Unknown(unknown) if unknown.kind == "auto_number" && unknown.fallback_text.as_deref() == Some("[auto number: type=table, number=2, assigned=7]"))
+            matches!(&blocks[1], Block::Unknown(unknown) if unknown.kind == "auto_number" && unknown.fallback_text.as_deref() == Some("[auto number: type=table, number=2, assigned=7, format=4, superscript=true, user_symbol=※, prefix=(, suffix=)]"))
         );
         assert!(
             matches!(&blocks[2], Block::Unknown(unknown) if unknown.kind == "new_number" && unknown.fallback_text.as_deref() == Some("[new number: type=picture, number=3]"))
         );
         assert!(
-            matches!(&blocks[3], Block::Unknown(unknown) if unknown.kind == "page_number_position" && unknown.fallback_text.as_deref() == Some("[page number position: format=4, position=5]"))
+            matches!(&blocks[3], Block::Unknown(unknown) if unknown.kind == "page_number_position" && unknown.fallback_text.as_deref() == Some("[page number position: format=4, position=5, user_symbol=#, prefix=[, suffix=], dash=-]"))
         );
     }
 
