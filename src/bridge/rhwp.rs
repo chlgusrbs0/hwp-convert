@@ -1886,7 +1886,26 @@ impl<'a> BridgeContext<'a> {
                     blocks.push(Block::Shape(self.map_shape(shape)));
                 }
 
-                blocks
+                let Some(caption) = group.caption.as_ref() else {
+                    return blocks;
+                };
+                let mut caption_blocks = self.map_caption_blocks(caption);
+                if caption_blocks.is_empty() {
+                    return blocks;
+                }
+                self.add_warning_once(
+                    "rhwp exposed grouped shape captions; hwp-convert preserved them as adjacent caption blocks around the expanded children.",
+                );
+                match caption.direction {
+                    RhwpCaptionDirection::Left | RhwpCaptionDirection::Top => {
+                        caption_blocks.extend(blocks);
+                        caption_blocks
+                    }
+                    RhwpCaptionDirection::Right | RhwpCaptionDirection::Bottom => {
+                        blocks.extend(caption_blocks);
+                        blocks
+                    }
+                }
             }
             _ => vec![Block::Shape(self.map_shape(shape))],
         }
@@ -4918,6 +4937,14 @@ mod tests {
         }));
         let group = ShapeObject::Group(RhwpGroupShape {
             children: vec![rectangle, picture],
+            caption: Some(RhwpCaption {
+                direction: RhwpCaptionDirection::Bottom,
+                paragraphs: vec![RhwpParagraph {
+                    text: "Group caption".to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
             ..Default::default()
         });
         let document = RhwpDocument {
@@ -4939,19 +4966,32 @@ mod tests {
         let bridged = BridgeContext::new(&document).into_document();
         let blocks = &bridged.sections[0].blocks;
 
-        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks.len(), 3);
         assert!(
             matches!(&blocks[0], Block::Shape(shape) if shape.kind == ShapeKind::Rectangle && shape.fallback_text.as_deref() == Some("group rect"))
         );
         assert!(
             matches!(&blocks[1], Block::Image(image) if image.resource_id.as_str() == "image-11" && image.alt.as_deref() == Some("group image"))
         );
+        assert!(matches!(
+            &blocks[2],
+            Block::Paragraph(paragraph)
+                if paragraph.role == ParagraphRole::Caption
+                    && matches!(
+                        paragraph.inlines.as_slice(),
+                        [Inline::Text(run)] if run.text == "Group caption"
+                    )
+        ));
         assert!(
             bridged
                 .warnings
                 .iter()
                 .any(|warning| { warning.message.contains("grouped shape children") })
         );
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("grouped shape captions")
+                && warning.message.contains("adjacent caption blocks")
+        }));
     }
 
     #[test]
