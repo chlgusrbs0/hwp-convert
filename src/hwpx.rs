@@ -3474,9 +3474,30 @@ fn hwpx_picture_placement(
             return None;
         }
     };
+    let z_order = match xml_attribute_value(root.raw, "zOrder")
+        .unwrap_or("0")
+        .trim()
+        .parse()
+    {
+        Ok(value) => value,
+        Err(_) => {
+            context.add_warning_once(
+                "HWPX picture zOrder is invalid; hwp-convert could not preserve structured image placement.",
+            );
+            return None;
+        }
+    };
+    let margins = hwpx_picture_out_margins(pic_xml, context)?;
     let Some(pos) = hwpx_direct_child_tag(pic_xml, "pos") else {
-        return (text_wrap != ImageTextWrap::Square).then_some(ImagePlacement {
+        let has_placement = text_wrap != ImageTextWrap::Square
+            || z_order != 0
+            || margins.iter().any(|margin| margin.0 != 0.0);
+        return has_placement.then_some(ImagePlacement {
             treat_as_character: true,
+            flow_with_text: true,
+            allow_overlap: false,
+            prevent_page_break: false,
+            z_order,
             text_wrap,
             vertical_relative_to: VerticalRelativeTo::Paper,
             vertical_alignment: VerticalObjectAlignment::Top,
@@ -3484,6 +3505,10 @@ fn hwpx_picture_placement(
             horizontal_relative_to: HorizontalRelativeTo::Paper,
             horizontal_alignment: HorizontalObjectAlignment::Left,
             horizontal_offset: LengthPx(0.0),
+            margin_top: margins[0],
+            margin_right: margins[1],
+            margin_bottom: margins[2],
+            margin_left: margins[3],
         });
     };
 
@@ -3501,6 +3526,8 @@ fn hwpx_picture_placement(
         }
         None => false,
     };
+    let flow_with_text = hwpx_picture_boolean_attribute(pos.raw, "flowWithText", true, context)?;
+    let allow_overlap = hwpx_picture_boolean_attribute(pos.raw, "allowOverlap", false, context)?;
     let vertical_relative_to =
         match normalized_hwpx_attribute(pos.raw, HWPX_PICTURE_VERTICAL_REL_TO_ATTRIBUTES, "PAPER")
             .as_str()
@@ -3566,6 +3593,10 @@ fn hwpx_picture_placement(
 
     let placement = ImagePlacement {
         treat_as_character,
+        flow_with_text,
+        allow_overlap,
+        prevent_page_break: false,
+        z_order,
         text_wrap,
         vertical_relative_to,
         vertical_alignment,
@@ -3573,15 +3604,27 @@ fn hwpx_picture_placement(
         horizontal_relative_to,
         horizontal_alignment,
         horizontal_offset,
+        margin_top: margins[0],
+        margin_right: margins[1],
+        margin_bottom: margins[2],
+        margin_left: margins[3],
     };
     let is_default = placement.treat_as_character
+        && placement.flow_with_text
+        && !placement.allow_overlap
+        && !placement.prevent_page_break
+        && placement.z_order == 0
         && placement.text_wrap == ImageTextWrap::Square
         && placement.vertical_relative_to == VerticalRelativeTo::Paper
         && placement.vertical_alignment == VerticalObjectAlignment::Top
         && placement.vertical_offset.0 == 0.0
         && placement.horizontal_relative_to == HorizontalRelativeTo::Paper
         && placement.horizontal_alignment == HorizontalObjectAlignment::Left
-        && placement.horizontal_offset.0 == 0.0;
+        && placement.horizontal_offset.0 == 0.0
+        && placement.margin_top.0 == 0.0
+        && placement.margin_right.0 == 0.0
+        && placement.margin_bottom.0 == 0.0
+        && placement.margin_left.0 == 0.0;
     (!is_default).then_some(placement)
 }
 
@@ -3590,6 +3633,56 @@ fn normalized_hwpx_attribute(tag: &str, names: &[&str], default: &str) -> String
         .unwrap_or(default)
         .trim()
         .to_ascii_uppercase()
+}
+
+fn hwpx_picture_boolean_attribute(
+    tag: &str,
+    name: &str,
+    default: bool,
+    context: &mut HwpxFallbackContext,
+) -> Option<bool> {
+    let Some(value) = xml_attribute_value(tag, name) else {
+        return Some(default);
+    };
+    if xml_boolean_is_true(value) {
+        return Some(true);
+    }
+    if value.trim() == "0" || value.trim().eq_ignore_ascii_case("false") {
+        return Some(false);
+    }
+    context.add_warning_once(&format!(
+        "HWPX picture {name} value `{value}` is invalid; hwp-convert could not preserve structured image placement."
+    ));
+    None
+}
+
+fn hwpx_picture_out_margins(
+    pic_xml: &str,
+    context: &mut HwpxFallbackContext,
+) -> Option<[LengthPx; 4]> {
+    let Some(margin) = hwpx_direct_child_tag(pic_xml, "outMargin") else {
+        return Some([LengthPx(0.0); 4]);
+    };
+    let mut values = [LengthPx(0.0); 4];
+    for (index, (names, side)) in [
+        (HWPX_MARGIN_TOP_ATTRIBUTES, "top"),
+        (HWPX_MARGIN_RIGHT_ATTRIBUTES, "right"),
+        (HWPX_MARGIN_BOTTOM_ATTRIBUTES, "bottom"),
+        (HWPX_MARGIN_LEFT_ATTRIBUTES, "left"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let raw = xml_attribute_value_any(margin.raw, names).unwrap_or("0");
+        let Ok(value) = raw.trim().parse::<i64>() else {
+            context.add_warning_once(&format!(
+                "HWPX picture {side} outer margin `{raw}` is invalid; hwp-convert could not preserve structured image placement."
+            ));
+            return None;
+        };
+        values[index] = LengthPx(value as f32 / 75.0);
+    }
+    Some(values)
 }
 
 fn unsupported_hwpx_picture_placement<T>(
@@ -8241,7 +8334,7 @@ mod tests {
             },
         );
         let xml = r#"
-            <hp:pic wrap="TOP_AND_BOTTOM">
+            <hp:pic wrap="TOP_AND_BOTTOM" zOrder="7">
               <hp:caption><hp:pic><hp:rotationInfo angle="1234"/></hp:pic></hp:caption>
               <hp:flip horizontalFlip="1" verticalFlip="false"/>
               <hp:rotationInfo rotateAngle="9000"/>
@@ -8249,8 +8342,10 @@ mod tests {
               <hp:imgClip l="10" r="900" t="20" b="700"/>
               <hp:imgDim dimWidth="1000" dimHeight="800"/>
               <hp:effects><hp:shadow/><hp:glow/><hp:shadow/></hp:effects>
-              <hp:pos treat-as-char="0" verticalRelTo="PAGE" verticalAlign="CENTER" verticalOffset="120"
+              <hp:pos treat-as-char="0" flowWithText="0" allowOverlap="1"
+                      verticalRelTo="PAGE" verticalAlign="CENTER" verticalOffset="120"
                       horizontalRelTo="COLUMN" horizontalAlign="RIGHT" horizontalOffset="240"/>
+              <hp:outMargin l="10" r="20" t="30" b="40"/>
             </hp:pic>
         "#;
 
@@ -8263,6 +8358,10 @@ mod tests {
             image.placement,
             Some(ImagePlacement {
                 treat_as_character: false,
+                flow_with_text: false,
+                allow_overlap: true,
+                prevent_page_break: false,
+                z_order: 7,
                 text_wrap: ImageTextWrap::TopAndBottom,
                 vertical_relative_to: VerticalRelativeTo::Page,
                 vertical_alignment: VerticalObjectAlignment::Center,
@@ -8270,6 +8369,10 @@ mod tests {
                 horizontal_relative_to: HorizontalRelativeTo::Column,
                 horizontal_alignment: HorizontalObjectAlignment::Right,
                 horizontal_offset: LengthPx(240.0 / 75.0),
+                margin_top: LengthPx(30.0 / 75.0),
+                margin_right: LengthPx(20.0 / 75.0),
+                margin_bottom: LengthPx(40.0 / 75.0),
+                margin_left: LengthPx(10.0 / 75.0),
             })
         );
         assert_eq!(

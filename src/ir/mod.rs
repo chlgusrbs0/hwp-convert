@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// v25: added `TableStyle::cell_spacing`. Additive and `#[serde(default)]`.
 /// v26: added `Image` padding fields. Additive and `#[serde(default)]`.
 /// v27: added `Image::caption_placement`. Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 32;
+pub const IR_VERSION: u16 = 33;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -672,6 +672,10 @@ pub enum ImageEffect {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ImagePlacement {
     pub treat_as_character: bool,
+    pub flow_with_text: bool,
+    pub allow_overlap: bool,
+    pub prevent_page_break: bool,
+    pub z_order: i32,
     pub text_wrap: ImageTextWrap,
     pub vertical_relative_to: VerticalRelativeTo,
     pub vertical_alignment: VerticalObjectAlignment,
@@ -679,6 +683,10 @@ pub struct ImagePlacement {
     pub horizontal_relative_to: HorizontalRelativeTo,
     pub horizontal_alignment: HorizontalObjectAlignment,
     pub horizontal_offset: LengthPx,
+    pub margin_top: LengthPx,
+    pub margin_right: LengthPx,
+    pub margin_bottom: LengthPx,
+    pub margin_left: LengthPx,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

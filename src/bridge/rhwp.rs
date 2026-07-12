@@ -1697,6 +1697,12 @@ impl<'a> BridgeContext<'a> {
         let has_unmodeled_layout = !picture.common.treat_as_char
             || picture.common.horizontal_offset != 0
             || picture.common.vertical_offset != 0
+            || picture.common.z_order != 0
+            || picture.common.prevent_page_break != 0
+            || picture.common.margin.left != 0
+            || picture.common.margin.right != 0
+            || picture.common.margin.top != 0
+            || picture.common.margin.bottom != 0
             || picture.common.text_wrap != rhwp::model::shape::TextWrap::Square
             || picture.common.vert_rel_to != rhwp::model::shape::VertRelTo::Paper
             || picture.common.horz_rel_to != rhwp::model::shape::HorzRelTo::Paper
@@ -1704,7 +1710,7 @@ impl<'a> BridgeContext<'a> {
             || picture.common.horz_align != rhwp::model::shape::HorzAlign::Left;
         if has_unmodeled_layout {
             self.add_warning_once(&format!(
-                "rhwp picture layout (treat_as_char:{},wrap:{:?},vertical:{:?}/{:?}/{},horizontal:{:?}/{:?}/{}) was preserved in Image IR; semantic exporters currently linearize the image without floating placement.",
+                "rhwp picture layout (treat_as_char:{},wrap:{:?},vertical:{:?}/{:?}/{},horizontal:{:?}/{:?}/{},z_order:{},margin:{}/{}/{}/{},prevent_page_break:{}) was preserved in Image IR; semantic exporters currently linearize the image without floating placement.",
                 picture.common.treat_as_char,
                 picture.common.text_wrap,
                 picture.common.vert_rel_to,
@@ -1712,7 +1718,13 @@ impl<'a> BridgeContext<'a> {
                 picture.common.vertical_offset,
                 picture.common.horz_rel_to,
                 picture.common.horz_align,
-                picture.common.horizontal_offset
+                picture.common.horizontal_offset,
+                picture.common.z_order,
+                picture.common.margin.left,
+                picture.common.margin.right,
+                picture.common.margin.top,
+                picture.common.margin.bottom,
+                picture.common.prevent_page_break
             ));
         }
         // GrayScale is modeled directly. BlackWhite is retained as a visible
@@ -3419,6 +3431,12 @@ fn map_picture_placement(picture: &Picture) -> Option<ImagePlacement> {
     let has_layout = !common.treat_as_char
         || common.horizontal_offset != 0
         || common.vertical_offset != 0
+        || common.z_order != 0
+        || common.prevent_page_break != 0
+        || common.margin.left != 0
+        || common.margin.right != 0
+        || common.margin.top != 0
+        || common.margin.bottom != 0
         || common.text_wrap != rhwp::model::shape::TextWrap::Square
         || common.vert_rel_to != rhwp::model::shape::VertRelTo::Paper
         || common.horz_rel_to != rhwp::model::shape::HorzRelTo::Paper
@@ -3426,6 +3444,10 @@ fn map_picture_placement(picture: &Picture) -> Option<ImagePlacement> {
         || common.horz_align != rhwp::model::shape::HorzAlign::Left;
     has_layout.then_some(ImagePlacement {
         treat_as_character: common.treat_as_char,
+        flow_with_text: true,
+        allow_overlap: false,
+        prevent_page_break: common.prevent_page_break != 0,
+        z_order: common.z_order,
         text_wrap: match common.text_wrap {
             rhwp::model::shape::TextWrap::Square => ImageTextWrap::Square,
             rhwp::model::shape::TextWrap::Tight => ImageTextWrap::Tight,
@@ -3461,6 +3483,10 @@ fn map_picture_placement(picture: &Picture) -> Option<ImagePlacement> {
             rhwp::model::shape::HorzAlign::Outside => HorizontalObjectAlignment::Outside,
         },
         horizontal_offset: LengthPx(common.horizontal_offset as f32 / 75.0),
+        margin_top: LengthPx(f32::from(common.margin.top) / 75.0),
+        margin_right: LengthPx(f32::from(common.margin.right) / 75.0),
+        margin_bottom: LengthPx(f32::from(common.margin.bottom) / 75.0),
+        margin_left: LengthPx(f32::from(common.margin.left) / 75.0),
     })
 }
 
@@ -4710,6 +4736,14 @@ mod tests {
                 horz_rel_to: rhwp::model::shape::HorzRelTo::Column,
                 horz_align: rhwp::model::shape::HorzAlign::Right,
                 horizontal_offset: 240,
+                z_order: 5,
+                prevent_page_break: 1,
+                margin: rhwp::model::Padding {
+                    left: 10,
+                    right: 20,
+                    top: 30,
+                    bottom: 40,
+                },
                 ..Default::default()
             },
             ..Default::default()
@@ -4745,6 +4779,10 @@ mod tests {
             image.placement,
             Some(ImagePlacement {
                 treat_as_character: false,
+                flow_with_text: true,
+                allow_overlap: false,
+                prevent_page_break: true,
+                z_order: 5,
                 text_wrap: ImageTextWrap::TopAndBottom,
                 vertical_relative_to: VerticalRelativeTo::Page,
                 vertical_alignment: VerticalObjectAlignment::Center,
@@ -4752,6 +4790,10 @@ mod tests {
                 horizontal_relative_to: HorizontalRelativeTo::Column,
                 horizontal_alignment: HorizontalObjectAlignment::Right,
                 horizontal_offset: LengthPx(240.0 / 75.0),
+                margin_top: LengthPx(30.0 / 75.0),
+                margin_right: LengthPx(20.0 / 75.0),
+                margin_bottom: LengthPx(40.0 / 75.0),
+                margin_left: LengthPx(10.0 / 75.0),
             })
         );
         assert_eq!(image.padding_top, Some(LengthPx(30.0 / 75.0)));
@@ -4782,6 +4824,9 @@ mod tests {
                 && warning.message.contains("preserved in Image IR")
                 && warning.message.contains("vertical:Page/Center/120")
                 && warning.message.contains("horizontal:Column/Right/240")
+                && warning.message.contains("z_order:5")
+                && warning.message.contains("margin:10/20/30/40")
+                && warning.message.contains("prevent_page_break:1")
         }));
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("picture visual properties")
