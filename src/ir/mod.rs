@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 /// v25: added `TableStyle::cell_spacing`. Additive and `#[serde(default)]`.
 /// v26: added `Image` padding fields. Additive and `#[serde(default)]`.
 /// v27: added `Image::caption_placement`. Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 34;
+pub const IR_VERSION: u16 = 35;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -604,6 +604,22 @@ pub struct BinaryResource {
     pub media_type: Option<String>,
     pub extension: Option<String>,
     pub bytes: Vec<u8>,
+    #[serde(default)]
+    pub kind: BinaryResourceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absolute_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BinaryResourceKind {
+    Link,
+    #[default]
+    Embedded,
+    Storage,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -1271,6 +1287,7 @@ mod tests {
                 media_type: Some("application/octet-stream".to_string()),
                 extension: Some("bin".to_string()),
                 bytes: vec![4, 5, 6],
+                ..Default::default()
             }))
             .expect_err("duplicate insert should fail");
 

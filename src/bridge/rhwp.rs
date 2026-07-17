@@ -3,6 +3,7 @@ use std::error::Error;
 use std::io;
 use std::path::Path;
 
+use rhwp::model::bin_data::BinDataType as RhwpBinDataType;
 use rhwp::model::control::{
     AutoNumberType as RhwpAutoNumberType, Bookmark as RhwpBookmark, Control,
     Equation as RhwpEquation, Field as RhwpField, FieldType as RhwpFieldType,
@@ -37,8 +38,8 @@ use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_r
 
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
-    BinaryResource, Block, Border, BorderStyle, CaptionPlacement, Color, ConversionWarning,
-    Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
+    BinaryResource, BinaryResourceKind, Block, Border, BorderStyle, CaptionPlacement, Color,
+    ConversionWarning, Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
     HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
     ImageEffect as IrImageEffect, ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt,
     LengthPx, Link, ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
@@ -1977,8 +1978,71 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn preserve_unreferenced_binary_resources(&mut self) {
+        let mut represented_content_ids = BTreeSet::new();
+        for (index, bin_data) in self
+            .source
+            .doc_info
+            .bin_data_list
+            .clone()
+            .into_iter()
+            .enumerate()
+        {
+            if self
+                .image_bin_data_content_ids
+                .contains(&bin_data.storage_id)
+            {
+                represented_content_ids.insert(bin_data.storage_id);
+                continue;
+            }
+            let content = self
+                .source
+                .bin_data_content
+                .iter()
+                .find(|content| content.id == bin_data.storage_id)
+                .cloned();
+            if let Some(content) = &content {
+                represented_content_ids.insert(content.id);
+            } else if bin_data.data_type != RhwpBinDataType::Link {
+                self.add_warning_once(&format!(
+                    "rhwp BinData entry {} referenced missing storage content {}; hwp-convert preserved its metadata with empty bytes.",
+                    index + 1,
+                    bin_data.storage_id
+                ));
+            }
+            let extension = bin_data
+                .extension
+                .as_deref()
+                .and_then(non_empty_string)
+                .or_else(|| {
+                    content
+                        .as_ref()
+                        .and_then(|content| non_empty_string(&content.extension))
+                });
+            let media_type = extension
+                .as_deref()
+                .and_then(media_type_for_extension)
+                .map(ToOwned::to_owned);
+            let _ = self
+                .resources
+                .insert_unique(Resource::Binary(BinaryResource {
+                    id: ResourceId(format!("binary-{}", index + 1)),
+                    media_type,
+                    extension,
+                    bytes: content.map(|content| content.data).unwrap_or_default(),
+                    kind: match bin_data.data_type {
+                        RhwpBinDataType::Link => BinaryResourceKind::Link,
+                        RhwpBinDataType::Embedding => BinaryResourceKind::Embedded,
+                        RhwpBinDataType::Storage => BinaryResourceKind::Storage,
+                    },
+                    absolute_path: bin_data.abs_path.and_then(|path| non_empty_string(&path)),
+                    relative_path: bin_data.rel_path.and_then(|path| non_empty_string(&path)),
+                }));
+        }
+
         for content in &self.source.bin_data_content {
-            if self.image_bin_data_content_ids.contains(&content.id) {
+            if self.image_bin_data_content_ids.contains(&content.id)
+                || represented_content_ids.contains(&content.id)
+            {
                 continue;
             }
             let id = ResourceId(format!("binary-{}", content.id));
@@ -1997,6 +2061,9 @@ impl<'a> BridgeContext<'a> {
                     media_type,
                     extension,
                     bytes: content.data.clone(),
+                    kind: BinaryResourceKind::Unknown,
+                    absolute_path: None,
+                    relative_path: None,
                 }));
         }
     }
@@ -4505,6 +4572,16 @@ mod tests {
             ..Default::default()
         };
         let document = RhwpDocument {
+            doc_info: DocInfo {
+                bin_data_list: vec![BinData {
+                    data_type: BinDataType::Link,
+                    abs_path: Some("C:\\source\\attachment.dat".to_string()),
+                    rel_path: Some("attachment.dat".to_string()),
+                    extension: Some("dat".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
                     controls: vec![Control::Picture(Box::new(picture))],
@@ -4547,14 +4624,28 @@ mod tests {
             }
             other => panic!("expected image resource, got {other:?}"),
         }
-        assert_eq!(bridged.resources.entries.len(), 2);
+        assert_eq!(bridged.resources.entries.len(), 3);
         match &bridged.resources.entries[1] {
             Resource::Binary(resource) => {
+                assert_eq!(resource.id.as_str(), "binary-1");
+                assert_eq!(resource.kind, BinaryResourceKind::Link);
+                assert_eq!(
+                    resource.absolute_path.as_deref(),
+                    Some("C:\\source\\attachment.dat")
+                );
+                assert_eq!(resource.relative_path.as_deref(), Some("attachment.dat"));
+                assert!(resource.bytes.is_empty());
+            }
+            other => panic!("expected binary resource, got {other:?}"),
+        }
+        match &bridged.resources.entries[2] {
+            Resource::Binary(resource) => {
                 assert_eq!(resource.id.as_str(), "binary-8");
+                assert_eq!(resource.kind, BinaryResourceKind::Unknown);
                 assert_eq!(resource.extension.as_deref(), Some("bin"));
                 assert_eq!(resource.bytes, vec![1, 2, 3, 4]);
             }
-            other => panic!("expected binary resource, got {other:?}"),
+            other => panic!("expected orphan binary resource, got {other:?}"),
         }
     }
 

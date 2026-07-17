@@ -278,6 +278,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - 이미지 변형 크기 IR 확장: `IR_VERSION` 33 → 34. HWP/HWPX 원본 크기와 현재 변형 크기를 표시 크기와 별도로 보존해 crop·변환 계산 근거를 유지한다.
 - HWP 그룹 도형 caption silent drop 제거: 자식 도형을 순차 블록으로 펼치는 현재 fallback에서도 그룹 caption 문단을 방향에 따라 앞뒤 인접 블록으로 보존한다.
 - HWP 미참조 BinData 보존: 이미지로 소비되지 않은 로드된 임베디드 BinData를 `BinaryResource`로 매핑해 JSON 변환에서 원본 바이트가 조용히 사라지지 않게 한다.
+- HWP BinData 종류·링크 경로 IR 확장: `IR_VERSION` 34 → 35. `Link`·`Embedding`·`Storage`를 구분하고 외부 링크의 절대·상대 경로를 `BinaryResource`에 보존한다.
 
 ## 완료 선언 기준
 
