@@ -3168,6 +3168,7 @@ fn extract_hwpx_shape_from_xml(
         ),
         geometry: None,
         placement: None,
+        children: Vec::new(),
     }
 }
 

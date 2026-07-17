@@ -753,15 +753,30 @@ fn collect_equations(document: &Document) -> Vec<&Equation> {
 }
 
 fn collect_shapes(document: &Document) -> Vec<&Shape> {
-    document
-        .sections
-        .iter()
-        .flat_map(|section| &section.blocks)
-        .filter_map(|block| match block {
-            Block::Shape(shape) => Some(shape),
-            _ => None,
-        })
-        .collect()
+    let mut shapes = Vec::new();
+    for section in &document.sections {
+        collect_shapes_from_blocks(&section.blocks, &mut shapes);
+    }
+    shapes
+}
+
+fn collect_shapes_from_blocks<'a>(blocks: &'a [Block], shapes: &mut Vec<&'a Shape>) {
+    for block in blocks {
+        match block {
+            Block::Shape(shape) => {
+                shapes.push(shape);
+                collect_shapes_from_blocks(&shape.children, shapes);
+            }
+            Block::Table(table) => {
+                for row in &table.rows {
+                    for cell in &row.cells {
+                        collect_shapes_from_blocks(&cell.blocks, shapes);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn paragraph_has_line_break_case(paragraph: &Paragraph) -> bool {
@@ -1483,7 +1498,10 @@ impl DocumentStats {
             }
             Block::Image(_) => self.images += 1,
             Block::Equation(_) => self.equations += 1,
-            Block::Shape(_) => self.shapes += 1,
+            Block::Shape(shape) => {
+                self.shapes += 1;
+                self.count_blocks(&shape.children);
+            }
             Block::Chart(_) => self.charts += 1,
             Block::Unknown(_) => self.unknown_blocks += 1,
         }

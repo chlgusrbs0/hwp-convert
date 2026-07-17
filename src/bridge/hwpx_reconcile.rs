@@ -271,7 +271,10 @@ impl SemanticCoverage {
                 );
             }
             Block::Equation(_) => self.equations += 1,
-            Block::Shape(_) => self.shapes += 1,
+            Block::Shape(shape) => {
+                self.shapes += 1;
+                self.count_blocks(&shape.children);
+            }
             Block::Chart(_) => self.charts += 1,
             Block::Unknown(_) => self.unknown_blocks += 1,
         }
@@ -461,13 +464,17 @@ fn collect_blocks_text(blocks: &[Block], chunks: &mut Vec<String>) {
                 );
             }
             Block::Shape(shape) => {
-                push_text(
-                    shape
-                        .fallback_text
-                        .as_deref()
-                        .or(shape.description.as_deref()),
-                    chunks,
-                );
+                if shape.children.is_empty() {
+                    push_text(
+                        shape
+                            .fallback_text
+                            .as_deref()
+                            .or(shape.description.as_deref()),
+                        chunks,
+                    );
+                } else {
+                    collect_blocks_text(&shape.children, chunks);
+                }
             }
             Block::Chart(chart) => {
                 push_text(

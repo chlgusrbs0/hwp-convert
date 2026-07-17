@@ -42,7 +42,8 @@ use serde::{Deserialize, Serialize};
 /// v45: added structured table cell fill styles.
 /// v46: added table cell source coordinates and border-fill zones.
 /// v47: added structured shape fill styles.
-pub const IR_VERSION: u16 = 47;
+/// v48: added structured shape groups and nested child blocks.
+pub const IR_VERSION: u16 = 48;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1170,6 +1171,8 @@ pub struct Shape {
     pub geometry: Option<ShapeGeometry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<ObjectPlacement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<Block>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1217,6 +1220,7 @@ pub enum ShapeKind {
     Ellipse,
     Polygon,
     TextBox,
+    Group,
     #[default]
     Unknown,
 }

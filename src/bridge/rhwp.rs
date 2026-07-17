@@ -1772,7 +1772,8 @@ impl<'a> BridgeContext<'a> {
             ShapeObject::Rectangle(_) => ShapeKind::Rectangle,
             ShapeObject::Ellipse(_) | ShapeObject::Arc(_) => ShapeKind::Ellipse,
             ShapeObject::Polygon(_) | ShapeObject::Curve(_) => ShapeKind::Polygon,
-            ShapeObject::Group(_) | ShapeObject::Picture(_) => ShapeKind::Unknown,
+            ShapeObject::Group(_) => ShapeKind::Group,
+            ShapeObject::Picture(_) => ShapeKind::Unknown,
         };
         let common = shape.common();
         let drawing = shape.drawing();
@@ -1846,6 +1847,7 @@ impl<'a> BridgeContext<'a> {
             offset_y: hwp_units_to_px_option(common.vertical_offset),
             geometry: map_shape_geometry(shape),
             placement: map_object_placement(common),
+            children: Vec::new(),
         }
     }
 
@@ -1854,26 +1856,16 @@ impl<'a> BridgeContext<'a> {
             ShapeObject::Picture(picture) => vec![self.map_picture_block(picture)],
             ShapeObject::Group(group) => {
                 self.add_warning_once(
-                    "rhwp exposed grouped shape children; hwp-convert expanded them into sequential blocks without preserving group layout.",
+                    "rhwp grouped shape children and group transforms were preserved in Shape IR; semantic exporters retain the group boundary but lay out children sequentially.",
                 );
 
-                let mut blocks = Vec::new();
-                if let Some(description) = non_empty_string(&group.common.description) {
-                    blocks.push(Block::Shape(Shape {
-                        kind: ShapeKind::Unknown,
-                        fallback_text: Some(description.clone()),
-                        description: Some(description),
-                        ..Default::default()
-                    }));
-                }
-
+                let mut children = Vec::new();
                 for child in &group.children {
-                    blocks.extend(self.map_shape_blocks(child));
+                    children.extend(self.map_shape_blocks(child));
                 }
-
-                if blocks.is_empty() {
-                    blocks.push(Block::Shape(self.map_shape(shape)));
-                }
+                let mut group_shape = self.map_shape(shape);
+                group_shape.children = children;
+                let mut blocks = vec![Block::Shape(group_shape)];
 
                 let Some(caption) = group.caption.as_ref() else {
                     return blocks;
@@ -1883,7 +1875,7 @@ impl<'a> BridgeContext<'a> {
                     return blocks;
                 }
                 self.add_warning_once(
-                    "rhwp exposed grouped shape captions; hwp-convert preserved them as adjacent caption blocks around the expanded children.",
+                    "rhwp exposed grouped shape captions; hwp-convert preserved them as adjacent caption blocks around the structured group.",
                 );
                 match caption.direction {
                     RhwpCaptionDirection::Left | RhwpCaptionDirection::Top => {
@@ -5469,7 +5461,7 @@ mod tests {
     }
 
     #[test]
-    fn expands_group_shape_children_into_sequential_blocks() {
+    fn preserves_group_shape_children_inside_structured_group() {
         let rectangle = ShapeObject::Rectangle(RhwpRectangleShape {
             common: rhwp::model::shape::CommonObjAttr {
                 description: "group rect".to_string(),
@@ -5489,6 +5481,17 @@ mod tests {
             ..Default::default()
         }));
         let group = ShapeObject::Group(RhwpGroupShape {
+            common: RhwpCommonObjAttr {
+                description: "group".to_string(),
+                width: 7500,
+                height: 3750,
+                z_order: 4,
+                ..Default::default()
+            },
+            shape_attr: RhwpShapeComponentAttr {
+                rotation_angle: 15,
+                ..Default::default()
+            },
             children: vec![rectangle, picture],
             caption: Some(RhwpCaption {
                 direction: RhwpCaptionDirection::Bottom,
@@ -5498,7 +5501,6 @@ mod tests {
                 }],
                 ..Default::default()
             }),
-            ..Default::default()
         });
         let document = RhwpDocument {
             sections: vec![RhwpSection {
@@ -5519,15 +5521,31 @@ mod tests {
         let bridged = BridgeContext::new(&document).into_document();
         let blocks = &bridged.sections[0].blocks;
 
-        assert_eq!(blocks.len(), 3);
-        assert!(
-            matches!(&blocks[0], Block::Shape(shape) if shape.kind == ShapeKind::Rectangle && shape.fallback_text.as_deref() == Some("group rect"))
-        );
-        assert!(
-            matches!(&blocks[1], Block::Image(image) if image.resource_id.as_str() == "image-11" && image.alt.as_deref() == Some("group image"))
-        );
+        assert_eq!(blocks.len(), 2);
+        let Block::Shape(group) = &blocks[0] else {
+            panic!("expected structured shape group");
+        };
+        assert_eq!(group.kind, ShapeKind::Group);
+        assert_eq!(group.description.as_deref(), Some("group"));
+        assert_eq!(group.width, Some(LengthPx(100.0)));
+        assert_eq!(group.height, Some(LengthPx(50.0)));
+        assert_eq!(group.rotation_degrees, Some(15.0));
+        assert_eq!(group.placement.map(|placement| placement.z_order), Some(4));
+        assert_eq!(group.children.len(), 2);
         assert!(matches!(
-            &blocks[2],
+            &group.children[0],
+            Block::Shape(shape)
+                if shape.kind == ShapeKind::Rectangle
+                    && shape.fallback_text.as_deref() == Some("group rect")
+        ));
+        assert!(matches!(
+            &group.children[1],
+            Block::Image(image)
+                if image.resource_id.as_str() == "image-11"
+                    && image.alt.as_deref() == Some("group image")
+        ));
+        assert!(matches!(
+            &blocks[1],
             Block::Paragraph(paragraph)
                 if paragraph.role == ParagraphRole::Caption
                     && matches!(
@@ -5535,15 +5553,14 @@ mod tests {
                         [Inline::Text(run)] if run.text == "Group caption"
                     )
         ));
-        assert!(
-            bridged
-                .warnings
-                .iter()
-                .any(|warning| { warning.message.contains("grouped shape children") })
-        );
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("grouped shape children and group transforms")
+        }));
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("grouped shape captions")
-                && warning.message.contains("adjacent caption blocks")
+                && warning.message.contains("structured group")
         }));
     }
 

@@ -145,6 +145,16 @@ pub(crate) fn equation_to_plain_text(equation: &Equation) -> String {
 }
 
 pub(crate) fn shape_to_plain_text(shape: &Shape) -> String {
+    if !shape.children.is_empty() {
+        return shape
+            .children
+            .iter()
+            .map(block_to_plain_text)
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+
     let text = shape
         .fallback_text
         .as_deref()

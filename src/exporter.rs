@@ -355,6 +355,9 @@ fn collect_block_unknown_warnings(blocks: &[Block], warnings: &mut Vec<String>) 
                     }
                 }
             }
+            Block::Shape(shape) => {
+                collect_block_unknown_warnings(&shape.children, warnings);
+            }
             Block::Unknown(unknown) => {
                 if let Some(message) = &unknown.message {
                     push_warning_once(
@@ -367,7 +370,6 @@ fn collect_block_unknown_warnings(blocks: &[Block], warnings: &mut Vec<String>) 
             | Block::DocumentControl(_)
             | Block::Image(_)
             | Block::Equation(_)
-            | Block::Shape(_)
             | Block::Chart(_) => {}
         }
     }
@@ -1163,7 +1165,6 @@ fn render_html_equation(equation: &Equation) -> String {
 }
 
 fn render_html_shape(shape: &Shape, resources: &ResourceStore, image_asset_prefix: &str) -> String {
-    let content = render_html_fallback_text(&shape_display_text(shape));
     // Shapes carry box geometry, so an inline span would ignore their width and
     // height. Keep the semantic placeholder while making its box CSS effective.
     let mut declarations = vec!["display: inline-block".to_string()];
@@ -1232,7 +1233,13 @@ fn render_html_shape(shape: &Shape, resources: &ResourceStore, image_asset_prefi
         declarations.push(format!("margin-top: {}px", offset_y.0));
     }
     let style = render_html_style_attr(&declarations.join("; "));
-    format!("<p><span class=\"shape-placeholder\"{style}>{content}</span></p>\n")
+    if shape.children.is_empty() {
+        let content = render_html_fallback_text(&shape_display_text(shape));
+        format!("<p><span class=\"shape-placeholder\"{style}>{content}</span></p>\n")
+    } else {
+        let content = render_html_blocks(&shape.children, resources, image_asset_prefix);
+        format!("<div class=\"shape-group\"{style}>\n{content}</div>\n")
+    }
 }
 
 fn render_html_chart(chart: &Chart) -> String {
@@ -2187,7 +2194,7 @@ fn render_markdown_block(
         Block::Table(table) => render_markdown_table(table),
         Block::Image(image) => render_markdown_image(image, resources, image_asset_prefix),
         Block::Equation(equation) => render_markdown_equation(equation),
-        Block::Shape(shape) => render_markdown_shape(shape),
+        Block::Shape(shape) => render_markdown_shape(shape, resources, image_asset_prefix),
         Block::Chart(chart) => render_markdown_chart(chart),
         Block::Unknown(unknown) => render_markdown_unknown_block(unknown),
     }
@@ -2474,8 +2481,22 @@ fn render_markdown_equation(equation: &Equation) -> String {
     render_markdown_text(&equation_display_text(equation))
 }
 
-fn render_markdown_shape(shape: &Shape) -> String {
-    render_markdown_text(&shape_display_text(shape))
+fn render_markdown_shape(
+    shape: &Shape,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
+    if shape.children.is_empty() {
+        return render_markdown_text(&shape_display_text(shape));
+    }
+
+    shape
+        .children
+        .iter()
+        .map(|block| render_markdown_block(block, resources, image_asset_prefix))
+        .filter(|block| !block.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn render_markdown_chart(chart: &Chart) -> String {
@@ -4699,6 +4720,46 @@ mod tests {
         let html = render_html_document(Path::new("sample.hwp"), &document);
 
         assert!(html.contains("radial-gradient(at 25% 75%, #ffffff 0%, #000000 100%)"));
+    }
+
+    #[test]
+    fn renders_structured_shape_group_children_across_exporters() {
+        let document = document_with_blocks(vec![Block::Shape(Shape {
+            kind: ShapeKind::Group,
+            fallback_text: Some("group".to_string()),
+            width: Some(LengthPx(120.0)),
+            children: vec![
+                Block::Shape(Shape {
+                    kind: ShapeKind::Rectangle,
+                    fallback_text: Some("inner shape".to_string()),
+                    ..Default::default()
+                }),
+                Block::Unknown(UnknownBlock {
+                    kind: "group_child".to_string(),
+                    fallback_text: Some("inner fallback".to_string()),
+                    message: Some("nested group fallback preserved".to_string()),
+                    source: Some("rhwp".to_string()),
+                }),
+            ],
+            ..Default::default()
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+        let markdown = render_markdown_document(&document);
+        let text = plain_text::to_plain_text(&document);
+        let warnings = conversion_warnings_for_document(&document);
+
+        assert!(html.contains("class=\"shape-group\""));
+        assert!(html.contains("width: 120px"));
+        assert!(html.contains("inner shape"));
+        assert!(html.contains("inner fallback"));
+        assert!(markdown.contains("inner shape"));
+        assert!(markdown.contains("inner fallback"));
+        assert!(text.contains("[shape: inner shape]"));
+        assert!(text.contains("inner fallback"));
+        assert!(warnings.iter().any(|warning| {
+            warning.contains("IR unknown block `group_child`: nested group fallback preserved")
+        }));
     }
 
     #[test]
