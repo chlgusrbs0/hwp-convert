@@ -9,15 +9,15 @@ use zip::ZipArchive;
 use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_rhwp_number};
 
 use crate::ir::{
-    Alignment, Block, Border, BorderStyle, CaptionPlacement, Chart, Color, ConversionWarning,
-    Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
-    HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop, ImageEffect, ImagePlacement,
-    ImageResource, ImageTextWrap, Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, Metadata,
-    Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource,
-    ResourceId, ResourceStore, Section, Shape, ShapeKind, StyleSheet, Table, TableCell,
-    TableCellStyle, TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle,
-    UnknownBlock, UnknownInline, VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo,
-    WarningCode,
+    Alignment, BinaryResource, BinaryResourceKind, Block, Border, BorderStyle, CaptionPlacement,
+    Chart, Color, ConversionWarning, Document, Equation, EquationKind, HeaderFooter,
+    HeaderFooterPlacement, HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
+    ImageEffect, ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt, LengthPx, Link,
+    ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
+    ParagraphStyle, Percent, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind,
+    StyleSheet, Table, TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle,
+    TextDecorationStyle, TextRun, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
+    VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 const PREVIEW_TEXT_PATH: &str = "Preview/PrvText.txt";
@@ -815,15 +815,21 @@ impl HwpxFallbackContext {
             return None;
         };
         let resource_id = ResourceId(item.id.clone());
-        if self.resources.get(&resource_id).is_none() {
-            self.resources
-                .insert_unique(Resource::Image(ImageResource {
-                    id: resource_id.clone(),
-                    media_type: item.media_type.clone(),
-                    extension: item.extension.clone(),
-                    bytes: item.bytes.clone(),
-                }))
-                .ok()?;
+        let image_resource = Resource::Image(ImageResource {
+            id: resource_id.clone(),
+            media_type: item.media_type.clone(),
+            extension: item.extension.clone(),
+            bytes: item.bytes.clone(),
+        });
+        if let Some(existing) = self
+            .resources
+            .entries
+            .iter_mut()
+            .find(|resource| resource.id() == &resource_id)
+        {
+            *existing = image_resource;
+        } else {
+            self.resources.insert_unique(image_resource).ok()?;
         }
 
         self.image_resource_ids
@@ -993,7 +999,7 @@ fn read_hwpx_fallback_context<R: Read + io::Seek>(
         Ok(None) => HwpxFallbackContext::default(),
         Err(error) => return Err(error),
     };
-    context.image_items = read_hwpx_image_items(archive)?;
+    read_hwpx_manifest_resources(archive, &mut context)?;
     Ok(context)
 }
 
@@ -1173,14 +1179,14 @@ fn extract_hwpx_fallback_context(header_xml: &str) -> HwpxFallbackContext {
     context
 }
 
-fn read_hwpx_image_items<R: Read + io::Seek>(
+fn read_hwpx_manifest_resources<R: Read + io::Seek>(
     archive: &mut ZipArchive<R>,
-) -> io::Result<BTreeMap<String, HwpxImageItem>> {
+    context: &mut HwpxFallbackContext,
+) -> io::Result<()> {
     let Some(content_xml) = read_hwpx_content_hpf_xml(archive)? else {
-        return Ok(BTreeMap::new());
+        return Ok(());
     };
 
-    let mut items = BTreeMap::new();
     let mut cursor = 0usize;
 
     while let Some(tag) = next_xml_tag(&content_xml, cursor) {
@@ -1201,40 +1207,87 @@ fn read_hwpx_image_items<R: Read + io::Seek>(
             cursor = tag.end;
             continue;
         };
-        if !is_hwpx_image_manifest_item(&href, media_type.as_deref()) {
+        if !is_hwpx_binary_manifest_item(&href, media_type.as_deref()) {
             cursor = tag.end;
             continue;
         }
 
-        if let Ok(Some(bytes)) = read_hwpx_binary_entry(archive, &href) {
-            let extension = path_extension(&href);
-            let media_type = media_type.or_else(|| {
-                extension
-                    .as_deref()
-                    .and_then(media_type_for_extension)
-                    .map(ToOwned::to_owned)
-            });
+        let resource_id = ResourceId(id.clone());
+        if context.resources.get(&resource_id).is_some() {
+            context.add_warning_once(&format!(
+                "HWPX manifest contained duplicate binary item id `{id}`; hwp-convert preserved the first item."
+            ));
+            cursor = tag.end;
+            continue;
+        }
+
+        let extension = path_extension(&href);
+        let media_type = media_type.or_else(|| {
+            extension
+                .as_deref()
+                .and_then(media_type_for_extension)
+                .map(ToOwned::to_owned)
+        });
+        let is_link = is_external_resource_href(&href);
+        let bytes = if is_link {
+            None
+        } else {
+            read_hwpx_binary_entry(archive, &href)?
+        };
+
+        if is_hwpx_image_manifest_item(&href, media_type.as_deref())
+            && let Some(bytes) = bytes.as_ref()
+        {
             let item = HwpxImageItem {
                 id: id.clone(),
-                media_type,
-                extension,
-                bytes,
+                media_type: media_type.clone(),
+                extension: extension.clone(),
+                bytes: bytes.clone(),
             };
 
             for key in hwpx_image_item_lookup_keys(&id) {
-                items.insert(key, item.clone());
+                context
+                    .image_items
+                    .entry(key)
+                    .or_insert_with(|| item.clone());
             }
             if let Some(stem) = path_file_stem(&href) {
                 for key in hwpx_image_item_lookup_keys(&stem) {
-                    items.insert(key, item.clone());
+                    context
+                        .image_items
+                        .entry(key)
+                        .or_insert_with(|| item.clone());
                 }
             }
+        }
+
+        context
+            .resources
+            .insert_unique(Resource::Binary(BinaryResource {
+                id: resource_id,
+                media_type,
+                extension,
+                bytes: bytes.clone().unwrap_or_default(),
+                kind: if is_link {
+                    BinaryResourceKind::Link
+                } else {
+                    BinaryResourceKind::Embedded
+                },
+                absolute_path: is_link.then(|| href.clone()),
+                relative_path: (!is_link).then(|| href.clone()),
+            }))
+            .expect("manifest resource id was checked for uniqueness");
+
+        if !is_link && bytes.is_none() {
+            context.add_warning_once(&format!(
+                "HWPX manifest binary item `{id}` referenced missing entry `{href}`; hwp-convert preserved its metadata with empty content."
+            ));
         }
 
         cursor = tag.end;
     }
 
-    Ok(items)
+    Ok(())
 }
 
 fn read_hwpx_binary_entry<R: Read + io::Seek>(
@@ -1306,6 +1359,24 @@ fn is_hwpx_image_manifest_item(href: &str, media_type: Option<&str>) -> bool {
                 .as_deref()
                 .and_then(media_type_for_extension)
                 .is_some_and(|media_type| media_type.starts_with("image/"))
+}
+
+fn is_hwpx_binary_manifest_item(href: &str, media_type: Option<&str>) -> bool {
+    let normalized_href = href.replace('\\', "/").to_ascii_lowercase();
+    if normalized_href.contains("bindata/") {
+        return true;
+    }
+
+    if media_type.is_some_and(is_hwpx_xml_media_type) {
+        return false;
+    }
+
+    !matches!(path_extension(href).as_deref(), Some("xml" | "hpf"))
+}
+
+fn is_external_resource_href(href: &str) -> bool {
+    let href = href.trim();
+    href.contains("://") || href.starts_with("data:") || href.starts_with("mailto:")
 }
 
 fn is_hwpx_image_media_type(media_type: &str) -> bool {
@@ -8054,6 +8125,76 @@ mod tests {
             }
             other => panic!("expected image resource, got {other:?}"),
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_hwpx_binary_manifest_resources() -> Result<(), Box<dyn Error>> {
+        let bytes = create_archive_bytes(&[
+            (
+                "Contents/content.hpf",
+                r#"
+                <opf:package xmlns:opf="http://www.idpf.org/2007/opf/">
+                  <opf:manifest>
+                    <opf:item id="attachment" href="BinData/report.xlsx" media-type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"/>
+                    <opf:item id="missing" href="BinData/missing.dat" media-type="application/octet-stream"/>
+                    <opf:item id="linked" href="https://example.com/reference.pdf" media-type="application/pdf"/>
+                    <opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/>
+                  </opf:manifest>
+                  <opf:spine><opf:itemref idRef="section0"/></opf:spine>
+                </opf:package>
+                "#,
+            ),
+            (
+                "Contents/section0.xml",
+                r#"
+                <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+                  <hp:p><hp:run><hp:t>attachment document</hp:t></hp:run></hp:p>
+                </hs:sec>
+                "#,
+            ),
+            ("BinData/report.xlsx", "spreadsheet-bytes"),
+        ])?;
+
+        let document = read_section_document_from_archive(&bytes)?;
+
+        assert_eq!(document.resources.entries.len(), 3);
+        match document
+            .resources
+            .get(&ResourceId("attachment".to_string()))
+        {
+            Some(Resource::Binary(resource)) => {
+                assert_eq!(resource.kind, BinaryResourceKind::Embedded);
+                assert_eq!(resource.extension.as_deref(), Some("xlsx"));
+                assert_eq!(resource.bytes, b"spreadsheet-bytes");
+                assert_eq!(
+                    resource.relative_path.as_deref(),
+                    Some("BinData/report.xlsx")
+                );
+            }
+            other => panic!("expected embedded binary resource, got {other:?}"),
+        }
+        assert!(matches!(
+            document
+                .resources
+                .get(&ResourceId("missing".to_string())),
+            Some(Resource::Binary(resource))
+                if resource.kind == BinaryResourceKind::Embedded && resource.bytes.is_empty()
+        ));
+        match document.resources.get(&ResourceId("linked".to_string())) {
+            Some(Resource::Binary(resource)) => {
+                assert_eq!(resource.kind, BinaryResourceKind::Link);
+                assert_eq!(
+                    resource.absolute_path.as_deref(),
+                    Some("https://example.com/reference.pdf")
+                );
+            }
+            other => panic!("expected linked binary resource, got {other:?}"),
+        }
+        assert!(document.warnings.iter().any(|warning| {
+            warning.message.contains("missing") && warning.message.contains("empty content")
+        }));
 
         Ok(())
     }
