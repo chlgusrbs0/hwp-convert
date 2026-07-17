@@ -1439,7 +1439,11 @@ fn render_html_table_style(style: &TableStyle) -> String {
             declarations.push(format!("{property}: {}px", value.0));
         }
     }
-    if matches!(style.page_break, Some(crate::ir::TablePageBreak::Row)) {
+    if matches!(style.page_break, Some(crate::ir::TablePageBreak::Row))
+        || style
+            .placement
+            .is_some_and(|placement| placement.prevent_page_break)
+    {
         declarations.push("break-inside: avoid".to_string());
     }
     declarations.join("; ")

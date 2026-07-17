@@ -280,6 +280,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - HWP 미참조 BinData 보존: 이미지로 소비되지 않은 로드된 임베디드 BinData를 `BinaryResource`로 매핑해 JSON 변환에서 원본 바이트가 조용히 사라지지 않게 한다.
 - HWP BinData 종류·링크 경로 IR 확장: `IR_VERSION` 34 → 35. `Link`·`Embedding`·`Storage`를 구분하고 외부 링크의 절대·상대 경로를 `BinaryResource`에 보존한다.
 - resource bytes JSON 압축 개선: `IR_VERSION` 35 → 36. 이미지·첨부 바이트를 숫자 배열 대신 Base64 문자열로 직렬화하고, 구형 배열 표현도 계속 역직렬화한다. JSON exporter는 전체 결과 문자열을 메모리에 만들지 않고 스트리밍한다.
+- 표 객체 배치 IR 확장: `IR_VERSION` 36 → 37. 이미지 전용이던 배치 구조를 `ObjectPlacement`로 일반화하고 HWP 표의 글자처럼 취급, 감싸기, 기준·정렬·오프셋, Z-order, 여백, 쪽 나눔 방지를 보존한다. semantic exporter의 페이지 좌표 선형화는 문서당 한 번 경고한다.
 
 ## 완료 선언 기준
 

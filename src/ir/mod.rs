@@ -30,7 +30,9 @@ use serde::{Deserialize, Serialize};
 /// v35: added `BinaryResource` kind and source path metadata.
 /// v36: resource bytes serialize as Base64 strings. Deserialization still
 /// accepts the legacy JSON byte-array representation.
-pub const IR_VERSION: u16 = 36;
+/// v37: generalized image placement as `ObjectPlacement` and added optional
+/// table placement metadata.
+pub const IR_VERSION: u16 = 37;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -731,7 +733,7 @@ pub enum ImageEffect {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub struct ImagePlacement {
+pub struct ObjectPlacement {
     pub treat_as_character: bool,
     pub flow_with_text: bool,
     pub allow_overlap: bool,
@@ -749,6 +751,8 @@ pub struct ImagePlacement {
     pub margin_bottom: LengthPx,
     pub margin_left: LengthPx,
 }
+
+pub type ImagePlacement = ObjectPlacement;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -950,6 +954,7 @@ pub struct TableStyle {
     pub cell_spacing: Option<LengthPx>,
     pub repeat_header: bool,
     pub page_break: Option<TablePageBreak>,
+    pub placement: Option<ObjectPlacement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

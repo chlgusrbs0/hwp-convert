@@ -23,7 +23,8 @@ use rhwp::model::paragraph::{
     CharShapeRef, FieldRange, NumberingRestart as RhwpNumberingRestart, Paragraph as RhwpParagraph,
 };
 use rhwp::model::shape::{
-    Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection, ShapeObject,
+    Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection,
+    CommonObjAttr as RhwpCommonObjAttr, ShapeObject,
 };
 use rhwp::model::style::{
     Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, BorderLine as RhwpBorderLine,
@@ -43,11 +44,11 @@ use crate::ir::{
     HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
     ImageEffect as IrImageEffect, ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt,
     LengthPx, Link, ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
-    NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent,
-    Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table,
-    TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun,
-    TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
-    VerticalRelativeTo, WarningCode,
+    NoteKind, NoteStore, ObjectPlacement, Paragraph, ParagraphRole, ParagraphStyle,
+    ParagraphStyleId, Percent, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind,
+    Spacing, StyleSheet, Table, TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle,
+    TextDecorationStyle, TextRun, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
+    VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1404,6 +1405,12 @@ impl<'a> BridgeContext<'a> {
 
     fn map_table(&mut self, table: &RhwpTable) -> Table {
         self.warn_unmodeled_table_properties(table);
+        let placement = map_object_placement(&table.common);
+        if placement.is_some() {
+            self.add_warning_once(
+                "rhwp table placement was preserved in Table IR; semantic exporters currently linearize tables without floating page placement.",
+            );
+        }
         let mut rows = Vec::new();
         let row_count = table
             .cells
@@ -1452,6 +1459,7 @@ impl<'a> BridgeContext<'a> {
                     rhwp::model::table::TablePageBreak::CellBreak => Some(TablePageBreak::Cell),
                     rhwp::model::table::TablePageBreak::RowBreak => Some(TablePageBreak::Row),
                 },
+                placement,
             },
         }
     }
@@ -1476,31 +1484,6 @@ impl<'a> BridgeContext<'a> {
                 table.outer_margin_right,
                 table.outer_margin_top,
                 table.outer_margin_bottom
-            ));
-        }
-
-        let common = &table.common;
-        if common.horizontal_offset != 0
-            || common.vertical_offset != 0
-            || common.z_order != 0
-            || common.margin.left != 0
-            || common.margin.right != 0
-            || common.margin.top != 0
-            || common.margin.bottom != 0
-            || common.treat_as_char
-            || common.text_wrap != rhwp::model::shape::TextWrap::Square
-            || common.vert_rel_to != rhwp::model::shape::VertRelTo::Paper
-            || common.horz_rel_to != rhwp::model::shape::HorzRelTo::Paper
-            || common.vert_align != rhwp::model::shape::VertAlign::Top
-            || common.horz_align != rhwp::model::shape::HorzAlign::Left
-        {
-            details.push(format!(
-                "layout=offset:{}/{},z:{},treat_as_char:{},wrap:{:?}",
-                common.horizontal_offset,
-                common.vertical_offset,
-                common.z_order,
-                common.treat_as_char,
-                common.text_wrap
             ));
         }
 
@@ -3585,7 +3568,10 @@ fn map_picture_crop(picture: &Picture) -> Option<ImageCrop> {
 }
 
 fn map_picture_placement(picture: &Picture) -> Option<ImagePlacement> {
-    let common = &picture.common;
+    map_object_placement(&picture.common)
+}
+
+fn map_object_placement(common: &RhwpCommonObjAttr) -> Option<ObjectPlacement> {
     let has_layout = !common.treat_as_char
         || common.horizontal_offset != 0
         || common.vertical_offset != 0
@@ -3600,7 +3586,7 @@ fn map_picture_placement(picture: &Picture) -> Option<ImagePlacement> {
         || common.horz_rel_to != rhwp::model::shape::HorzRelTo::Paper
         || common.vert_align != rhwp::model::shape::VertAlign::Top
         || common.horz_align != rhwp::model::shape::HorzAlign::Left;
-    has_layout.then_some(ImagePlacement {
+    has_layout.then_some(ObjectPlacement {
         treat_as_character: common.treat_as_char,
         flow_with_text: true,
         allow_overlap: false,
@@ -3869,7 +3855,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_table_size_and_outer_margins_and_warns_for_remaining_layout() {
+    fn preserves_table_size_outer_margins_and_object_placement() {
         let table = RhwpTable {
             row_count: 1,
             col_count: 1,
@@ -3933,6 +3919,10 @@ mod tests {
         assert_eq!(table.style.cell_spacing, Some(LengthPx(1.0)));
         assert!(table.style.repeat_header);
         assert_eq!(table.style.page_break, Some(TablePageBreak::Row));
+        let placement = table.style.placement.expect("table placement");
+        assert_eq!(placement.horizontal_offset, LengthPx(500.0 / 75.0));
+        assert_eq!(placement.vertical_offset, LengthPx(8.0));
+        assert_eq!(placement.z_order, 2);
 
         let warning = bridged
             .warnings
@@ -3944,6 +3934,11 @@ mod tests {
             "missing border fill zone warning: {}",
             warning.message
         );
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("table placement was preserved in Table IR")
+        }));
     }
 
     #[test]

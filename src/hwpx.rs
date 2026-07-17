@@ -2467,6 +2467,7 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
             cell_spacing,
             repeat_header,
             page_break,
+            placement: None,
         },
     })
 }
