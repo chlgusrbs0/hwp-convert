@@ -3137,6 +3137,7 @@ fn extract_hwpx_shape_from_xml(
         description,
         border: hwpx_object_border(shape_xml, "shape", context),
         background_color: hwpx_shape_background_color(shape_xml, context),
+        fill: None,
         rotation_degrees: transform.rotation_degrees,
         flip_horizontal: transform.flip_horizontal,
         flip_vertical: transform.flip_vertical,

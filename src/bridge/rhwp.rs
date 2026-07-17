@@ -1777,7 +1777,13 @@ impl<'a> BridgeContext<'a> {
         let common = shape.common();
         let drawing = shape.drawing();
         let border = drawing.and_then(|drawing| map_shape_border_line(&drawing.border_line));
-        let background_color = drawing.and_then(map_shape_background_color);
+        let fill = drawing.and_then(|drawing| self.map_fill_style(&drawing.fill, "shape fill"));
+        let background_color = match &fill {
+            Some(FillStyle::Solid {
+                background_color, ..
+            }) => *background_color,
+            _ => None,
+        };
         let text_box = drawing.and_then(|drawing| drawing.text_box.as_ref());
         self.add_warning_once(
             "rhwp shape geometry and object placement were preserved in Shape IR; semantic exporters approximate visual layout.",
@@ -1819,6 +1825,7 @@ impl<'a> BridgeContext<'a> {
             description,
             border,
             background_color,
+            fill,
             rotation_degrees: (shape.shape_attr().rotation_angle != 0)
                 .then(|| shape.shape_attr().rotation_angle as f32),
             flip_horizontal: shape.shape_attr().horz_flip.then_some(true),
@@ -2592,9 +2599,17 @@ impl<'a> BridgeContext<'a> {
             }
         };
 
-        match border_fill.fill.fill_type {
+        self.map_fill_style(&border_fill.fill, context)
+    }
+
+    fn map_fill_style(
+        &mut self,
+        fill: &rhwp::model::style::Fill,
+        context: &str,
+    ) -> Option<FillStyle> {
+        match fill.fill_type {
             RhwpFillType::None => None,
-            RhwpFillType::Solid => match border_fill.fill.solid.as_ref() {
+            RhwpFillType::Solid => match fill.solid.as_ref() {
                 Some(solid) => {
                     if solid.pattern_type > 0 {
                         self.add_warning_once(&format!(
@@ -2608,7 +2623,7 @@ impl<'a> BridgeContext<'a> {
                         pattern_color: color_ref_to_color_option(solid.pattern_color),
                         pattern_color_raw: solid.pattern_color,
                         pattern_type: solid.pattern_type,
-                        alpha: border_fill.fill.alpha,
+                        alpha: fill.alpha,
                     })
                 }
                 None => {
@@ -2618,9 +2633,9 @@ impl<'a> BridgeContext<'a> {
                     None
                 }
             },
-            RhwpFillType::Gradient => match border_fill.fill.gradient.as_ref() {
+            RhwpFillType::Gradient => match fill.gradient.as_ref() {
                 Some(gradient) => {
-                    self.warn_semantic_table_fill_approximation();
+                    self.warn_semantic_fill_approximation();
                     Some(FillStyle::Gradient {
                         gradient_type: gradient.gradient_type,
                         angle: gradient.angle,
@@ -2636,7 +2651,7 @@ impl<'a> BridgeContext<'a> {
                             })
                             .collect(),
                         positions: gradient.positions.clone(),
-                        alpha: border_fill.fill.alpha,
+                        alpha: fill.alpha,
                     })
                 }
                 None => {
@@ -2646,10 +2661,10 @@ impl<'a> BridgeContext<'a> {
                     None
                 }
             },
-            RhwpFillType::Image => match border_fill.fill.image.as_ref() {
+            RhwpFillType::Image => match fill.image.as_ref() {
                 Some(image) => {
                     let resource_id = self.ensure_image_resource(image.bin_data_id);
-                    self.warn_semantic_table_fill_approximation();
+                    self.warn_semantic_fill_approximation();
                     Some(FillStyle::Image {
                         mode: map_image_fill_mode(image.fill_mode),
                         brightness: image.brightness,
@@ -2657,7 +2672,7 @@ impl<'a> BridgeContext<'a> {
                         effect: image.effect,
                         source_bin_data_id: image.bin_data_id,
                         resource_id,
-                        alpha: border_fill.fill.alpha,
+                        alpha: fill.alpha,
                     })
                 }
                 None => {
@@ -2670,9 +2685,9 @@ impl<'a> BridgeContext<'a> {
         }
     }
 
-    fn warn_semantic_table_fill_approximation(&mut self) {
+    fn warn_semantic_fill_approximation(&mut self) {
         self.add_warning_once(
-            "rhwp table gradient and image fills were preserved in structured IR; HTML approximates their visual appearance while other semantic exporters retain them only in JSON.",
+            "rhwp gradient and image fills were preserved in structured IR; HTML approximates their visual appearance while other semantic exporters retain them only in JSON.",
         );
     }
 
@@ -3371,13 +3386,6 @@ fn map_shape_border_line(line: &RhwpShapeBorderLine) -> Option<Border> {
     })
 }
 
-fn map_shape_background_color(drawing: &rhwp::model::shape::DrawingObjAttr) -> Option<Color> {
-    let solid = drawing.fill.solid.as_ref()?;
-    (drawing.fill.fill_type == RhwpFillType::Solid && solid.pattern_type <= 0)
-        .then(|| color_ref_to_color_option(solid.background_color))
-        .flatten()
-}
-
 fn shape_unmodeled_presentation_details(
     drawing: &rhwp::model::shape::DrawingObjAttr,
 ) -> Option<String> {
@@ -3385,16 +3393,6 @@ fn shape_unmodeled_presentation_details(
     let line_type = (drawing.border_line.attr & 0x3f) as u8;
     if line_type != 0 && !picture_border_line_type_is_modeled(line_type) {
         details.push(format!("border line type={line_type}"));
-    }
-    match drawing.fill.fill_type {
-        RhwpFillType::None => {}
-        RhwpFillType::Solid => match drawing.fill.solid.as_ref() {
-            Some(solid) if solid.pattern_type <= 0 => {}
-            Some(solid) => details.push(format!("pattern fill type={}", solid.pattern_type)),
-            None => details.push("solid fill data unavailable".to_string()),
-        },
-        RhwpFillType::Image => details.push("image fill".to_string()),
-        RhwpFillType::Gradient => details.push("gradient fill".to_string()),
     }
     if drawing.shadow_type != 0 {
         details.push(format!("shadow_type={}", drawing.shadow_type));
@@ -4844,6 +4842,19 @@ mod tests {
                         a: 255,
                     })
                 );
+                assert!(matches!(
+                    &shape.fill,
+                    Some(FillStyle::Solid {
+                        background_color: Some(Color {
+                            r: 0x44,
+                            g: 0x55,
+                            b: 0x66,
+                            a: 255,
+                        }),
+                        background_color_raw: 0x00665544,
+                        ..
+                    })
+                ));
                 assert_eq!(
                     shape.border,
                     Some(Border {

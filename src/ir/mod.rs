@@ -41,7 +41,8 @@ use serde::{Deserialize, Serialize};
 /// v44: added structured document field inlines.
 /// v45: added structured table cell fill styles.
 /// v46: added table cell source coordinates and border-fill zones.
-pub const IR_VERSION: u16 = 46;
+/// v47: added structured shape fill styles.
+pub const IR_VERSION: u16 = 47;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1139,6 +1140,8 @@ pub struct Shape {
     pub border: Option<Border>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_color: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<FillStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_degrees: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

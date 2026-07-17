@@ -1010,7 +1010,7 @@ fn render_html_block(block: &Block, resources: &ResourceStore, image_asset_prefi
         Block::Table(table) => render_html_table(table, resources, image_asset_prefix),
         Block::Image(image) => render_html_image(image, resources, image_asset_prefix),
         Block::Equation(equation) => render_html_equation(equation),
-        Block::Shape(shape) => render_html_shape(shape),
+        Block::Shape(shape) => render_html_shape(shape, resources, image_asset_prefix),
         Block::Chart(chart) => render_html_chart(chart),
         Block::Unknown(unknown) => {
             let content = render_html_fallback_text(&unknown_block_display_text(unknown));
@@ -1162,12 +1162,14 @@ fn render_html_equation(equation: &Equation) -> String {
     format!("<p><span class=\"equation\"{style}>{content}</span></p>\n")
 }
 
-fn render_html_shape(shape: &Shape) -> String {
+fn render_html_shape(shape: &Shape, resources: &ResourceStore, image_asset_prefix: &str) -> String {
     let content = render_html_fallback_text(&shape_display_text(shape));
     // Shapes carry box geometry, so an inline span would ignore their width and
     // height. Keep the semantic placeholder while making its box CSS effective.
     let mut declarations = vec!["display: inline-block".to_string()];
-    if let Some(background_color) = shape.background_color {
+    if let Some(fill) = &shape.fill {
+        declarations.extend(render_html_fill_style(fill, resources, image_asset_prefix));
+    } else if let Some(background_color) = shape.background_color {
         declarations.push(format!(
             "background-color: {}",
             render_css_color(background_color)
@@ -4655,6 +4657,48 @@ mod tests {
         assert!(html.contains("padding-left: 4px"));
         assert!(html.contains("justify-content: center"));
         assert!(html.contains("border-radius: 25%"));
+    }
+
+    #[test]
+    fn renders_html_shape_gradient_fill() {
+        let document = document_with_blocks(vec![Block::Shape(Shape {
+            kind: ShapeKind::Ellipse,
+            fallback_text: Some("gradient shape".to_string()),
+            fill: Some(FillStyle::Gradient {
+                gradient_type: 2,
+                angle: 0,
+                center_x: 25,
+                center_y: 75,
+                blur: 0,
+                colors: vec![
+                    crate::ir::GradientColor {
+                        color: Some(Color {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 255,
+                        }),
+                        raw: 0x00FFFFFF,
+                    },
+                    crate::ir::GradientColor {
+                        color: Some(Color {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 255,
+                        }),
+                        raw: 0,
+                    },
+                ],
+                positions: vec![0, 100],
+                alpha: 255,
+            }),
+            ..Default::default()
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+
+        assert!(html.contains("radial-gradient(at 25% 75%, #ffffff 0%, #000000 100%)"));
     }
 
     #[test]
