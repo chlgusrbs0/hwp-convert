@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
-use std::io;
+use std::io::{self, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -516,14 +516,15 @@ fn write_svg_output(
 }
 
 fn write_json_output(output_path: &Path, document: &Document) -> Result<(), io::Error> {
-    let content = serde_json::to_string_pretty(document).map_err(|error| {
+    let file = fs::File::create(output_path)?;
+    let mut writer = BufWriter::new(file);
+    serde_json::to_writer_pretty(&mut writer, document).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("failed to serialize JSON output: {error}"),
         )
     })?;
-
-    fs::write(output_path, content)
+    writer.flush()
 }
 
 fn write_html_output(

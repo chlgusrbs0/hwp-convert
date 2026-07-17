@@ -27,7 +27,10 @@ use serde::{Deserialize, Serialize};
 /// v25: added `TableStyle::cell_spacing`. Additive and `#[serde(default)]`.
 /// v26: added `Image` padding fields. Additive and `#[serde(default)]`.
 /// v27: added `Image::caption_placement`. Additive and `#[serde(default)]`.
-pub const IR_VERSION: u16 = 35;
+/// v35: added `BinaryResource` kind and source path metadata.
+/// v36: resource bytes serialize as Base64 strings. Deserialization still
+/// accepts the legacy JSON byte-array representation.
+pub const IR_VERSION: u16 = 36;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -595,6 +598,7 @@ pub struct ImageResource {
     pub id: ResourceId,
     pub media_type: Option<String>,
     pub extension: Option<String>,
+    #[serde(with = "base64_bytes")]
     pub bytes: Vec<u8>,
 }
 
@@ -603,6 +607,7 @@ pub struct BinaryResource {
     pub id: ResourceId,
     pub media_type: Option<String>,
     pub extension: Option<String>,
+    #[serde(with = "base64_bytes")]
     pub bytes: Vec<u8>,
     #[serde(default)]
     pub kind: BinaryResourceKind,
@@ -620,6 +625,38 @@ pub enum BinaryResourceKind {
     Embedded,
     Storage,
     Unknown,
+}
+
+mod base64_bytes {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use serde::{Deserialize, Deserializer, Serializer, de::Error as _};
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum EncodedBytes {
+        Base64(String),
+        LegacyArray(Vec<u8>),
+    }
+
+    pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match EncodedBytes::deserialize(deserializer)? {
+            EncodedBytes::Base64(encoded) => STANDARD.decode(encoded).map_err(|error| {
+                D::Error::custom(format!("invalid Base64 resource bytes: {error}"))
+            }),
+            EncodedBytes::LegacyArray(bytes) => Ok(bytes),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -1196,6 +1233,52 @@ mod tests {
             }
             other => panic!("expected image resource, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn serializes_resource_bytes_as_base64_strings() {
+        let image = ImageResource {
+            id: ResourceId("image-1".to_string()),
+            media_type: Some("image/png".to_string()),
+            extension: Some("png".to_string()),
+            bytes: vec![137, 80, 78, 71],
+        };
+        let binary = BinaryResource {
+            id: ResourceId("binary-1".to_string()),
+            bytes: vec![1, 2, 3],
+            ..Default::default()
+        };
+
+        let image_json = serde_json::to_string(&image).expect("image resource should serialize");
+        let binary_json = serde_json::to_string(&binary).expect("binary resource should serialize");
+
+        assert!(image_json.contains(r#""bytes":"iVBORw==""#));
+        assert!(binary_json.contains(r#""bytes":"AQID""#));
+        assert_eq!(
+            serde_json::from_str::<ImageResource>(&image_json)
+                .expect("Base64 image resource should deserialize"),
+            image
+        );
+        assert_eq!(
+            serde_json::from_str::<BinaryResource>(&binary_json)
+                .expect("Base64 binary resource should deserialize"),
+            binary
+        );
+    }
+
+    #[test]
+    fn deserializes_legacy_resource_byte_arrays() {
+        let image: ImageResource = serde_json::from_str(
+            r#"{"id":"image-1","media_type":"image/png","extension":"png","bytes":[137,80,78,71]}"#,
+        )
+        .expect("legacy image byte array should deserialize");
+        let binary: BinaryResource = serde_json::from_str(
+            r#"{"id":"binary-1","media_type":null,"extension":null,"bytes":[1,2,3]}"#,
+        )
+        .expect("legacy binary byte array should deserialize");
+
+        assert_eq!(image.bytes, vec![137, 80, 78, 71]);
+        assert_eq!(binary.bytes, vec![1, 2, 3]);
     }
 
     #[test]
