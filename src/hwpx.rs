@@ -2360,10 +2360,11 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
             continue;
         };
         let row_xml = &table_xml[tag.start..row_end];
-        let cells = extract_table_cells_from_row_xml(row_xml, context, &table_padding);
+        let row_addr = hwpx_table_row_addr(row_xml);
+        let cells = extract_table_cells_from_row_xml(row_xml, row_addr, context, &table_padding);
         if !cells.is_empty() {
             rows.push((
-                hwpx_table_row_addr(row_xml),
+                row_addr,
                 next_order,
                 TableRow {
                     cells,
@@ -2470,6 +2471,7 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
             page_break,
             placement: None,
         },
+        zones: Vec::new(),
     })
 }
 
@@ -2567,6 +2569,7 @@ fn extract_table_blocks_from_xml(table_xml: &str, context: &mut HwpxFallbackCont
 
 fn extract_table_cells_from_row_xml(
     row_xml: &str,
+    source_row: Option<u32>,
     context: &mut HwpxFallbackContext,
     table_padding: &[Option<LengthPx>; 4],
 ) -> Vec<TableCell> {
@@ -2598,7 +2601,7 @@ fn extract_table_cells_from_row_xml(
         cells.push((
             col_addr,
             next_order,
-            extract_table_cell_from_xml(cell_xml, context, table_padding),
+            extract_table_cell_from_xml(cell_xml, source_row, col_addr, context, table_padding),
         ));
         next_order += 1;
         cursor = cell_end;
@@ -2613,6 +2616,8 @@ fn extract_table_cells_from_row_xml(
 
 fn extract_table_cell_from_xml(
     cell_xml: &str,
+    source_row: Option<u32>,
+    source_column: Option<u32>,
     context: &mut HwpxFallbackContext,
     table_padding: &[Option<LengthPx>; 4],
 ) -> TableCell {
@@ -2721,6 +2726,8 @@ fn extract_table_cell_from_xml(
         row_span: hwpx_table_cell_span(cell_xml, HWPX_TABLE_CELL_ROW_SPAN_ATTRIBUTES),
         col_span: hwpx_table_cell_span(cell_xml, HWPX_TABLE_CELL_COL_SPAN_ATTRIBUTES),
         is_header,
+        source_row,
+        source_column,
         blocks,
         style: TableCellStyle {
             background_color,
@@ -6224,6 +6231,8 @@ mod tests {
             blocks_first_paragraph_text(&table.rows[0].cells[1].blocks),
             Some("second cell".to_string())
         );
+        assert_eq!(table.rows[0].cells[0].source_column, Some(0));
+        assert_eq!(table.rows[0].cells[1].source_column, Some(1));
     }
 
     #[test]
@@ -6260,6 +6269,8 @@ mod tests {
             blocks_first_paragraph_text(&table.rows[1].cells[0].blocks),
             Some("second row".to_string())
         );
+        assert_eq!(table.rows[0].cells[0].source_row, Some(0));
+        assert_eq!(table.rows[1].cells[0].source_row, Some(1));
     }
 
     #[test]

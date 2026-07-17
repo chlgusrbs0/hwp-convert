@@ -13,8 +13,8 @@ use crate::ir::{
     FillStyle, HeaderFooter, HeaderFooterPlacement, Image, ImageFillMode, Inline, Link, ListInfo,
     ListKind, Note, NoteId, NoteKind, Paragraph, ParagraphRole, ParagraphStyle, Resource,
     ResourceId, ResourceStore, Section, Shape, ShapeGeometry, Table, TableCell, TableCellStyle,
-    TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle, UnknownBlock, UnknownInline,
-    VerticalAlign,
+    TableRow, TableStyle, TableZone, TextDecorationStyle, TextRun, TextStyle, UnknownBlock,
+    UnknownInline, VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -1484,12 +1484,15 @@ fn render_html_table_style(style: &TableStyle) -> String {
 
 fn render_html_table_cell_style(
     style: &TableCellStyle,
+    fallback_fill: Option<&FillStyle>,
     resources: &ResourceStore,
     image_asset_prefix: &str,
 ) -> String {
     let mut declarations = Vec::new();
 
     if let Some(fill) = &style.fill {
+        declarations.extend(render_html_fill_style(fill, resources, image_asset_prefix));
+    } else if let Some(fill) = fallback_fill {
         declarations.extend(render_html_fill_style(fill, resources, image_asset_prefix));
     } else if let Some(background_color) = style.background_color {
         declarations.push(format!(
@@ -2017,10 +2020,22 @@ fn render_html_table(table: &Table, resources: &ResourceStore, image_asset_prefi
     for (index, row) in table.rows.iter().enumerate() {
         if index == 0 && table.style.repeat_header {
             html.push_str("<thead>\n");
-            html.push_str(&render_html_table_row(row, resources, image_asset_prefix));
+            html.push_str(&render_html_table_row(
+                table,
+                row,
+                index as u32,
+                resources,
+                image_asset_prefix,
+            ));
             html.push_str("</thead>\n");
         } else {
-            html.push_str(&render_html_table_row(row, resources, image_asset_prefix));
+            html.push_str(&render_html_table_row(
+                table,
+                row,
+                index as u32,
+                resources,
+                image_asset_prefix,
+            ));
         }
     }
 
@@ -2029,7 +2044,9 @@ fn render_html_table(table: &Table, resources: &ResourceStore, image_asset_prefi
 }
 
 fn render_html_table_row(
+    table: &Table,
     row: &TableRow,
+    inferred_row: u32,
     resources: &ResourceStore,
     image_asset_prefix: &str,
 ) -> String {
@@ -2040,16 +2057,39 @@ fn render_html_table_row(
         .unwrap_or_default();
     let mut html = format!("<tr{style}>\n");
 
+    let mut inferred_column = 0u32;
     for cell in &row.cells {
-        html.push_str(&render_html_table_cell(cell, resources, image_asset_prefix));
+        let source_row = cell.source_row.unwrap_or(inferred_row);
+        let source_column = cell.source_column.unwrap_or(inferred_column);
+        let zone_fill = table_zone_for_cell(&table.zones, source_row, source_column)
+            .and_then(|zone| zone.fill.as_ref());
+        html.push_str(&render_html_table_cell(
+            cell,
+            zone_fill,
+            resources,
+            image_asset_prefix,
+        ));
+        inferred_column = source_column.saturating_add(cell.col_span.max(1));
     }
 
     html.push_str("</tr>\n");
     html
 }
 
+fn table_zone_for_cell(
+    zones: &[TableZone],
+    source_row: u32,
+    source_column: u32,
+) -> Option<&TableZone> {
+    zones.iter().rev().find(|zone| {
+        (zone.start_row..=zone.end_row).contains(&source_row)
+            && (zone.start_column..=zone.end_column).contains(&source_column)
+    })
+}
+
 fn render_html_table_cell(
     cell: &TableCell,
+    fallback_fill: Option<&FillStyle>,
     resources: &ResourceStore,
     image_asset_prefix: &str,
 ) -> String {
@@ -2066,6 +2106,7 @@ fn render_html_table_cell(
     let content = render_html_table_cell_blocks(&cell.blocks, resources, image_asset_prefix);
     let style = render_html_style_attr(&render_html_table_cell_style(
         &cell.style,
+        fallback_fill,
         resources,
         image_asset_prefix,
     ));
@@ -3282,10 +3323,12 @@ mod tests {
                             source: None,
                         })],
                         style: TableCellStyle::default(),
+                        ..Default::default()
                     }],
                     height: None,
                 }],
                 style: TableStyle::default(),
+                ..Default::default()
             }),
         ]);
 
@@ -4346,6 +4389,7 @@ mod tests {
                 page_break: Some(crate::ir::TablePageBreak::Row),
                 ..Default::default()
             },
+            ..Default::default()
         })]);
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
@@ -4450,6 +4494,78 @@ mod tests {
         assert!(html.contains("background-image: url(&apos;sample_assets/images/fill.png&apos;)"));
         assert!(html.contains("background-repeat: repeat-x"));
         assert!(html.contains("background-position: left bottom"));
+    }
+
+    #[test]
+    fn applies_table_zone_fill_without_overriding_cell_fill() {
+        let zone_fill = FillStyle::Solid {
+            background_color: Some(Color {
+                r: 0,
+                g: 255,
+                b: 0,
+                a: 255,
+            }),
+            background_color_raw: 0x0000FF00,
+            pattern_color: None,
+            pattern_color_raw: 0xFFFFFFFF,
+            pattern_type: 0,
+            alpha: 255,
+        };
+        let cell_fill = FillStyle::Solid {
+            background_color: Some(Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            }),
+            background_color_raw: 0x000000FF,
+            pattern_color: None,
+            pattern_color_raw: 0xFFFFFFFF,
+            pattern_type: 0,
+            alpha: 255,
+        };
+        let document = document_with_blocks(vec![Block::Table(Table {
+            rows: vec![TableRow {
+                cells: vec![
+                    TableCell {
+                        source_row: Some(0),
+                        source_column: Some(0),
+                        blocks: vec![Block::Paragraph(Paragraph::from_plain_text(
+                            "zone".to_string(),
+                        ))],
+                        ..Default::default()
+                    },
+                    TableCell {
+                        source_row: Some(0),
+                        source_column: Some(1),
+                        blocks: vec![Block::Paragraph(Paragraph::from_plain_text(
+                            "cell".to_string(),
+                        ))],
+                        style: TableCellStyle {
+                            fill: Some(cell_fill),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                ],
+                height: None,
+            }],
+            zones: vec![TableZone {
+                start_row: 0,
+                start_column: 0,
+                end_row: 0,
+                end_column: 1,
+                source_border_fill_id: 3,
+                fill: Some(zone_fill),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+
+        assert_eq!(html.matches("background-color: #00ff00").count(), 1);
+        assert_eq!(html.matches("background-color: #ff0000").count(), 1);
     }
 
     #[test]
@@ -5268,6 +5384,7 @@ mod tests {
                 },
             ],
             style: TableStyle::default(),
+            ..Default::default()
         })
     }
 
@@ -5288,6 +5405,7 @@ mod tests {
                 list: None,
             })],
             style: TableCellStyle::default(),
+            ..Default::default()
         }
     }
 

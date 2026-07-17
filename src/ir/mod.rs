@@ -40,7 +40,8 @@ use serde::{Deserialize, Serialize};
 /// v43: added structured page and numbering control blocks.
 /// v44: added structured document field inlines.
 /// v45: added structured table cell fill styles.
-pub const IR_VERSION: u16 = 45;
+/// v46: added table cell source coordinates and border-fill zones.
+pub const IR_VERSION: u16 = 46;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1228,6 +1229,8 @@ pub struct Chart {
 pub struct Table {
     pub rows: Vec<TableRow>,
     pub style: TableStyle,
+    #[serde(default)]
+    pub zones: Vec<TableZone>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -1242,6 +1245,10 @@ pub struct TableCell {
     pub col_span: u32,
     #[serde(default)]
     pub is_header: bool,
+    #[serde(default)]
+    pub source_row: Option<u32>,
+    #[serde(default)]
+    pub source_column: Option<u32>,
     pub blocks: Vec<Block>,
     pub style: TableCellStyle,
 }
@@ -1252,10 +1259,27 @@ impl Default for TableCell {
             row_span: 1,
             col_span: 1,
             is_header: false,
+            source_row: None,
+            source_column: None,
             blocks: Vec::new(),
             style: TableCellStyle::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct TableZone {
+    pub start_row: u32,
+    pub start_column: u32,
+    pub end_row: u32,
+    pub end_column: u32,
+    pub source_border_fill_id: u16,
+    pub fill: Option<FillStyle>,
+    pub border_top: Option<Border>,
+    pub border_right: Option<Border>,
+    pub border_bottom: Option<Border>,
+    pub border_left: Option<Border>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -1525,6 +1549,9 @@ mod tests {
                 .expect("older table cell JSON should deserialize");
 
         assert!(!cell.is_header);
+        assert_eq!(cell.source_row, None);
+        assert_eq!(cell.source_column, None);
+        assert_eq!(cell.style.fill, None);
         assert_eq!(cell.style.vertical_align, None);
         assert_eq!(cell.style.width, None);
         assert_eq!(cell.style.height, None);
@@ -1532,6 +1559,10 @@ mod tests {
         assert_eq!(cell.style.padding_left, None);
         assert_eq!(cell.style.border_top, None);
         assert_eq!(cell.style.border_left, None);
+
+        let table: Table = serde_json::from_str(r#"{ "rows": [], "style": {} }"#)
+            .expect("older table JSON should deserialize");
+        assert!(table.zones.is_empty());
     }
 
     #[test]
@@ -1557,6 +1588,7 @@ mod tests {
                 height: None,
             }],
             style: TableStyle::default(),
+            ..Default::default()
         };
 
         match &table.rows[0].cells[0].blocks[0] {

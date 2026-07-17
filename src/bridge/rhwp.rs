@@ -51,9 +51,9 @@ use crate::ir::{
     ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, RawSectionRecord, Resource,
     ResourceId, ResourceStore, ScriptTextStyle, Section, SectionLayout, Shape, ShapeGeometry,
     ShapeKind, ShapePoint, Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table,
-    TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun,
-    TextScript, TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
-    VerticalRelativeTo, WarningCode,
+    TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle, TableZone,
+    TextDecorationStyle, TextRun, TextScript, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
+    VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1367,6 +1367,16 @@ impl<'a> BridgeContext<'a> {
 
     fn map_table(&mut self, table: &RhwpTable) -> Table {
         self.warn_unmodeled_table_properties(table);
+        if !table.zones.is_empty() {
+            self.add_warning_once(
+                "rhwp table border-fill zones were preserved in Table IR; HTML applies zone fills only to cells without their own fill while other semantic exporters retain zones only in JSON.",
+            );
+        }
+        let zones = table
+            .zones
+            .iter()
+            .map(|zone| self.map_table_zone(zone))
+            .collect();
         let placement = map_object_placement(&table.common);
         if placement.is_some() {
             self.add_warning_once(
@@ -1423,6 +1433,24 @@ impl<'a> BridgeContext<'a> {
                 },
                 placement,
             },
+            zones,
+        }
+    }
+
+    fn map_table_zone(&mut self, zone: &rhwp::model::table::TableZone) -> TableZone {
+        let [border_left, border_right, border_top, border_bottom] =
+            self.map_borders(zone.border_fill_id, "table border-fill zone borders");
+        TableZone {
+            start_row: u32::from(zone.start_row),
+            start_column: u32::from(zone.start_col),
+            end_row: u32::from(zone.end_row),
+            end_column: u32::from(zone.end_col),
+            source_border_fill_id: zone.border_fill_id,
+            fill: self.border_fill_style(zone.border_fill_id, "table border-fill zone background"),
+            border_top,
+            border_right,
+            border_bottom,
+            border_left,
         }
     }
 
@@ -1431,9 +1459,6 @@ impl<'a> BridgeContext<'a> {
 
         if table.cell_spacing < 0 {
             details.push(format!("negative_cell_spacing={}", table.cell_spacing));
-        }
-        if !table.zones.is_empty() {
-            details.push(format!("border_fill_zones={}", table.zones.len()));
         }
         if table.outer_margin_left < 0
             || table.outer_margin_right < 0
@@ -1549,6 +1574,8 @@ impl<'a> BridgeContext<'a> {
             row_span: (cell.row_span as u32).max(1),
             col_span: (cell.col_span as u32).max(1),
             is_header: cell.is_header,
+            source_row: Some(u32::from(cell.row)),
+            source_column: Some(u32::from(cell.col)),
             blocks,
             style: TableCellStyle {
                 background_color,
@@ -2645,7 +2672,7 @@ impl<'a> BridgeContext<'a> {
 
     fn warn_semantic_table_fill_approximation(&mut self) {
         self.add_warning_once(
-            "rhwp table cell gradient and image fills were preserved in structured IR; HTML approximates their visual appearance while other semantic exporters retain them only in JSON.",
+            "rhwp table gradient and image fills were preserved in structured IR; HTML approximates their visual appearance while other semantic exporters retain them only in JSON.",
         );
     }
 
@@ -4171,6 +4198,23 @@ mod tests {
             ..Default::default()
         };
         let document = RhwpDocument {
+            doc_info: DocInfo {
+                border_fills: vec![
+                    RhwpBorderFill::default(),
+                    RhwpBorderFill {
+                        fill: Fill {
+                            fill_type: FillType::Solid,
+                            solid: Some(SolidFill {
+                                background_color: 0x0000FF00,
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
                     controls: vec![Control::Table(Box::new(table))],
@@ -4193,6 +4237,8 @@ mod tests {
         assert_eq!(table.style.margin_top, Some(LengthPx(4.0)));
         assert_eq!(table.style.margin_bottom, Some(LengthPx(400.0 / 75.0)));
         assert_eq!(table.rows[0].height, Some(LengthPx(20.0)));
+        assert_eq!(table.rows[0].cells[0].source_row, Some(0));
+        assert_eq!(table.rows[0].cells[0].source_column, Some(0));
         assert_eq!(table.style.cell_spacing, Some(LengthPx(1.0)));
         assert!(table.style.repeat_header);
         assert_eq!(table.style.page_break, Some(TablePageBreak::Row));
@@ -4200,16 +4246,39 @@ mod tests {
         assert_eq!(placement.horizontal_offset, LengthPx(500.0 / 75.0));
         assert_eq!(placement.vertical_offset, LengthPx(8.0));
         assert_eq!(placement.z_order, 2);
-
-        let warning = bridged
-            .warnings
-            .iter()
-            .find(|warning| warning.message.contains("table layout properties"))
-            .expect("table layout warning");
+        let zone = table.zones.first().expect("table zone");
+        assert_eq!(zone.start_row, 0);
+        assert_eq!(zone.start_column, 0);
+        assert_eq!(zone.end_row, 0);
+        assert_eq!(zone.end_column, 0);
+        assert_eq!(zone.source_border_fill_id, 2);
+        assert!(matches!(
+            &zone.fill,
+            Some(FillStyle::Solid {
+                background_color: Some(Color {
+                    r: 0,
+                    g: 255,
+                    b: 0,
+                    a: 255
+                }),
+                background_color_raw: 0x0000FF00,
+                ..
+            })
+        ));
+        assert!(zone.border_top.is_some());
+        assert!(zone.border_right.is_some());
+        assert!(zone.border_bottom.is_some());
+        assert!(zone.border_left.is_some());
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("border-fill zones were preserved in Table IR")
+        }));
         assert!(
-            warning.message.contains("border_fill_zones=1"),
-            "missing border fill zone warning: {}",
-            warning.message
+            !bridged
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("border_fill_zones"))
         );
         assert!(bridged.warnings.iter().any(|warning| {
             warning

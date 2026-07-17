@@ -355,6 +355,7 @@ mod tests {
                         },
                     ],
                     style: TableStyle::default(),
+                    ..Default::default()
                 })],
                 ..Default::default()
             }],
@@ -603,6 +604,7 @@ mod tests {
                 list: None,
             })],
             style: TableCellStyle::default(),
+            ..Default::default()
         }
     }
 }
