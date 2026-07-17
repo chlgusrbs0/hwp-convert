@@ -531,18 +531,18 @@ fn write_html_output(
     output_path: &Path,
     document: &Document,
 ) -> Result<(), io::Error> {
-    let image_assets = image_asset_paths(output_path);
-    write_image_assets(&image_assets, &document.resources)?;
+    let assets = document_asset_paths(output_path);
+    write_resource_assets(&assets, &document.resources)?;
     let html =
-        render_html_document_with_asset_prefix(input_path, document, &image_assets.public_prefix);
+        render_html_document_with_asset_prefix(input_path, document, &assets.image_public_prefix);
     fs::write(output_path, html)
 }
 
 fn write_markdown_output(output_path: &Path, document: &Document) -> Result<(), io::Error> {
-    let image_assets = image_asset_paths(output_path);
-    write_image_assets(&image_assets, &document.resources)?;
+    let assets = document_asset_paths(output_path);
+    write_resource_assets(&assets, &document.resources)?;
     let markdown =
-        render_markdown_document_with_asset_prefix(document, &image_assets.public_prefix);
+        render_markdown_document_with_asset_prefix(document, &assets.image_public_prefix);
     fs::write(output_path, markdown)
 }
 
@@ -2129,16 +2129,18 @@ fn render_markdown_image(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ImageAssetPaths {
-    output_dir: PathBuf,
-    public_prefix: String,
+struct DocumentAssetPaths {
+    image_output_dir: PathBuf,
+    image_public_prefix: String,
+    binary_output_dir: PathBuf,
 }
 
-fn write_image_assets(
-    image_assets: &ImageAssetPaths,
+fn write_resource_assets(
+    assets: &DocumentAssetPaths,
     resources: &ResourceStore,
 ) -> Result<(), io::Error> {
-    let resource_file_names = resource_file_name_map(resources);
+    let image_file_names =
+        resource_file_name_map(resources, |resource| matches!(resource, Resource::Image(_)));
     let image_resources = resources
         .entries
         .iter()
@@ -2148,19 +2150,42 @@ fn write_image_assets(
         })
         .collect::<Vec<_>>();
 
-    if image_resources.is_empty() {
-        return Ok(());
+    if !image_resources.is_empty() {
+        fs::create_dir_all(&assets.image_output_dir)?;
+
+        for image in image_resources {
+            let file_name = image_file_names
+                .get(&image.id)
+                .cloned()
+                .unwrap_or_else(|| sanitized_resource_file_name(resources, &image.id));
+            fs::write(assets.image_output_dir.join(file_name), &image.bytes)?;
+        }
     }
 
-    let asset_dir = &image_assets.output_dir;
-    fs::create_dir_all(asset_dir)?;
+    let binary_file_names = resource_file_name_map(
+        resources,
+        |resource| matches!(resource, Resource::Binary(binary) if binary.kind != crate::ir::BinaryResourceKind::Link),
+    );
+    let binary_resources = resources
+        .entries
+        .iter()
+        .filter_map(|resource| match resource {
+            Resource::Binary(binary) if binary.kind != crate::ir::BinaryResourceKind::Link => {
+                Some(binary)
+            }
+            Resource::Binary(_) | Resource::Image(_) => None,
+        })
+        .collect::<Vec<_>>();
 
-    for image in image_resources {
-        let file_name = resource_file_names
-            .get(&image.id)
-            .cloned()
-            .unwrap_or_else(|| sanitized_resource_file_name(resources, &image.id));
-        fs::write(asset_dir.join(file_name), &image.bytes)?;
+    if !binary_resources.is_empty() {
+        fs::create_dir_all(&assets.binary_output_dir)?;
+        for binary in binary_resources {
+            let file_name = binary_file_names
+                .get(&binary.id)
+                .cloned()
+                .unwrap_or_else(|| sanitized_resource_file_name(resources, &binary.id));
+            fs::write(assets.binary_output_dir.join(file_name), &binary.bytes)?;
+        }
     }
 
     Ok(())
@@ -2168,26 +2193,31 @@ fn write_image_assets(
 
 #[cfg(test)]
 fn image_asset_dir(output_path: &Path) -> PathBuf {
-    image_asset_paths(output_path).output_dir
+    document_asset_paths(output_path).image_output_dir
 }
 
 #[cfg(test)]
 fn image_asset_public_prefix(output_path: &Path) -> String {
-    image_asset_paths(output_path).public_prefix
+    document_asset_paths(output_path).image_public_prefix
 }
 
-fn image_asset_paths(output_path: &Path) -> ImageAssetPaths {
+#[cfg(test)]
+fn binary_asset_dir(output_path: &Path) -> PathBuf {
+    document_asset_paths(output_path).binary_output_dir
+}
+
+fn document_asset_paths(output_path: &Path) -> DocumentAssetPaths {
     let asset_root = format!("{}_assets", sanitized_output_file_stem(output_path));
-    let output_dir = output_path
+    let output_root = output_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
-        .join(&asset_root)
-        .join("images");
+        .join(&asset_root);
 
-    ImageAssetPaths {
-        output_dir,
-        public_prefix: format!("{asset_root}/images"),
+    DocumentAssetPaths {
+        image_output_dir: output_root.join("images"),
+        image_public_prefix: format!("{asset_root}/images"),
+        binary_output_dir: output_root.join("files"),
     }
 }
 
@@ -2409,17 +2439,24 @@ fn resource_public_path(
 }
 
 fn resource_file_name(resources: &ResourceStore, resource_id: &ResourceId) -> String {
-    resource_file_name_map(resources)
+    resource_file_name_map(resources, |resource| matches!(resource, Resource::Image(_)))
         .get(resource_id)
         .cloned()
         .unwrap_or_else(|| sanitized_resource_file_name(resources, resource_id))
 }
 
-fn resource_file_name_map(resources: &ResourceStore) -> HashMap<ResourceId, String> {
+fn resource_file_name_map(
+    resources: &ResourceStore,
+    include: impl Fn(&Resource) -> bool,
+) -> HashMap<ResourceId, String> {
     let mut names = HashMap::new();
     let mut used_names = HashMap::new();
 
-    for resource in &resources.entries {
+    for resource in resources
+        .entries
+        .iter()
+        .filter(|resource| include(resource))
+    {
         let candidate = sanitized_resource_file_name(resources, resource.id());
         let unique_name = unique_resource_file_name(&candidate, &mut used_names);
         names.insert(resource.id().clone(), unique_name);
@@ -2433,7 +2470,10 @@ fn sanitized_resource_file_name(resources: &ResourceStore, resource_id: &Resourc
     let extension = resource_extension(resources, resource_id)
         .map(ToOwned::to_owned)
         .or_else(|| path_extension_from_resource_id(base))
-        .unwrap_or_else(|| "png".to_string());
+        .unwrap_or_else(|| match resources.get(resource_id) {
+            Some(Resource::Binary(_)) => "bin".to_string(),
+            Some(Resource::Image(_)) | None => "png".to_string(),
+        });
     let extension = sanitize_asset_extension(&extension);
     let stem = resource_file_stem(base, &extension);
     let stem = sanitize_asset_path_segment(stem);
@@ -2678,12 +2718,13 @@ fn starts_with_ordered_list_marker(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::ir::{
-        Alignment, Chart, Color, ConversionWarning, Equation, EquationKind, HeaderFooter,
-        HeaderFooterPlacement, IR_VERSION, Image, ImageCrop, ImageResource, Indent, LengthPt,
-        LengthPx, Link, ListInfo, ListKind, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph,
-        ParagraphRole, ParagraphStyle, Percent, Resource, ResourceId, ResourceStore, Section,
-        Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow,
-        TableStyle, TextRun, TextStyle, UnknownInline, WarningCode,
+        Alignment, BinaryResource, BinaryResourceKind, Chart, Color, ConversionWarning, Equation,
+        EquationKind, HeaderFooter, HeaderFooterPlacement, IR_VERSION, Image, ImageCrop,
+        ImageResource, Indent, LengthPt, LengthPx, Link, ListInfo, ListKind, Metadata, Note,
+        NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource,
+        ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table,
+        TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownInline,
+        WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -3786,6 +3827,54 @@ mod tests {
     }
 
     #[test]
+    fn writes_binary_assets_without_materializing_external_links() -> Result<(), Box<dyn Error>> {
+        let root = temp_fixture_dir("binary-assets");
+        fs::create_dir_all(&root)?;
+        let mut document = document_with_blocks(Vec::new());
+        document.resources.entries = vec![
+            Resource::Binary(BinaryResource {
+                id: ResourceId("attachment".to_string()),
+                media_type: Some("application/octet-stream".to_string()),
+                extension: Some("dat".to_string()),
+                bytes: b"attachment-bytes".to_vec(),
+                kind: BinaryResourceKind::Embedded,
+                ..Default::default()
+            }),
+            Resource::Binary(BinaryResource {
+                id: ResourceId("storage-without-extension".to_string()),
+                bytes: b"storage-bytes".to_vec(),
+                kind: BinaryResourceKind::Storage,
+                ..Default::default()
+            }),
+            Resource::Binary(BinaryResource {
+                id: ResourceId("linked.pdf".to_string()),
+                extension: Some("pdf".to_string()),
+                kind: BinaryResourceKind::Link,
+                absolute_path: Some("https://example.com/linked.pdf".to_string()),
+                ..Default::default()
+            }),
+        ];
+        let html_path = root.join("sample.html");
+
+        write_html_output(Path::new("sample.hwpx"), &html_path, &document)?;
+
+        let files_dir = root.join("sample_assets").join("files");
+        assert_eq!(
+            fs::read(files_dir.join("attachment.dat"))?,
+            b"attachment-bytes"
+        );
+        assert_eq!(
+            fs::read(files_dir.join("storage-without-extension.bin"))?,
+            b"storage-bytes"
+        );
+        assert!(!files_dir.join("linked.pdf").exists());
+
+        fs::remove_dir_all(&root)?;
+
+        Ok(())
+    }
+
+    #[test]
     fn sanitizes_image_asset_file_names() -> Result<(), Box<dyn Error>> {
         let root = temp_fixture_dir("unsafe-image-assets");
         fs::create_dir_all(&root)?;
@@ -3893,6 +3982,10 @@ mod tests {
         assert_eq!(
             image_asset_dir(&output_path),
             Path::new("out").join("my_report_assets").join("images")
+        );
+        assert_eq!(
+            binary_asset_dir(&output_path),
+            Path::new("out").join("my_report_assets").join("files")
         );
     }
 
