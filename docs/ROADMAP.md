@@ -281,6 +281,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - HWP BinData 종류·링크 경로 IR 확장: `IR_VERSION` 34 → 35. `Link`·`Embedding`·`Storage`를 구분하고 외부 링크의 절대·상대 경로를 `BinaryResource`에 보존한다.
 - resource bytes JSON 압축 개선: `IR_VERSION` 35 → 36. 이미지·첨부 바이트를 숫자 배열 대신 Base64 문자열로 직렬화하고, 구형 배열 표현도 계속 역직렬화한다. JSON exporter는 전체 결과 문자열을 메모리에 만들지 않고 스트리밍한다.
 - 표 객체 배치 IR 확장: `IR_VERSION` 36 → 37. 이미지 전용이던 배치 구조를 `ObjectPlacement`로 일반화하고 HWP 표의 글자처럼 취급, 감싸기, 기준·정렬·오프셋, Z-order, 여백, 쪽 나눔 방지를 보존한다. semantic exporter의 페이지 좌표 선형화는 문서당 한 번 경고한다.
+- 문단 탭 정의 IR 확장: `IR_VERSION` 37 → 38. HWP 문단이 참조하는 사용자 정의 탭의 위치·정렬·리더 원시 값과 자동 좌우 탭 플래그를 보존한다. HTML은 탭 문자를 전용 span으로 출력하되 사용자 정의 탭 위치는 근사 경고를 유지한다.
 
 ## 완료 선언 기준
 

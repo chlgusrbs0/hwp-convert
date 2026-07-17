@@ -704,6 +704,10 @@ fn render_html_document_with_asset_prefix(
       p:last-child {{\n\
         margin-bottom: 0;\n\
       }}\n\
+      .tab {{\n\
+        white-space: pre;\n\
+        tab-size: 4;\n\
+      }}\n\
       li[data-marker]::marker {{\n\
         content: attr(data-marker) \" \";\n\
       }}\n\
@@ -1045,7 +1049,7 @@ fn render_html_inlines(inlines: &[Inline]) -> String {
         match inline {
             Inline::Text(run) => content.push_str(&render_html_text_run(run)),
             Inline::LineBreak => content.push_str("<br />"),
-            Inline::Tab => content.push('\t'),
+            Inline::Tab => content.push_str("<span class=\"tab\">\t</span>"),
             Inline::Link(link) => content.push_str(&render_html_link(link)),
             Inline::FootnoteRef { note_id } => {
                 content.push_str(&render_html_note_ref(note_id, NoteKind::Footnote));
@@ -3357,6 +3361,7 @@ mod tests {
                         style_ref: None,
                     }),
                     Inline::LineBreak,
+                    Inline::Tab,
                     Inline::Text(TextRun {
                         text: "second line".to_string(),
                         style: TextStyle::default(),
@@ -3384,7 +3389,10 @@ mod tests {
 
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("<title>sample.hwpx text export</title>"));
-        assert!(html.contains("<p>&amp; &lt; &gt; &quot; &apos;<br />second line + extra</p>"));
+        assert!(html.contains(
+            "<p>&amp; &lt; &gt; &quot; &apos;<br /><span class=\"tab\">\t</span>second line + extra</p>"
+        ));
+        assert!(html.contains(".tab {"));
         assert!(html.contains("<p>fallback block</p>"));
     }
 

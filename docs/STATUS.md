@@ -23,7 +23,7 @@
 | 요소 | rhwp parse | bridge mapping | Document IR | exporter 지원 | 현재 한계 |
 | --- | --- | --- | --- | --- | --- |
 | text | 예 | 예 | 예 | 예 (TXT/JSON/HTML/Markdown/SVG 모두) | 좌표/페이지 단위 정보 없음. unsupported control 내부 텍스트는 보존 안 될 수 있음. |
-| paragraph | 예 | 부분 | 예 | 부분 (heading/title/caption 구분 제한적) | 빈 문단, 정렬·간격·들여쓰기, 문단 테두리·배경·안쪽 여백, 외톨이줄 보호·다음 문단과 함께·분할 금지·문단 앞 쪽 나눔을 보존한다. outline 기반 heading은 일부 매핑되지만 title/caption 등 전체 role 추론은 아직 제한적. |
+| paragraph | 예 | 부분 | 예 | 부분 (heading/title/caption 구분 제한적) | 빈 문단, 정렬·간격·들여쓰기, 문단 테두리·배경·안쪽 여백, 외톨이줄 보호·다음 문단과 함께·분할 금지·문단 앞 쪽 나눔을 보존한다. HWP 사용자 정의 탭의 위치·정렬·리더 값과 자동 탭 플래그를 IR에 보존하고 HTML은 탭 문자를 축약되지 않는 span으로 출력하지만 정확한 탭 위치는 근사한다. outline 기반 heading은 일부 매핑되지만 title/caption 등 전체 role 추론은 아직 제한적. |
 | style | 부분 | 부분 | 부분 | 부분 (JSON 보존, HTML CSS, Markdown은 일부 장식, TXT/SVG 시각 스타일 소실) | 글자 장식과 밑줄·취소선의 위치/선 종류, 글꼴명/크기, 전경/배경색, 장평·자간·상대 크기·기준선 위치·커닝과 고정/퍼센트 줄 간격을 매핑한다. HWP 혼합 문자권은 실행 구간을 나눠 문자권별 값을 보존한다. HWPX 폴백은 균일한 문자권 메트릭과 문단 border/breakSetting을 복구한다. 서로 다른 밑줄·취소선 모양을 동시에 쓰는 HTML, table style ref, 전체 paragraph role 추론은 아직 제한적이다. |
 | table | 예 | 예 | 예 | 부분 (JSON/HTML 구조 유지, 반복 머리글은 `<thead>`, 헤더셀은 `<th>`, 셀 수직정렬 CSS, TXT/SVG 평문, Markdown 단순 표만) | 셀 `is_header`, 수직정렬, 폭/높이/padding, 4면 테두리, 표 전체 너비·높이/바깥 여백, 행 높이, 셀 간격, HWP/HWPX 반복 머리글과 페이지 분할 규칙은 매핑됨. HWP 표의 글자처럼 취급·wrap·가로/세로 기준·정렬·오프셋·Z-order·개체 여백·쪽 나눔 방지도 `ObjectPlacement`로 보존한다. HWPX 폴백은 borderFill, 셀 margin, 표 `sz/outMargin`, 행 높이와 `cellSpacing/repeatHeader/pageBreak`를 복구한다. borderFill zone은 아직 경고 후 생략한다. 페이지 좌표 기반 표 배치는 semantic exporter에서 선형화한다. 테두리 굵기와 wave/3D 선종류는 근사이므로 실문서 fixture 검증이 필요하다. |
 | merged table cell | 예 | 예 | 예 | 부분 (JSON/HTML `row_span`/`col_span`, Markdown fallback, TXT/SVG 평문) | 병합 셀 시각 배치/너비 계산 없음. Markdown 병합 표현 없음. |

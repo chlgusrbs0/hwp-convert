@@ -32,7 +32,8 @@ use serde::{Deserialize, Serialize};
 /// accepts the legacy JSON byte-array representation.
 /// v37: generalized image placement as `ObjectPlacement` and added optional
 /// table placement metadata.
-pub const IR_VERSION: u16 = 37;
+/// v38: added resolved custom tab definitions to `ParagraphStyle`.
+pub const IR_VERSION: u16 = 38;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -338,6 +339,34 @@ pub struct ParagraphStyle {
     pub keep_lines: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub page_break_before: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tab_definition: Option<TabDefinition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TabDefinition {
+    pub source_id: u16,
+    pub raw_attributes: u32,
+    pub auto_tab_left: bool,
+    pub auto_tab_right: bool,
+    pub stops: Vec<TabStop>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct TabStop {
+    pub position_pt: LengthPt,
+    pub alignment: TabAlignment,
+    pub leader_type: u8,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TabAlignment {
+    Left,
+    Right,
+    Center,
+    Decimal,
+    Unknown(u8),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

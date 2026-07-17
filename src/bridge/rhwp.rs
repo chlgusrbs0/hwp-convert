@@ -46,9 +46,9 @@ use crate::ir::{
     LengthPx, Link, ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
     NoteKind, NoteStore, ObjectPlacement, Paragraph, ParagraphRole, ParagraphStyle,
     ParagraphStyleId, Percent, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind,
-    Spacing, StyleSheet, Table, TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle,
-    TextDecorationStyle, TextRun, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
-    VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle,
+    TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle, TextStyleId,
+    UnknownInline, VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -2264,12 +2264,6 @@ impl<'a> BridgeContext<'a> {
             | rhwp::model::style::LineSpacingType::Percent => {}
         }
 
-        if para_shape.tab_def_id != 0 {
-            self.add_warning_once(&format!(
-                "rhwp paragraph referenced tab definition id {}; custom tab stops are not modeled and were omitted.",
-                para_shape.tab_def_id
-            ));
-        }
         if para_shape.border_spacing.iter().any(|spacing| *spacing < 0) {
             self.add_warning_once(&format!(
                 "rhwp paragraph border spacing {:?} contained negative HWPUNIT values; hwp-convert omitted the negative sides.",
@@ -2314,6 +2308,7 @@ impl<'a> BridgeContext<'a> {
             keep_with_next: paragraph_layout_flag(para_shape, 17, 6),
             keep_lines: paragraph_layout_flag(para_shape, 18, 7),
             page_break_before: paragraph_layout_flag(para_shape, 19, 8),
+            tab_definition: self.map_tab_definition(para_shape.tab_def_id),
             ..Default::default()
         };
 
@@ -2333,6 +2328,52 @@ impl<'a> BridgeContext<'a> {
         }
 
         style
+    }
+
+    fn map_tab_definition(&mut self, tab_def_id: u16) -> Option<TabDefinition> {
+        let Some(tab_def) = self
+            .source
+            .doc_info
+            .tab_defs
+            .get(tab_def_id as usize)
+            .cloned()
+        else {
+            if tab_def_id != 0 || !self.source.doc_info.tab_defs.is_empty() {
+                self.add_warning_once(&format!(
+                    "rhwp paragraph referenced missing tab definition id {tab_def_id}; hwp-convert preserved tab characters with default spacing."
+                ));
+            }
+            return None;
+        };
+
+        if tab_def.tabs.is_empty() && !tab_def.auto_tab_left && !tab_def.auto_tab_right {
+            return None;
+        }
+
+        self.add_warning_once(
+            "rhwp custom tab definitions were preserved in ParagraphStyle IR; semantic exporters preserve tab characters but approximate custom tab placement.",
+        );
+        Some(TabDefinition {
+            source_id: tab_def_id,
+            raw_attributes: tab_def.attr,
+            auto_tab_left: tab_def.auto_tab_left,
+            auto_tab_right: tab_def.auto_tab_right,
+            stops: tab_def
+                .tabs
+                .into_iter()
+                .map(|tab| TabStop {
+                    position_pt: LengthPt(tab.position as f32 / 100.0),
+                    alignment: match tab.tab_type {
+                        0 => TabAlignment::Left,
+                        1 => TabAlignment::Right,
+                        2 => TabAlignment::Center,
+                        3 => TabAlignment::Decimal,
+                        value => TabAlignment::Unknown(value),
+                    },
+                    leader_type: tab.fill_type,
+                })
+                .collect(),
+        })
     }
 
     fn paragraph_style_ref(&self, paragraph: &RhwpParagraph) -> Option<ParagraphStyleId> {
@@ -5771,6 +5812,82 @@ mod tests {
                 bridged.warnings
             );
         }
+    }
+
+    #[test]
+    fn preserves_custom_paragraph_tab_definition() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                para_shapes: vec![RhwpParaShape {
+                    tab_def_id: 1,
+                    ..Default::default()
+                }],
+                tab_defs: vec![
+                    rhwp::model::style::TabDef::default(),
+                    rhwp::model::style::TabDef {
+                        attr: 42,
+                        auto_tab_left: true,
+                        auto_tab_right: false,
+                        tabs: vec![
+                            rhwp::model::style::TabItem {
+                                position: 1000,
+                                tab_type: 0,
+                                fill_type: 1,
+                            },
+                            rhwp::model::style::TabItem {
+                                position: 2000,
+                                tab_type: 3,
+                                fill_type: 2,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "left\tright".to_string(),
+                    para_shape_id: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let Block::Paragraph(paragraph) = &bridged.sections[0].blocks[0] else {
+            panic!("expected paragraph block");
+        };
+        let definition = paragraph
+            .style
+            .tab_definition
+            .as_ref()
+            .expect("custom tab definition");
+
+        assert_eq!(definition.source_id, 1);
+        assert_eq!(definition.raw_attributes, 42);
+        assert!(definition.auto_tab_left);
+        assert!(!definition.auto_tab_right);
+        assert_eq!(definition.stops.len(), 2);
+        assert_eq!(definition.stops[0].position_pt, LengthPt(10.0));
+        assert_eq!(definition.stops[0].alignment, TabAlignment::Left);
+        assert_eq!(definition.stops[0].leader_type, 1);
+        assert_eq!(definition.stops[1].position_pt, LengthPt(20.0));
+        assert_eq!(definition.stops[1].alignment, TabAlignment::Decimal);
+        assert_eq!(definition.stops[1].leader_type, 2);
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("custom tab definitions were preserved")
+        }));
+        assert!(
+            !bridged
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("were omitted"))
+        );
     }
 
     #[test]
