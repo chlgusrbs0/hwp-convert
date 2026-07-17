@@ -277,6 +277,7 @@ fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
                     text.push_str(&link_text);
                 }
             }
+            Inline::Field(field) => text.push_str(&field.fallback_text),
             Inline::FootnoteRef { note_id } => {
                 text.push_str(&format!("{FOOTNOTE_REF_LABEL}: {}]", note_id.as_str()));
             }

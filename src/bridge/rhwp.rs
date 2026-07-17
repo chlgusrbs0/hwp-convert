@@ -41,8 +41,8 @@ use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
     BinaryResource, BinaryResourceKind, Block, Border, BorderStyle, CaptionPlacement, Color,
     ColumnDirection as IrColumnDirection, ColumnLayout, ColumnLayoutKind, ConversionWarning,
-    Document, DocumentControl, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
-    HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
+    Document, DocumentControl, DocumentField, Equation, EquationKind, FieldKind, HeaderFooter,
+    HeaderFooterPlacement, HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
     ImageEffect as IrImageEffect, ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt,
     LengthPx, Link, ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
     NoteKind, NoteLayout, NoteStore, NumberingKind, ObjectPlacement, PageBinding,
@@ -453,10 +453,7 @@ impl<'a> BridgeContext<'a> {
                     if field.field_type == RhwpFieldType::ClickHere {
                         if let Some(inline) = self.map_click_here_field(field) {
                             // click-here fallback text may be present verbatim
-                            let fallback_text = match &inline {
-                                Inline::Unknown(u) => u.fallback_text.clone().unwrap_or_default(),
-                                _ => String::new(),
-                            };
+                            let fallback_text = inline_fallback_text(&inline);
                             let exact = control_positions.get(index).copied().flatten();
                             let preferred = exact.or_else(|| {
                                 (!fallback_text.is_empty())
@@ -473,10 +470,7 @@ impl<'a> BridgeContext<'a> {
                             });
                         }
                     } else if let Some(inline) = self.map_field_fallback(field) {
-                        let fallback_text = match &inline {
-                            Inline::Unknown(u) => u.fallback_text.clone().unwrap_or_default(),
-                            _ => String::new(),
-                        };
+                        let fallback_text = inline_fallback_text(&inline);
                         let exact = control_positions.get(index).copied().flatten();
                         let preferred = exact.or_else(|| {
                             (!fallback_text.is_empty())
@@ -931,15 +925,7 @@ impl<'a> BridgeContext<'a> {
             .map(ToOwned::to_owned)
             .or_else(|| non_empty_string(&field.command))?;
 
-        Some(Inline::Unknown(UnknownInline {
-            kind: "field:clickhere".to_string(),
-            fallback_text: Some(fallback_text),
-            message: Some(
-                "ClickHere field was preserved as fallback text because exact inline placement is unavailable."
-                    .to_string(),
-            ),
-            source: Some("rhwp".to_string()),
-        }))
+        Some(Inline::Field(map_document_field(field, fallback_text)))
     }
 
     fn map_field_hyperlink(&self, field: &RhwpField) -> Option<Link> {
@@ -972,17 +958,11 @@ impl<'a> BridgeContext<'a> {
         }
 
         let kind = field_type_warning_name(field.field_type);
-        let command = non_empty_string(&field.command)?;
+        let fallback_text = non_empty_string(&field.command)
+            .map(|command| format!("[{kind}: {command}]"))
+            .unwrap_or_else(|| format!("[{kind}]"));
 
-        Some(Inline::Unknown(UnknownInline {
-            kind: kind.to_string(),
-            fallback_text: Some(format!("[{kind}: {command}]")),
-            message: Some(
-                "rHWP field command was preserved as fallback text because hwp-convert does not yet semantically map this field type."
-                    .to_string(),
-            ),
-            source: Some("rhwp".to_string()),
-        }))
+        Some(Inline::Field(map_document_field(field, fallback_text)))
     }
 
     fn map_bookmark_anchor(&self, bookmark: &RhwpBookmark) -> Option<Inline> {
@@ -1298,12 +1278,7 @@ impl<'a> BridgeContext<'a> {
             Control::HiddenComment(comment) => {
                 self.map_hidden_comment_block(comment).into_iter().collect()
             }
-            Control::Field(field) => {
-                if field.field_type != RhwpFieldType::Hyperlink {
-                    self.warn_unsupported_control(field_type_warning_name(field.field_type));
-                }
-                Vec::new()
-            }
+            Control::Field(_) => Vec::new(),
             Control::Form(form) => self
                 .warn_unsupported_control_with_fallback("form", form_fallback_text(form))
                 .into_iter()
@@ -1326,13 +1301,6 @@ impl<'a> BridgeContext<'a> {
         self.add_warning_once(
             "rhwp page and numbering controls were preserved in structured DocumentControl IR; semantic exporters retain fallback text without page-aware placement.",
         );
-    }
-
-    fn warn_unsupported_control(&mut self, kind: &str) -> Option<Block> {
-        self.add_warning_once(&format!(
-            "rhwp exposed unsupported control `{kind}`; hwp-convert recorded this warning to avoid silent data loss."
-        ));
-        None
     }
 
     fn warn_unsupported_visible_control(
@@ -3448,6 +3416,47 @@ fn field_type_warning_name(field_type: RhwpFieldType) -> &'static str {
         RhwpFieldType::Memo => "field:memo",
         RhwpFieldType::PrivateInfoSecurity => "field:private_info",
         RhwpFieldType::TableOfContents => "field:table_of_contents",
+    }
+}
+
+fn map_document_field(field: &RhwpField, fallback_text: String) -> DocumentField {
+    DocumentField {
+        kind: match field.field_type {
+            RhwpFieldType::Unknown => FieldKind::Unknown,
+            RhwpFieldType::Date => FieldKind::Date,
+            RhwpFieldType::DocDate => FieldKind::DocumentDate,
+            RhwpFieldType::Path => FieldKind::Path,
+            RhwpFieldType::Bookmark => FieldKind::Bookmark,
+            RhwpFieldType::MailMerge => FieldKind::MailMerge,
+            RhwpFieldType::CrossRef => FieldKind::CrossReference,
+            RhwpFieldType::Formula => FieldKind::Formula,
+            RhwpFieldType::ClickHere => FieldKind::ClickHere,
+            RhwpFieldType::Hyperlink => FieldKind::Hyperlink,
+            RhwpFieldType::Summary => FieldKind::Summary,
+            RhwpFieldType::UserInfo => FieldKind::UserInfo,
+            RhwpFieldType::Memo => FieldKind::Memo,
+            RhwpFieldType::PrivateInfoSecurity => FieldKind::PrivateInfoSecurity,
+            RhwpFieldType::TableOfContents => FieldKind::TableOfContents,
+        },
+        command: non_empty_string(&field.command),
+        properties: field.properties,
+        extra_properties: field.extra_properties,
+        field_id: field.field_id,
+        control_id: field.ctrl_id,
+        control_data_name: field
+            .ctrl_data_name
+            .clone()
+            .and_then(|name| non_empty_string(&name)),
+        memo_index: field.memo_index,
+        fallback_text,
+    }
+}
+
+fn inline_fallback_text(inline: &Inline) -> String {
+    match inline {
+        Inline::Field(field) => field.fallback_text.clone(),
+        Inline::Unknown(unknown) => unknown.fallback_text.clone().unwrap_or_default(),
+        _ => String::new(),
     }
 }
 
@@ -6558,7 +6567,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_non_url_hyperlink_field_command_as_unknown_inline() {
+    fn preserves_non_url_hyperlink_field_command_as_structured_inline() {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
@@ -6593,10 +6602,10 @@ mod tests {
                 assert_eq!(paragraph.inlines.len(), 3);
                 assert!(matches!(
                     paragraph.inlines.get(1),
-                    Some(Inline::Unknown(unknown))
-                        if unknown.kind == "field:hyperlink"
-                            && unknown.fallback_text.as_deref()
-                                == Some("[field:hyperlink: not a url]")
+                    Some(Inline::Field(field))
+                        if field.kind == FieldKind::Hyperlink
+                            && field.command.as_deref() == Some("not a url")
+                            && field.fallback_text == "[field:hyperlink: not a url]"
                 ));
             }
             other => panic!("expected paragraph block, got {other:?}"),
@@ -6653,7 +6662,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_click_here_field_text_as_unknown_inline() {
+    fn preserves_click_here_field_text_as_structured_inline() {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
@@ -6678,11 +6687,11 @@ mod tests {
 
         match &bridged.sections[0].blocks[0] {
             Block::Paragraph(paragraph) => match paragraph.inlines.last() {
-                Some(Inline::Unknown(unknown)) => {
-                    assert_eq!(unknown.kind, "field:clickhere");
-                    assert_eq!(unknown.fallback_text.as_deref(), Some("입력 안내"));
+                Some(Inline::Field(field)) => {
+                    assert_eq!(field.kind, FieldKind::ClickHere);
+                    assert_eq!(field.fallback_text, "입력 안내");
                 }
-                other => panic!("expected click-here unknown inline, got {other:?}"),
+                other => panic!("expected click-here field inline, got {other:?}"),
             },
             other => panic!("expected paragraph block, got {other:?}"),
         }
@@ -7024,7 +7033,7 @@ mod tests {
     }
 
     #[test]
-    fn warns_when_known_controls_are_not_semantically_mapped() {
+    fn preserves_bookmark_and_date_field_controls() {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
@@ -7054,9 +7063,12 @@ mod tests {
                 .iter()
                 .any(|warning| warning.message.contains("bookmark controls"))
         );
-        assert!(bridged.warnings.iter().any(|warning| {
-            warning.code == WarningCode::Unknown && warning.message.contains("`field:date`")
-        }));
+        assert!(
+            !bridged
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("`field:date`"))
+        );
         match &bridged.sections[0].blocks[0] {
             Block::Paragraph(paragraph) => {
                 assert!(paragraph.inlines.iter().any(|inline| {
@@ -7067,11 +7079,12 @@ mod tests {
                 }));
 
                 match paragraph.inlines.last() {
-                    Some(Inline::Unknown(unknown)) => {
-                        assert_eq!(unknown.kind, "field:date");
-                        assert_eq!(unknown.fallback_text.as_deref(), Some("[field:date: date]"));
+                    Some(Inline::Field(field)) => {
+                        assert_eq!(field.kind, FieldKind::Date);
+                        assert_eq!(field.command.as_deref(), Some("date"));
+                        assert_eq!(field.fallback_text, "[field:date: date]");
                     }
-                    other => panic!("expected date field unknown inline, got {other:?}"),
+                    other => panic!("expected date field inline, got {other:?}"),
                 }
             }
             other => panic!("expected paragraph block, got {other:?}"),
@@ -7112,14 +7125,61 @@ mod tests {
                 assert!(paragraph.inlines.iter().any(|inline| {
                     matches!(
                         inline,
-                        Inline::Unknown(unknown)
-                            if unknown.kind == "field:date"
-                                && unknown.fallback_text.as_deref() == Some("[field:date: date]")
+                        Inline::Field(field)
+                            if field.kind == FieldKind::Date
+                                && field.command.as_deref() == Some("date")
+                                && field.fallback_text == "[field:date: date]"
                     )
                 }));
             }
             other => panic!("expected paragraph block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn preserves_formula_field_metadata() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "result".to_string(),
+                    controls: vec![Control::Field(RhwpField {
+                        field_type: RhwpFieldType::Formula,
+                        command: "SUM(A1:B2)".to_string(),
+                        properties: 0x1234,
+                        extra_properties: 7,
+                        field_id: 42,
+                        ctrl_id: 0x2525_666d,
+                        ctrl_data_name: Some("total".to_string()),
+                        memo_index: 9,
+                    })],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let Block::Paragraph(paragraph) = &bridged.sections[0].blocks[0] else {
+            panic!("expected paragraph block");
+        };
+        let Some(Inline::Field(field)) = paragraph.inlines.last() else {
+            panic!("expected formula field inline");
+        };
+
+        assert_eq!(field.kind, FieldKind::Formula);
+        assert_eq!(field.command.as_deref(), Some("SUM(A1:B2)"));
+        assert_eq!(field.properties, 0x1234);
+        assert_eq!(field.extra_properties, 7);
+        assert_eq!(field.field_id, 42);
+        assert_eq!(field.control_id, 0x2525_666d);
+        assert_eq!(field.control_data_name.as_deref(), Some("total"));
+        assert_eq!(field.memo_index, 9);
+        assert_eq!(field.fallback_text, "[field:formula: SUM(A1:B2)]");
+        assert!(!bridged.warnings.iter().any(|warning| {
+            warning.message.contains("field:formula")
+                || warning.message.contains("IR unknown inline")
+        }));
     }
 
     #[test]

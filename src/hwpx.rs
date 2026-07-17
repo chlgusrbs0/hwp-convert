@@ -4958,6 +4958,7 @@ fn inlines_to_plain_text(inlines: &[Inline]) -> String {
             Inline::LineBreak => text.push('\n'),
             Inline::Tab => text.push('\t'),
             Inline::Link(link) => text.push_str(&inlines_to_plain_text(&link.inlines)),
+            Inline::Field(field) => text.push_str(&field.fallback_text),
             Inline::FootnoteRef { note_id } | Inline::EndnoteRef { note_id } => {
                 text.push_str(note_id.as_str());
             }

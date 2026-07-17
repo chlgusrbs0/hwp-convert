@@ -793,6 +793,7 @@ fn paragraph_plain_text(paragraph: &Paragraph) -> String {
             Inline::LineBreak => text.push('\n'),
             Inline::Tab => text.push('\t'),
             Inline::Link(link) => text.push_str(&link_plain_text(&link.inlines)),
+            Inline::Field(field) => text.push_str(&field.fallback_text),
             Inline::FootnoteRef { note_id } | Inline::EndnoteRef { note_id } => {
                 text.push_str(note_id.as_str());
             }
@@ -1514,6 +1515,7 @@ impl DocumentStats {
                     self.links += 1;
                     self.count_inlines(&link.inlines);
                 }
+                Inline::Field(_) => {}
                 Inline::FootnoteRef { .. } => self.footnote_refs += 1,
                 Inline::EndnoteRef { .. } => self.endnote_refs += 1,
                 Inline::Unknown(_) => self.unknown_inlines += 1,

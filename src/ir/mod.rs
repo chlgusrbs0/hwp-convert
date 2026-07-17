@@ -38,7 +38,8 @@ use serde::{Deserialize, Serialize};
 /// v41: added structured section and page layout metadata.
 /// v42: added ordered column layout change blocks.
 /// v43: added structured page and numbering control blocks.
-pub const IR_VERSION: u16 = 43;
+/// v44: added structured document field inlines.
+pub const IR_VERSION: u16 = 44;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -385,9 +386,43 @@ pub enum Inline {
     Tab,
     Anchor { id: String },
     Link(Link),
+    Field(DocumentField),
     FootnoteRef { note_id: NoteId },
     EndnoteRef { note_id: NoteId },
     Unknown(UnknownInline),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DocumentField {
+    pub kind: FieldKind,
+    pub command: Option<String>,
+    pub properties: u32,
+    pub extra_properties: u8,
+    pub field_id: u32,
+    pub control_id: u32,
+    pub control_data_name: Option<String>,
+    pub memo_index: u32,
+    pub fallback_text: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldKind {
+    Unknown,
+    Date,
+    DocumentDate,
+    Path,
+    Bookmark,
+    MailMerge,
+    CrossReference,
+    Formula,
+    ClickHere,
+    Hyperlink,
+    Summary,
+    UserInfo,
+    Memo,
+    PrivateInfoSecurity,
+    TableOfContents,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

@@ -376,6 +376,7 @@ fn collect_inline_unknown_warnings(inlines: &[Inline], warnings: &mut Vec<String
     for inline in inlines {
         match inline {
             Inline::Link(link) => collect_inline_unknown_warnings(&link.inlines, warnings),
+            Inline::Field(_) => {}
             Inline::Unknown(unknown) => {
                 if let Some(message) = &unknown.message {
                     push_warning_once(
@@ -1061,6 +1062,9 @@ fn render_html_inlines(inlines: &[Inline]) -> String {
             Inline::LineBreak => content.push_str("<br />"),
             Inline::Tab => content.push_str("<span class=\"tab\">\t</span>"),
             Inline::Link(link) => content.push_str(&render_html_link(link)),
+            Inline::Field(field) => {
+                content.push_str(&render_html_fallback_text(&field.fallback_text));
+            }
             Inline::FootnoteRef { note_id } => {
                 content.push_str(&render_html_note_ref(note_id, NoteKind::Footnote));
             }
@@ -2047,6 +2051,9 @@ fn render_markdown_inlines(inlines: &[Inline]) -> String {
             Inline::LineBreak => content.push_str("  \n"),
             Inline::Tab => content.push('\t'),
             Inline::Link(link) => content.push_str(&render_markdown_link(link)),
+            Inline::Field(field) => {
+                content.push_str(&render_markdown_text(&field.fallback_text));
+            }
             Inline::FootnoteRef { note_id } => content.push_str(&render_markdown_note_ref(note_id)),
             Inline::EndnoteRef { note_id } => content.push_str(&render_markdown_note_ref(note_id)),
             Inline::Anchor { id } => {
@@ -2348,6 +2355,7 @@ fn markdown_link_label_inline(inline: &Inline) -> String {
         Inline::LineBreak => " ".to_string(),
         Inline::Tab => "\t".to_string(),
         Inline::Link(link) => render_markdown_link_label(link),
+        Inline::Field(field) => escape_markdown_image_alt(&field.fallback_text),
         Inline::FootnoteRef { note_id } => render_markdown_note_ref(note_id),
         Inline::EndnoteRef { note_id } => render_markdown_note_ref(note_id),
         Inline::Anchor { id } => {

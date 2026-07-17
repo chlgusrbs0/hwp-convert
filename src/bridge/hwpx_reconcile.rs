@@ -300,6 +300,7 @@ impl SemanticCoverage {
                     self.links += 1;
                     self.count_inlines(&link.inlines);
                 }
+                Inline::Field(_) => {}
                 Inline::Anchor { .. } => self.anchors += 1,
                 Inline::FootnoteRef { .. } | Inline::EndnoteRef { .. } => self.note_refs += 1,
                 Inline::Unknown(_) => self.unknown_inlines += 1,
@@ -490,6 +491,7 @@ fn collect_inlines_text(inlines: &[Inline], chunks: &mut Vec<String>) {
                     collect_inlines_text(&link.inlines, chunks);
                 }
             }
+            Inline::Field(field) => push_text(Some(&field.fallback_text), chunks),
             Inline::Unknown(_) => {}
             Inline::LineBreak | Inline::Tab => chunks.push(" ".to_string()),
             Inline::Anchor { .. } | Inline::FootnoteRef { .. } | Inline::EndnoteRef { .. } => {}
