@@ -362,7 +362,11 @@ fn collect_block_unknown_warnings(blocks: &[Block], warnings: &mut Vec<String>) 
                     );
                 }
             }
-            Block::Image(_) | Block::Equation(_) | Block::Shape(_) | Block::Chart(_) => {}
+            Block::ColumnLayout(_)
+            | Block::Image(_)
+            | Block::Equation(_)
+            | Block::Shape(_)
+            | Block::Chart(_) => {}
         }
     }
 }
@@ -995,6 +999,7 @@ fn html_list_tag_name(kind: &ListKind) -> &'static str {
 fn render_html_block(block: &Block, resources: &ResourceStore, image_asset_prefix: &str) -> String {
     match block {
         Block::Paragraph(paragraph) => render_html_paragraph(paragraph),
+        Block::ColumnLayout(_) => String::new(),
         Block::Table(table) => render_html_table(table, resources, image_asset_prefix),
         Block::Image(image) => render_html_image(image, resources, image_asset_prefix),
         Block::Equation(equation) => render_html_equation(equation),
@@ -1997,6 +2002,7 @@ fn render_markdown_block(
 ) -> String {
     match block {
         Block::Paragraph(paragraph) => render_markdown_paragraph(paragraph),
+        Block::ColumnLayout(_) => String::new(),
         Block::Table(table) => render_markdown_table(table),
         Block::Image(image) => render_markdown_image(image, resources, image_asset_prefix),
         Block::Equation(equation) => render_markdown_equation(equation),

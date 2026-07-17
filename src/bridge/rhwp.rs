@@ -40,7 +40,8 @@ use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_r
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
     BinaryResource, BinaryResourceKind, Block, Border, BorderStyle, CaptionPlacement, Color,
-    ConversionWarning, Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
+    ColumnDirection as IrColumnDirection, ColumnLayout, ColumnLayoutKind, ConversionWarning,
+    Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
     HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
     ImageEffect as IrImageEffect, ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt,
     LengthPx, Link, ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
@@ -1213,12 +1214,13 @@ impl<'a> BridgeContext<'a> {
             }
             Control::ColumnDef(column_def) => {
                 if column_def_has_layout_effect(column_def) {
-                    self.warn_unsupported_layout_control(
-                        "column_def",
-                        column_def_fallback_text(column_def),
+                    self.add_warning_once(
+                        "rhwp column layout changes were preserved as ordered ColumnLayout blocks; semantic exporters currently linearize columns.",
                     );
+                    vec![Block::ColumnLayout(map_column_layout(column_def))]
+                } else {
+                    Vec::new()
                 }
-                Vec::new()
             }
             Control::Table(table) => self.map_table_blocks(table),
             Control::Picture(picture) => vec![self.map_picture_block(picture)],
@@ -1338,12 +1340,6 @@ impl<'a> BridgeContext<'a> {
                 .collect(),
             _ => Vec::new(),
         }
-    }
-
-    fn warn_unsupported_layout_control(&mut self, kind: &str, summary: String) {
-        self.add_warning_once(&format!(
-            "rhwp exposed layout control `{kind}`; hwp-convert does not yet model it in Document IR. Preserved summary: {summary}"
-        ));
     }
 
     fn warn_unmodeled_section_details(&mut self, section_def: &RhwpSectionDef) {
@@ -3600,20 +3596,28 @@ fn section_unmodeled_detail_names(section_def: &RhwpSectionDef) -> Vec<&'static 
     details
 }
 
-fn column_def_fallback_text(column_def: &RhwpColumnDef) -> String {
-    format!(
-        "column_type={}, column_count={}, direction={}, same_width={}, spacing={}, widths={:?}, gaps={:?}, separator_type={}, separator_width={}, separator_color={:#08x}",
-        column_type_name(column_def.column_type),
-        column_def.column_count,
-        column_direction_name(column_def.direction),
-        column_def.same_width,
-        column_def.spacing,
-        column_def.widths,
-        column_def.gaps,
-        column_def.separator_type,
-        column_def.separator_width,
-        column_def.separator_color
-    )
+fn map_column_layout(column_def: &RhwpColumnDef) -> ColumnLayout {
+    ColumnLayout {
+        kind: match column_def.column_type {
+            RhwpColumnType::Normal => ColumnLayoutKind::Normal,
+            RhwpColumnType::Distribute => ColumnLayoutKind::Distribute,
+            RhwpColumnType::Parallel => ColumnLayoutKind::Parallel,
+        },
+        column_count: column_def.column_count,
+        direction: match column_def.direction {
+            RhwpColumnDirection::LeftToRight => IrColumnDirection::LeftToRight,
+            RhwpColumnDirection::RightToLeft => IrColumnDirection::RightToLeft,
+        },
+        same_width: column_def.same_width,
+        spacing: LengthPx(f32::from(column_def.spacing) / 75.0),
+        raw_widths: column_def.widths.clone(),
+        raw_gaps: column_def.gaps.clone(),
+        proportional_widths: column_def.proportional_widths,
+        separator_type: column_def.separator_type,
+        separator_width: column_def.separator_width,
+        separator_color_raw: column_def.separator_color,
+        raw_attributes: column_def.raw_attr,
+    }
 }
 
 fn column_def_has_layout_effect(column_def: &RhwpColumnDef) -> bool {
@@ -3625,21 +3629,6 @@ fn column_def_has_layout_effect(column_def: &RhwpColumnDef) -> bool {
         || column_def.separator_type != 0
         || column_def.separator_width != 0
         || column_def.separator_color != 0
-}
-
-fn column_type_name(column_type: RhwpColumnType) -> &'static str {
-    match column_type {
-        RhwpColumnType::Normal => "normal",
-        RhwpColumnType::Distribute => "distribute",
-        RhwpColumnType::Parallel => "parallel",
-    }
-}
-
-fn column_direction_name(direction: RhwpColumnDirection) -> &'static str {
-    match direction {
-        RhwpColumnDirection::LeftToRight => "left_to_right",
-        RhwpColumnDirection::RightToLeft => "right_to_left",
-    }
 }
 
 fn picture_crop_is_empty(picture: &Picture) -> bool {
@@ -6885,8 +6874,20 @@ mod tests {
         let bridged = BridgeContext::new(&document).into_document();
         let blocks = &bridged.sections[0].blocks;
 
-        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks.len(), 2);
         assert!(matches!(&blocks[0], Block::Paragraph(_)));
+        let Block::ColumnLayout(columns) = &blocks[1] else {
+            panic!("expected column layout block");
+        };
+        assert_eq!(columns.kind, ColumnLayoutKind::Parallel);
+        assert_eq!(columns.column_count, 2);
+        assert_eq!(columns.direction, IrColumnDirection::RightToLeft);
+        assert_eq!(columns.spacing, LengthPx(500.0 / 75.0));
+        assert_eq!(columns.raw_widths, vec![1000, 2000]);
+        assert_eq!(columns.raw_gaps, vec![300]);
+        assert_eq!(columns.separator_type, 1);
+        assert_eq!(columns.separator_width, 2);
+        assert_eq!(columns.separator_color_raw, 0x00FF00);
         let layout = bridged.sections[0]
             .layout
             .as_ref()
@@ -6918,9 +6919,9 @@ mod tests {
                 .any(|warning| warning.message.contains("layout control `section_def`"))
         );
         assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("layout control `column_def`")
-                && warning.message.contains("column_count=2")
-                && warning.message.contains("direction=right_to_left")
+            warning
+                .message
+                .contains("column layout changes were preserved")
         }));
         assert!(
             !bridged

@@ -245,6 +245,7 @@ impl SemanticCoverage {
     fn count_block(&mut self, block: &Block) {
         match block {
             Block::Paragraph(paragraph) => self.count_paragraph(paragraph),
+            Block::ColumnLayout(_) => {}
             Block::Table(table) => {
                 self.tables += 1;
                 self.styled_tables += usize::from(table.style != Default::default());
@@ -435,6 +436,7 @@ fn collect_blocks_text(blocks: &[Block], chunks: &mut Vec<String>) {
     for block in blocks {
         match block {
             Block::Paragraph(paragraph) => collect_inlines_text(&paragraph.inlines, chunks),
+            Block::ColumnLayout(_) => {}
             Block::Table(table) => {
                 for row in &table.rows {
                     for cell in &row.cells {

@@ -36,7 +36,9 @@ pub fn collect_block_texts(document: &Document) -> Vec<String> {
         );
 
         for block in &section.blocks {
-            blocks.push(block_to_plain_text(block));
+            if !matches!(block, Block::ColumnLayout(_)) {
+                blocks.push(block_to_plain_text(block));
+            }
         }
 
         blocks.extend(
@@ -61,6 +63,7 @@ pub fn to_plain_text(document: &Document) -> String {
 pub(crate) fn block_to_plain_text(block: &Block) -> String {
     match block {
         Block::Paragraph(paragraph) => paragraph_to_plain_text(paragraph),
+        Block::ColumnLayout(_) => String::new(),
         Block::Table(table) => table_to_plain_text(table),
         Block::Image(image) => image_to_plain_text(image),
         Block::Equation(equation) => equation_to_plain_text(equation),

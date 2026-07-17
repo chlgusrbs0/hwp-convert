@@ -36,7 +36,8 @@ use serde::{Deserialize, Serialize};
 /// v39: added structured shape geometry and object placement metadata.
 /// v40: added script-specific variants to named text styles.
 /// v41: added structured section and page layout metadata.
-pub const IR_VERSION: u16 = 41;
+/// v42: added ordered column layout change blocks.
+pub const IR_VERSION: u16 = 42;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -248,12 +249,44 @@ pub struct RawSectionRecord {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Block {
     Paragraph(Paragraph),
+    ColumnLayout(ColumnLayout),
     Table(Table),
     Image(Image),
     Equation(Equation),
     Shape(Shape),
     Chart(Chart),
     Unknown(UnknownBlock),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ColumnLayout {
+    pub kind: ColumnLayoutKind,
+    pub column_count: u16,
+    pub direction: ColumnDirection,
+    pub same_width: bool,
+    pub spacing: LengthPx,
+    pub raw_widths: Vec<i16>,
+    pub raw_gaps: Vec<i16>,
+    pub proportional_widths: bool,
+    pub separator_type: u8,
+    pub separator_width: u8,
+    pub separator_color_raw: u32,
+    pub raw_attributes: u16,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ColumnLayoutKind {
+    Normal,
+    Distribute,
+    Parallel,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ColumnDirection {
+    LeftToRight,
+    RightToLeft,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
