@@ -1465,6 +1465,7 @@ impl DocumentStats {
         match block {
             Block::Paragraph(paragraph) => self.count_paragraph(paragraph),
             Block::ColumnLayout(_) => {}
+            Block::DocumentControl(_) => {}
             Block::Table(table) => {
                 self.tables += 1;
                 self.table_rows += table.rows.len();

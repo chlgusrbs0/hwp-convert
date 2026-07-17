@@ -41,15 +41,15 @@ use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
     BinaryResource, BinaryResourceKind, Block, Border, BorderStyle, CaptionPlacement, Color,
     ColumnDirection as IrColumnDirection, ColumnLayout, ColumnLayoutKind, ConversionWarning,
-    Document, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
+    Document, DocumentControl, Equation, EquationKind, HeaderFooter, HeaderFooterPlacement,
     HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
     ImageEffect as IrImageEffect, ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt,
     LengthPx, Link, ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
-    NoteKind, NoteLayout, NoteStore, ObjectPlacement, PageBinding, PageBorderFillLayout,
-    PageLayout, Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent,
-    RawSectionRecord, Resource, ResourceId, ResourceStore, ScriptTextStyle, Section, SectionLayout,
-    Shape, ShapeGeometry, ShapeKind, ShapePoint, Spacing, StyleSheet, TabAlignment, TabDefinition,
-    TabStop, Table, TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle,
+    NoteKind, NoteLayout, NoteStore, NumberingKind, ObjectPlacement, PageBinding,
+    PageBorderFillLayout, PageLayout, Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId,
+    Percent, RawSectionRecord, Resource, ResourceId, ResourceStore, ScriptTextStyle, Section,
+    SectionLayout, Shape, ShapeGeometry, ShapeKind, ShapePoint, Spacing, StyleSheet, TabAlignment,
+    TabDefinition, TabStop, Table, TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle,
     TextDecorationStyle, TextRun, TextScript, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
     VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
@@ -1238,49 +1238,20 @@ impl<'a> BridgeContext<'a> {
                     source: Some("rhwp".to_string()),
                 })]
             }
-            Control::AutoNumber(number) => self
-                .warn_unsupported_control_with_fallback(
-                    "auto_number",
-                    format!(
-                        "[auto number: type={}, number={}, assigned={}, format={}, superscript={}, user_symbol={}, prefix={}, suffix={}]",
-                        auto_number_type_name(number.number_type),
-                        number.number,
-                        number.assigned_number,
-                        number.format,
-                        number.superscript,
-                        fallback_char_value(number.user_symbol),
-                        fallback_char_value(number.prefix_char),
-                        fallback_char_value(number.suffix_char),
-                    ),
-                )
-                .into_iter()
-                .collect(),
-            Control::NewNumber(number) => self
-                .warn_unsupported_control_with_fallback(
-                    "new_number",
-                    format!(
-                        "[new number: type={}, number={}]",
-                        auto_number_type_name(number.number_type),
-                        number.number
-                    ),
-                )
-                .into_iter()
-                .collect(),
-            Control::PageNumberPos(position) => self
-                .warn_unsupported_control_with_fallback(
-                    "page_number_position",
-                    format!(
-                        "[page number position: format={}, position={}, user_symbol={}, prefix={}, suffix={}, dash={}]",
-                        position.format,
-                        position.position,
-                        fallback_char_value(position.user_symbol),
-                        fallback_char_value(position.prefix_char),
-                        fallback_char_value(position.suffix_char),
-                        fallback_char_value(position.dash_char),
-                    ),
-                )
-                .into_iter()
-                .collect(),
+            Control::AutoNumber(number) => {
+                self.warn_structured_document_control();
+                vec![Block::DocumentControl(map_auto_number_control(number))]
+            }
+            Control::NewNumber(number) => {
+                self.warn_structured_document_control();
+                vec![Block::DocumentControl(map_new_number_control(number))]
+            }
+            Control::PageNumberPos(position) => {
+                self.warn_structured_document_control();
+                vec![Block::DocumentControl(map_page_number_position_control(
+                    position,
+                ))]
+            }
             Control::Bookmark(_) => Vec::new(),
             Control::Ruby(ruby) => self
                 .warn_unsupported_visible_control(
@@ -1318,13 +1289,12 @@ impl<'a> BridgeContext<'a> {
                 .into_iter()
                 .collect()
             }
-            Control::PageHide(page_hide) => self
-                .warn_unsupported_control_with_fallback(
-                    "page_hide",
-                    page_hide_fallback_text(page_hide),
-                )
-                .into_iter()
-                .collect(),
+            Control::PageHide(page_hide) => {
+                self.warn_structured_document_control();
+                vec![Block::DocumentControl(map_page_visibility_control(
+                    page_hide,
+                ))]
+            }
             Control::HiddenComment(comment) => {
                 self.map_hidden_comment_block(comment).into_iter().collect()
             }
@@ -1350,6 +1320,12 @@ impl<'a> BridgeContext<'a> {
                 details.join(", ")
             ));
         }
+    }
+
+    fn warn_structured_document_control(&mut self) {
+        self.add_warning_once(
+            "rhwp page and numbering controls were preserved in structured DocumentControl IR; semantic exporters retain fallback text without page-aware placement.",
+        );
     }
 
     fn warn_unsupported_control(&mut self, kind: &str) -> Option<Block> {
@@ -3483,6 +3459,87 @@ fn auto_number_type_name(number_type: RhwpAutoNumberType) -> &'static str {
         RhwpAutoNumberType::Picture => "picture",
         RhwpAutoNumberType::Table => "table",
         RhwpAutoNumberType::Equation => "equation",
+    }
+}
+
+fn map_numbering_kind(number_type: RhwpAutoNumberType) -> NumberingKind {
+    match number_type {
+        RhwpAutoNumberType::Page => NumberingKind::Page,
+        RhwpAutoNumberType::Footnote => NumberingKind::Footnote,
+        RhwpAutoNumberType::Endnote => NumberingKind::Endnote,
+        RhwpAutoNumberType::Picture => NumberingKind::Picture,
+        RhwpAutoNumberType::Table => NumberingKind::Table,
+        RhwpAutoNumberType::Equation => NumberingKind::Equation,
+    }
+}
+
+fn map_auto_number_control(number: &rhwp::model::control::AutoNumber) -> DocumentControl {
+    DocumentControl::AutoNumber {
+        kind: map_numbering_kind(number.number_type),
+        number: number.number,
+        assigned_number: number.assigned_number,
+        format: number.format,
+        superscript: number.superscript,
+        user_symbol: non_control_character(number.user_symbol),
+        prefix: non_control_character(number.prefix_char),
+        suffix: non_control_character(number.suffix_char),
+        fallback_text: format!(
+            "[auto number: type={}, number={}, assigned={}, format={}, superscript={}, user_symbol={}, prefix={}, suffix={}]",
+            auto_number_type_name(number.number_type),
+            number.number,
+            number.assigned_number,
+            number.format,
+            number.superscript,
+            fallback_char_value(number.user_symbol),
+            fallback_char_value(number.prefix_char),
+            fallback_char_value(number.suffix_char),
+        ),
+    }
+}
+
+fn map_new_number_control(number: &rhwp::model::control::NewNumber) -> DocumentControl {
+    DocumentControl::NewNumber {
+        kind: map_numbering_kind(number.number_type),
+        number: number.number,
+        fallback_text: format!(
+            "[new number: type={}, number={}]",
+            auto_number_type_name(number.number_type),
+            number.number
+        ),
+    }
+}
+
+fn map_page_number_position_control(
+    position: &rhwp::model::control::PageNumberPos,
+) -> DocumentControl {
+    DocumentControl::PageNumberPosition {
+        format: position.format,
+        position: position.position,
+        user_symbol: non_control_character(position.user_symbol),
+        prefix: non_control_character(position.prefix_char),
+        suffix: non_control_character(position.suffix_char),
+        dash: non_control_character(position.dash_char),
+        fallback_text: format!(
+            "[page number position: format={}, position={}, user_symbol={}, prefix={}, suffix={}, dash={}]",
+            position.format,
+            position.position,
+            fallback_char_value(position.user_symbol),
+            fallback_char_value(position.prefix_char),
+            fallback_char_value(position.suffix_char),
+            fallback_char_value(position.dash_char),
+        ),
+    }
+}
+
+fn map_page_visibility_control(page_hide: &RhwpPageHide) -> DocumentControl {
+    DocumentControl::PageVisibility {
+        hide_header: page_hide.hide_header,
+        hide_footer: page_hide.hide_footer,
+        hide_master_page: page_hide.hide_master_page,
+        hide_border: page_hide.hide_border,
+        hide_fill: page_hide.hide_fill,
+        hide_page_number: page_hide.hide_page_num,
+        fallback_text: page_hide_fallback_text(page_hide),
     }
 }
 
@@ -6712,7 +6769,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_numbering_controls_as_unknown_blocks() {
+    fn preserves_numbering_controls_as_structured_blocks() {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
@@ -6751,19 +6808,49 @@ mod tests {
         let bridged = BridgeContext::new(&document).into_document();
         let blocks = &bridged.sections[0].blocks;
 
-        assert!(
-            matches!(&blocks[1], Block::Unknown(unknown) if unknown.kind == "auto_number" && unknown.fallback_text.as_deref() == Some("[auto number: type=table, number=2, assigned=7, format=4, superscript=true, user_symbol=※, prefix=(, suffix=)]"))
-        );
-        assert!(
-            matches!(&blocks[2], Block::Unknown(unknown) if unknown.kind == "new_number" && unknown.fallback_text.as_deref() == Some("[new number: type=picture, number=3]"))
-        );
-        assert!(
-            matches!(&blocks[3], Block::Unknown(unknown) if unknown.kind == "page_number_position" && unknown.fallback_text.as_deref() == Some("[page number position: format=4, position=5, user_symbol=#, prefix=[, suffix=], dash=-]"))
-        );
+        assert!(matches!(
+            &blocks[1],
+            Block::DocumentControl(DocumentControl::AutoNumber {
+                kind: NumberingKind::Table,
+                number: 2,
+                assigned_number: 7,
+                format: 4,
+                superscript: true,
+                user_symbol: Some('※'),
+                prefix: Some('('),
+                suffix: Some(')'),
+                ..
+            })
+        ));
+        assert!(matches!(
+            &blocks[2],
+            Block::DocumentControl(DocumentControl::NewNumber {
+                kind: NumberingKind::Picture,
+                number: 3,
+                ..
+            })
+        ));
+        assert!(matches!(
+            &blocks[3],
+            Block::DocumentControl(DocumentControl::PageNumberPosition {
+                format: 4,
+                position: 5,
+                user_symbol: Some('#'),
+                prefix: Some('['),
+                suffix: Some(']'),
+                dash: Some('-'),
+                ..
+            })
+        ));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("numbering controls were preserved in structured")
+        }));
     }
 
     #[test]
-    fn preserves_page_hide_and_form_controls_as_unknown_blocks() {
+    fn preserves_page_visibility_and_form_controls() {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
@@ -6795,9 +6882,14 @@ mod tests {
         let bridged = BridgeContext::new(&document).into_document();
         let blocks = &bridged.sections[0].blocks;
 
-        assert!(
-            matches!(&blocks[1], Block::Unknown(unknown) if unknown.kind == "page_hide" && unknown.fallback_text.as_deref() == Some("[page hide: header,page_num]"))
-        );
+        assert!(matches!(
+            &blocks[1],
+            Block::DocumentControl(DocumentControl::PageVisibility {
+                hide_header: true,
+                hide_page_number: true,
+                ..
+            })
+        ));
         assert!(
             matches!(&blocks[2], Block::Unknown(unknown) if unknown.kind == "form" && unknown.fallback_text.as_deref() == Some("[form: type=edit, name=field1, text=value, value=1, enabled=true, size=100x200]"))
         );

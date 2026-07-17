@@ -64,6 +64,7 @@ pub(crate) fn block_to_plain_text(block: &Block) -> String {
     match block {
         Block::Paragraph(paragraph) => paragraph_to_plain_text(paragraph),
         Block::ColumnLayout(_) => String::new(),
+        Block::DocumentControl(control) => control.fallback_text().to_string(),
         Block::Table(table) => table_to_plain_text(table),
         Block::Image(image) => image_to_plain_text(image),
         Block::Equation(equation) => equation_to_plain_text(equation),

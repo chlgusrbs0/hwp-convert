@@ -37,7 +37,8 @@ use serde::{Deserialize, Serialize};
 /// v40: added script-specific variants to named text styles.
 /// v41: added structured section and page layout metadata.
 /// v42: added ordered column layout change blocks.
-pub const IR_VERSION: u16 = 42;
+/// v43: added structured page and numbering control blocks.
+pub const IR_VERSION: u16 = 43;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -250,12 +251,74 @@ pub struct RawSectionRecord {
 pub enum Block {
     Paragraph(Paragraph),
     ColumnLayout(ColumnLayout),
+    DocumentControl(DocumentControl),
     Table(Table),
     Image(Image),
     Equation(Equation),
     Shape(Shape),
     Chart(Chart),
     Unknown(UnknownBlock),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "control", rename_all = "snake_case")]
+pub enum DocumentControl {
+    AutoNumber {
+        kind: NumberingKind,
+        number: u16,
+        assigned_number: u16,
+        format: u8,
+        superscript: bool,
+        user_symbol: Option<char>,
+        prefix: Option<char>,
+        suffix: Option<char>,
+        fallback_text: String,
+    },
+    NewNumber {
+        kind: NumberingKind,
+        number: u16,
+        fallback_text: String,
+    },
+    PageNumberPosition {
+        format: u8,
+        position: u8,
+        user_symbol: Option<char>,
+        prefix: Option<char>,
+        suffix: Option<char>,
+        dash: Option<char>,
+        fallback_text: String,
+    },
+    PageVisibility {
+        hide_header: bool,
+        hide_footer: bool,
+        hide_master_page: bool,
+        hide_border: bool,
+        hide_fill: bool,
+        hide_page_number: bool,
+        fallback_text: String,
+    },
+}
+
+impl DocumentControl {
+    pub fn fallback_text(&self) -> &str {
+        match self {
+            Self::AutoNumber { fallback_text, .. }
+            | Self::NewNumber { fallback_text, .. }
+            | Self::PageNumberPosition { fallback_text, .. }
+            | Self::PageVisibility { fallback_text, .. } => fallback_text,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NumberingKind {
+    Page,
+    Footnote,
+    Endnote,
+    Picture,
+    Table,
+    Equation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
