@@ -45,11 +45,11 @@ use crate::ir::{
     ImageEffect as IrImageEffect, ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt,
     LengthPx, Link, ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
     NoteKind, NoteStore, ObjectPlacement, Paragraph, ParagraphRole, ParagraphStyle,
-    ParagraphStyleId, Percent, Resource, ResourceId, ResourceStore, Section, Shape, ShapeGeometry,
-    ShapeKind, ShapePoint, Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table,
-    TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun,
-    TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
-    VerticalRelativeTo, WarningCode,
+    ParagraphStyleId, Percent, Resource, ResourceId, ResourceStore, ScriptTextStyle, Section,
+    Shape, ShapeGeometry, ShapeKind, ShapePoint, Spacing, StyleSheet, TabAlignment, TabDefinition,
+    TabStop, Table, TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle,
+    TextDecorationStyle, TextRun, TextScript, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
+    VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -2055,12 +2055,13 @@ impl<'a> BridgeContext<'a> {
             let char_shape_id = style.char_shape_id as u32;
             let para_shape_id = style.para_shape_id;
 
+            let (text_style, script_styles) =
+                self.map_named_text_style_by_char_shape_id_or_warn(char_shape_id, "style sheet");
             style_sheet.text_styles.push(NamedTextStyle {
                 id: TextStyleId(text_style_key(index)),
                 name: name.clone(),
-                style: self
-                    .map_text_style_by_char_shape_id_or_warn(char_shape_id, "style sheet")
-                    .unwrap_or_default(),
+                style: text_style,
+                script_styles,
             });
 
             style_sheet.paragraph_styles.push(NamedParagraphStyle {
@@ -2075,7 +2076,6 @@ impl<'a> BridgeContext<'a> {
 
     fn map_text_style(&mut self, char_shape: &RhwpCharShape, context: &str) -> TextStyle {
         self.warn_unmodeled_text_style(char_shape);
-        self.warn_nonuniform_text_metrics(char_shape, context);
         let font_width_percent = uniform_u8_percent(&char_shape.ratios, 50..=200);
         let letter_spacing_percent = uniform_i8_percent(&char_shape.spacings, -50..=50);
         let relative_size_percent = uniform_u8_percent(&char_shape.relative_sizes, 10..=250);
@@ -2199,33 +2199,6 @@ impl<'a> BridgeContext<'a> {
             self.add_warning_once(
                 "rhwp text effect details such as shadow type, offsets, color, emboss, or engrave are only approximated by generic HTML text shadows.",
             );
-        }
-    }
-
-    fn warn_nonuniform_text_metrics(&mut self, char_shape: &RhwpCharShape, context: &str) {
-        if percent_values_are_nonuniform_u8(&char_shape.ratios, 50..=200) {
-            self.add_warning_once(&format!(
-                "rhwp {context} used script-specific horizontal ratios {:?}; this single named TextStyle preserved only its primary-script value, while paragraph runs retain per-script values.",
-                char_shape.ratios
-            ));
-        }
-        if percent_values_are_nonuniform_i8(&char_shape.spacings, -50..=50) {
-            self.add_warning_once(&format!(
-                "rhwp {context} used script-specific character spacing {:?}; this single named TextStyle preserved only its primary-script value, while paragraph runs retain per-script values.",
-                char_shape.spacings
-            ));
-        }
-        if percent_values_are_nonuniform_u8(&char_shape.relative_sizes, 10..=250) {
-            self.add_warning_once(&format!(
-                "rhwp {context} used script-specific relative sizes {:?}; this single named TextStyle preserved only its primary-script value, while paragraph runs retain per-script values.",
-                char_shape.relative_sizes
-            ));
-        }
-        if percent_values_are_nonuniform_i8(&char_shape.char_offsets, -100..=100) {
-            self.add_warning_once(&format!(
-                "rhwp {context} used script-specific character offsets {:?}; this single named TextStyle preserved only its primary-script value, while paragraph runs retain per-script values.",
-                char_shape.char_offsets
-            ));
         }
     }
 
@@ -2400,20 +2373,44 @@ impl<'a> BridgeContext<'a> {
         self.source.doc_info.char_shapes.get(char_shape_id as usize)
     }
 
-    fn map_text_style_by_char_shape_id_or_warn(
+    fn map_named_text_style_by_char_shape_id_or_warn(
         &mut self,
         char_shape_id: u32,
         context: &str,
-    ) -> Option<TextStyle> {
+    ) -> (TextStyle, Vec<ScriptTextStyle>) {
         match self.lookup_char_shape(char_shape_id).cloned() {
-            Some(char_shape) => Some(self.map_text_style(&char_shape, context)),
+            Some(char_shape) => {
+                let style = self.map_text_style(&char_shape, context);
+                let scripts = [
+                    TextScript::Korean,
+                    TextScript::Latin,
+                    TextScript::Hanja,
+                    TextScript::Japanese,
+                    TextScript::Other,
+                    TextScript::Symbol,
+                    TextScript::User,
+                ];
+                let script_styles = scripts
+                    .into_iter()
+                    .enumerate()
+                    .map(|(language_index, script)| ScriptTextStyle {
+                        script,
+                        style: self.map_text_style_for_language(
+                            &char_shape,
+                            language_index,
+                            context,
+                        ),
+                    })
+                    .collect();
+                (style, script_styles)
+            }
             None => {
                 if !self.source.doc_info.char_shapes.is_empty() || char_shape_id != 0 {
                     self.add_warning_once(&format!(
                         "rhwp {context} referenced missing char shape id {char_shape_id}; hwp-convert used fallback text style."
                     ));
                 }
-                None
+                (TextStyle::default(), Vec::new())
             }
         }
     }
@@ -2498,7 +2495,6 @@ impl<'a> BridgeContext<'a> {
 
     fn lookup_font_family(&mut self, char_shape: &RhwpCharShape, context: &str) -> Option<String> {
         let mut selected = None;
-        let mut distinct_names = Vec::new();
 
         for (language_index, font_id) in char_shape.font_ids.iter().enumerate() {
             let Some(group) = self.source.doc_info.font_faces.get(language_index) else {
@@ -2517,21 +2513,11 @@ impl<'a> BridgeContext<'a> {
                 }
                 continue;
             };
-            if let Some(name) = non_empty_string(&font.name) {
-                if selected.is_none() {
-                    selected = Some(name.clone());
-                }
-                if !distinct_names.contains(&name) {
-                    distinct_names.push(name);
-                }
+            if let Some(name) = non_empty_string(&font.name)
+                && selected.is_none()
+            {
+                selected = Some(name);
             }
-        }
-
-        if distinct_names.len() > 1 {
-            self.add_warning_once(&format!(
-                "rhwp {context} used multiple script-specific font families ({}); TextStyle preserved only the first available family.",
-                distinct_names.join(", ")
-            ));
         }
 
         selected
@@ -3137,24 +3123,6 @@ fn percent_values_have_invalid_i8(
     values
         .iter()
         .any(|value| *value != 0 && !valid_range.contains(value))
-}
-
-fn percent_values_are_nonuniform_u8(
-    values: &[u8; 7],
-    valid_range: std::ops::RangeInclusive<u8>,
-) -> bool {
-    values.iter().any(|value| !matches!(*value, 0 | 100))
-        && !percent_values_have_invalid_u8(values, valid_range)
-        && values.iter().any(|value| *value != values[0])
-}
-
-fn percent_values_are_nonuniform_i8(
-    values: &[i8; 7],
-    valid_range: std::ops::RangeInclusive<i8>,
-) -> bool {
-    values.iter().any(|value| *value != 0)
-        && !percent_values_have_invalid_i8(values, valid_range)
-        && values.iter().any(|value| *value != values[0])
 }
 
 fn char_index_for_utf16_position(
@@ -5450,6 +5418,71 @@ mod tests {
 
         assert_eq!(bridged.styles.text_styles.len(), 1);
         assert_eq!(bridged.styles.paragraph_styles.len(), 1);
+    }
+
+    #[test]
+    fn preserves_named_text_style_variants_for_each_script() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                font_faces: vec![
+                    vec![Font {
+                        name: "Korean Font".to_string(),
+                        ..Default::default()
+                    }],
+                    vec![Font {
+                        name: "Latin Font".to_string(),
+                        ..Default::default()
+                    }],
+                ],
+                char_shapes: vec![RhwpCharShape {
+                    font_ids: [0; 7],
+                    ratios: [100, 80, 100, 100, 100, 100, 100],
+                    spacings: [0, 5, 0, 0, 0, 0, 0],
+                    relative_sizes: [100, 80, 100, 100, 100, 100, 100],
+                    char_offsets: [0, 10, 0, 0, 0, 0, 0],
+                    base_size: 1000,
+                    ..Default::default()
+                }],
+                styles: vec![RhwpStyle {
+                    local_name: "multiscript".to_string(),
+                    char_shape_id: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let named = &bridged.styles.text_styles[0];
+
+        assert_eq!(named.style.font_family.as_deref(), Some("Korean Font"));
+        assert_eq!(named.script_styles.len(), 7);
+        assert_eq!(named.script_styles[1].script, TextScript::Latin);
+        assert_eq!(
+            named.script_styles[1].style.font_family.as_deref(),
+            Some("Latin Font")
+        );
+        assert_eq!(
+            named.script_styles[1].style.font_width_percent,
+            Some(Percent(80.0))
+        );
+        assert_eq!(
+            named.script_styles[1].style.letter_spacing_percent,
+            Some(Percent(5.0))
+        );
+        assert_eq!(
+            named.script_styles[1].style.font_size_pt,
+            Some(LengthPt(8.0))
+        );
+        assert_eq!(
+            named.script_styles[1].style.vertical_offset_percent,
+            Some(Percent(10.0))
+        );
+        assert!(!bridged.warnings.iter().any(|warning| {
+            warning.message.contains("script-specific")
+                || warning.message.contains("multiple script-specific")
+        }));
     }
 
     #[test]

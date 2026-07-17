@@ -34,7 +34,8 @@ use serde::{Deserialize, Serialize};
 /// table placement metadata.
 /// v38: added resolved custom tab definitions to `ParagraphStyle`.
 /// v39: added structured shape geometry and object placement metadata.
-pub const IR_VERSION: u16 = 39;
+/// v40: added script-specific variants to named text styles.
+pub const IR_VERSION: u16 = 40;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -434,6 +435,26 @@ pub struct NamedTextStyle {
     pub id: TextStyleId,
     pub name: Option<String>,
     pub style: TextStyle,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub script_styles: Vec<ScriptTextStyle>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScriptTextStyle {
+    pub script: TextScript,
+    pub style: TextStyle,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TextScript {
+    Korean,
+    Latin,
+    Hanja,
+    Japanese,
+    Other,
+    Symbol,
+    User,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
