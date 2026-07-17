@@ -1691,13 +1691,9 @@ impl<'a> BridgeContext<'a> {
         }
 
         if map_picture_crop(picture).is_some() {
-            self.add_warning_once(&format!(
-                "rhwp picture crop ({}/{}/{}/{}) was preserved in Image IR; semantic image exporters currently use the uncropped source bytes.",
-                picture.crop.left,
-                picture.crop.top,
-                picture.crop.right,
-                picture.crop.bottom
-            ));
+            self.add_warning_once(
+                "rhwp picture crop was preserved in Image IR and is applied by HTML when source and display dimensions are valid; other semantic exporters use the uncropped source bytes.",
+            );
         } else if !picture_crop_is_empty(picture) {
             details.push(format!(
                 "invalid_crop={}/{}/{}/{}",
@@ -3561,8 +3557,8 @@ fn map_picture_crop(picture: &Picture) -> Option<ImageCrop> {
             top: LengthPx(crop.top as f32 / 75.0),
             right: LengthPx(crop.right as f32 / 75.0),
             bottom: LengthPx(crop.bottom as f32 / 75.0),
-            source_width: None,
-            source_height: None,
+            source_width: hwp_units_to_px_option(picture.shape_attr.original_width),
+            source_height: hwp_units_to_px_option(picture.shape_attr.original_height),
         },
     )
 }
@@ -5008,8 +5004,8 @@ mod tests {
                 top: LengthPx(2.0 / 75.0),
                 right: LengthPx(3.0 / 75.0),
                 bottom: LengthPx(4.0 / 75.0),
-                source_width: None,
-                source_height: None,
+                source_width: Some(LengthPx(400.0)),
+                source_height: Some(LengthPx(200.0)),
             })
         );
         assert!(bridged.warnings.iter().any(|warning| {
