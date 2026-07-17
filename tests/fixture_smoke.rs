@@ -765,6 +765,7 @@ fn collect_shapes_from_blocks<'a>(blocks: &'a [Block], shapes: &mut Vec<&'a Shap
         match block {
             Block::Shape(shape) => {
                 shapes.push(shape);
+                collect_shapes_from_blocks(&shape.content, shapes);
                 collect_shapes_from_blocks(&shape.children, shapes);
             }
             Block::Table(table) => {
@@ -1500,6 +1501,7 @@ impl DocumentStats {
             Block::Equation(_) => self.equations += 1,
             Block::Shape(shape) => {
                 self.shapes += 1;
+                self.count_blocks(&shape.content);
                 self.count_blocks(&shape.children);
             }
             Block::Chart(_) => self.charts += 1,

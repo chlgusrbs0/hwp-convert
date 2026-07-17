@@ -273,6 +273,7 @@ impl SemanticCoverage {
             Block::Equation(_) => self.equations += 1,
             Block::Shape(shape) => {
                 self.shapes += 1;
+                self.count_blocks(&shape.content);
                 self.count_blocks(&shape.children);
             }
             Block::Chart(_) => self.charts += 1,
@@ -464,7 +465,9 @@ fn collect_blocks_text(blocks: &[Block], chunks: &mut Vec<String>) {
                 );
             }
             Block::Shape(shape) => {
-                if shape.children.is_empty() {
+                if !shape.content.is_empty() {
+                    collect_blocks_text(&shape.content, chunks);
+                } else if shape.children.is_empty() {
                     push_text(
                         shape
                             .fallback_text

@@ -1786,6 +1786,9 @@ impl<'a> BridgeContext<'a> {
             _ => None,
         };
         let text_box = drawing.and_then(|drawing| drawing.text_box.as_ref());
+        let content = text_box
+            .map(|text_box| self.map_blocks_from_paragraphs(&text_box.paragraphs, 0))
+            .unwrap_or_default();
         self.add_warning_once(
             "rhwp shape geometry and object placement were preserved in Shape IR; semantic exporters approximate visual layout.",
         );
@@ -1795,7 +1798,8 @@ impl<'a> BridgeContext<'a> {
             ));
         }
         let description = non_empty_string(&shape.common().description);
-        let text_box_text = self.shape_text_box_text(shape);
+        let text_box_text =
+            non_empty_string(&crate::util::plain_text::blocks_to_plain_text(&content));
         let caption_text = match shape.drawing().and_then(|drawing| drawing.caption.as_ref()) {
             Some(caption) => self.caption_plain_text(Some(&caption.paragraphs)),
             None => None,
@@ -1812,7 +1816,7 @@ impl<'a> BridgeContext<'a> {
         }
         if text_box_text.is_some() {
             self.add_warning_once(
-                "rhwp exposed shape text box paragraphs; hwp-convert folded them into shape fallback text.",
+                "rhwp shape text box paragraphs were preserved as structured Shape content; semantic exporters retain the content while approximating internal layout.",
             );
         }
 
@@ -1848,6 +1852,7 @@ impl<'a> BridgeContext<'a> {
             geometry: map_shape_geometry(shape),
             placement: map_object_placement(common),
             children: Vec::new(),
+            content,
         }
     }
 
@@ -1890,13 +1895,6 @@ impl<'a> BridgeContext<'a> {
             }
             _ => vec![Block::Shape(self.map_shape(shape))],
         }
-    }
-
-    fn shape_text_box_text(&mut self, shape: &ShapeObject) -> Option<String> {
-        let text_box = shape.drawing()?.text_box.as_ref()?;
-        let blocks = self.map_blocks_from_paragraphs(&text_box.paragraphs, 0);
-        let text = crate::util::plain_text::blocks_to_plain_text(&blocks);
-        non_empty_string(&text)
     }
 
     fn ensure_image_resource(&mut self, bin_data_id: u16) -> Option<ResourceId> {
@@ -4825,6 +4823,10 @@ mod tests {
                 assert_eq!(shape.padding_right, Some(LengthPx(2.0)));
                 assert_eq!(shape.padding_bottom, Some(LengthPx(4.0)));
                 assert_eq!(shape.padding_left, Some(LengthPx(1.0)));
+                assert_eq!(
+                    crate::util::plain_text::blocks_to_plain_text(&shape.content),
+                    "shape text"
+                );
                 assert_eq!(
                     shape.background_color,
                     Some(Color {

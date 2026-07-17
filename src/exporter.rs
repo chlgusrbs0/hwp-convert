@@ -356,6 +356,7 @@ fn collect_block_unknown_warnings(blocks: &[Block], warnings: &mut Vec<String>) 
                 }
             }
             Block::Shape(shape) => {
+                collect_block_unknown_warnings(&shape.content, warnings);
                 collect_block_unknown_warnings(&shape.children, warnings);
             }
             Block::Unknown(unknown) => {
@@ -1233,12 +1234,15 @@ fn render_html_shape(shape: &Shape, resources: &ResourceStore, image_asset_prefi
         declarations.push(format!("margin-top: {}px", offset_y.0));
     }
     let style = render_html_style_attr(&declarations.join("; "));
-    if shape.children.is_empty() {
-        let content = render_html_fallback_text(&shape_display_text(shape));
-        format!("<p><span class=\"shape-placeholder\"{style}>{content}</span></p>\n")
-    } else {
+    if !shape.children.is_empty() {
         let content = render_html_blocks(&shape.children, resources, image_asset_prefix);
         format!("<div class=\"shape-group\"{style}>\n{content}</div>\n")
+    } else if !shape.content.is_empty() {
+        let content = render_html_blocks(&shape.content, resources, image_asset_prefix);
+        format!("<div class=\"shape-placeholder shape-content\"{style}>\n{content}</div>\n")
+    } else {
+        let content = render_html_fallback_text(&shape_display_text(shape));
+        format!("<p><span class=\"shape-placeholder\"{style}>{content}</span></p>\n")
     }
 }
 
@@ -2486,12 +2490,16 @@ fn render_markdown_shape(
     resources: &ResourceStore,
     image_asset_prefix: &str,
 ) -> String {
-    if shape.children.is_empty() {
+    let nested_blocks = if !shape.content.is_empty() {
+        &shape.content
+    } else {
+        &shape.children
+    };
+    if nested_blocks.is_empty() {
         return render_markdown_text(&shape_display_text(shape));
     }
 
-    shape
-        .children
+    nested_blocks
         .iter()
         .map(|block| render_markdown_block(block, resources, image_asset_prefix))
         .filter(|block| !block.is_empty())
@@ -4662,10 +4670,15 @@ mod tests {
                 corners: Vec::new(),
                 round_rate_percent: 25,
             }),
+            content: vec![Block::Paragraph(Paragraph::from_plain_text(
+                "inside shape".to_string(),
+            ))],
             ..Default::default()
         })]);
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
+        let markdown = render_markdown_document(&document);
+        let text = plain_text::to_plain_text(&document);
 
         assert!(html.contains("background-color: #445566"));
         assert!(html.contains("border: 2px dotted #112233"));
@@ -4678,6 +4691,10 @@ mod tests {
         assert!(html.contains("padding-left: 4px"));
         assert!(html.contains("justify-content: center"));
         assert!(html.contains("border-radius: 25%"));
+        assert!(html.contains("class=\"shape-placeholder shape-content\""));
+        assert!(html.contains("inside shape"));
+        assert!(markdown.contains("inside shape"));
+        assert_eq!(text, "inside shape");
     }
 
     #[test]

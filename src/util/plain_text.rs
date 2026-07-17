@@ -145,9 +145,13 @@ pub(crate) fn equation_to_plain_text(equation: &Equation) -> String {
 }
 
 pub(crate) fn shape_to_plain_text(shape: &Shape) -> String {
-    if !shape.children.is_empty() {
-        return shape
-            .children
+    let nested_blocks = if !shape.content.is_empty() {
+        &shape.content
+    } else {
+        &shape.children
+    };
+    if !nested_blocks.is_empty() {
+        return nested_blocks
             .iter()
             .map(block_to_plain_text)
             .filter(|text| !text.is_empty())
