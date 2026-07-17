@@ -44,8 +44,9 @@ use crate::ir::{
     HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
     ImageEffect as IrImageEffect, ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt,
     LengthPx, Link, ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
-    NoteKind, NoteStore, ObjectPlacement, Paragraph, ParagraphRole, ParagraphStyle,
-    ParagraphStyleId, Percent, Resource, ResourceId, ResourceStore, ScriptTextStyle, Section,
+    NoteKind, NoteLayout, NoteStore, ObjectPlacement, PageBinding, PageBorderFillLayout,
+    PageLayout, Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent,
+    RawSectionRecord, Resource, ResourceId, ResourceStore, ScriptTextStyle, Section, SectionLayout,
     Shape, ShapeGeometry, ShapeKind, ShapePoint, Spacing, StyleSheet, TabAlignment, TabDefinition,
     TabStop, Table, TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle,
     TextDecorationStyle, TextRun, TextScript, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
@@ -209,10 +210,21 @@ impl<'a> BridgeContext<'a> {
             self.collect_section_header_footers(paragraph, &mut headers, &mut footers);
         }
 
+        let layout_source = section
+            .paragraphs
+            .iter()
+            .flat_map(|paragraph| &paragraph.controls)
+            .find_map(|control| match control {
+                Control::SectionDef(section_def) => Some(section_def.as_ref()),
+                _ => None,
+            })
+            .unwrap_or(&section.section_def);
+
         Section {
             blocks,
             headers,
             footers,
+            layout: Some(map_section_layout(layout_source)),
         }
     }
 
@@ -1196,10 +1208,7 @@ impl<'a> BridgeContext<'a> {
     fn map_control_blocks(&mut self, control: &Control) -> Vec<Block> {
         match control {
             Control::SectionDef(section_def) => {
-                self.warn_unsupported_layout_control(
-                    "section_def",
-                    section_def_fallback_text(section_def),
-                );
+                self.warn_unmodeled_section_details(section_def);
                 Vec::new()
             }
             Control::ColumnDef(column_def) => {
@@ -1335,6 +1344,16 @@ impl<'a> BridgeContext<'a> {
         self.add_warning_once(&format!(
             "rhwp exposed layout control `{kind}`; hwp-convert does not yet model it in Document IR. Preserved summary: {summary}"
         ));
+    }
+
+    fn warn_unmodeled_section_details(&mut self, section_def: &RhwpSectionDef) {
+        let details = section_unmodeled_detail_names(section_def);
+        if !details.is_empty() {
+            self.add_warning_once(&format!(
+                "rhwp section page layout was preserved in Section IR, but these section details remain unmodeled: {}.",
+                details.join(", ")
+            ));
+        }
     }
 
     fn warn_unsupported_control(&mut self, kind: &str) -> Option<Block> {
@@ -3481,55 +3500,104 @@ fn fallback_char_value(value: char) -> String {
     }
 }
 
-fn section_def_fallback_text(section_def: &RhwpSectionDef) -> String {
-    let hidden = section_def_hidden_flags(section_def);
-    let hidden = if hidden.is_empty() {
-        "none".to_string()
-    } else {
-        hidden.join(",")
-    };
-
-    format!(
-        "page_num={}, page_num_type={}, picture_num={}, table_num={}, equation_num={}, outline_numbering_id={}, text_direction={}, page_size={}x{}, landscape={}, margins={}/{}/{}/{}, hidden={}",
-        section_def.page_num,
-        section_def.page_num_type,
-        section_def.picture_num,
-        section_def.table_num,
-        section_def.equation_num,
-        section_def.outline_numbering_id,
-        section_def.text_direction,
-        section_def.page_def.width,
-        section_def.page_def.height,
-        section_def.page_def.landscape,
-        section_def.page_def.margin_left,
-        section_def.page_def.margin_right,
-        section_def.page_def.margin_top,
-        section_def.page_def.margin_bottom,
-        hidden
-    )
+fn map_section_layout(section_def: &RhwpSectionDef) -> SectionLayout {
+    let page = &section_def.page_def;
+    SectionLayout {
+        raw_flags: section_def.flags,
+        column_spacing: LengthPx(f32::from(section_def.column_spacing) / 75.0),
+        default_tab_spacing: LengthPx(section_def.default_tab_spacing as f32 / 75.0),
+        page_number_start: section_def.page_num,
+        page_number_type: section_def.page_num_type,
+        picture_number_start: section_def.picture_num,
+        table_number_start: section_def.table_num,
+        equation_number_start: section_def.equation_num,
+        outline_numbering_id: section_def.outline_numbering_id,
+        text_direction: section_def.text_direction,
+        hide_header: section_def.hide_header,
+        hide_footer: section_def.hide_footer,
+        hide_master_page: section_def.hide_master_page,
+        hide_border: section_def.hide_border,
+        hide_fill: section_def.hide_fill,
+        hide_empty_line: section_def.hide_empty_line,
+        page: PageLayout {
+            width: LengthPx(page.width as f32 / 75.0),
+            height: LengthPx(page.height as f32 / 75.0),
+            margin_left: LengthPx(page.margin_left as f32 / 75.0),
+            margin_right: LengthPx(page.margin_right as f32 / 75.0),
+            margin_top: LengthPx(page.margin_top as f32 / 75.0),
+            margin_bottom: LengthPx(page.margin_bottom as f32 / 75.0),
+            margin_header: LengthPx(page.margin_header as f32 / 75.0),
+            margin_footer: LengthPx(page.margin_footer as f32 / 75.0),
+            margin_gutter: LengthPx(page.margin_gutter as f32 / 75.0),
+            raw_attributes: page.attr,
+            landscape: page.landscape,
+            binding: match page.binding {
+                rhwp::model::page::BindingMethod::SingleSided => PageBinding::SingleSided,
+                rhwp::model::page::BindingMethod::DuplexSided => PageBinding::DuplexSided,
+                rhwp::model::page::BindingMethod::TopFlip => PageBinding::TopFlip,
+            },
+        },
+        footnote: map_note_layout(&section_def.footnote_shape),
+        endnote: map_note_layout(&section_def.endnote_shape),
+        page_border_fills: std::iter::once(&section_def.page_border_fill)
+            .chain(&section_def.extra_page_border_fills)
+            .map(map_page_border_fill_layout)
+            .collect(),
+        raw_control_extension: section_def.raw_ctrl_extra.clone(),
+        extra_records: section_def
+            .extra_child_records
+            .iter()
+            .map(|record| RawSectionRecord {
+                tag_id: record.tag_id,
+                level: record.level,
+                data: record.data.clone(),
+            })
+            .collect(),
+    }
 }
 
-fn section_def_hidden_flags(section_def: &RhwpSectionDef) -> Vec<&'static str> {
-    let mut flags = Vec::new();
-    if section_def.hide_header {
-        flags.push("header");
+fn map_note_layout(shape: &rhwp::model::footnote::FootnoteShape) -> NoteLayout {
+    NoteLayout {
+        raw_attributes: shape.attr,
+        number_format: format!("{:?}", shape.number_format),
+        user_character: non_control_character(shape.user_char),
+        prefix_character: non_control_character(shape.prefix_char),
+        suffix_character: non_control_character(shape.suffix_char),
+        start_number: shape.start_number,
+        separator_length: LengthPx(f32::from(shape.separator_length) / 75.0),
+        separator_margin_top: LengthPx(f32::from(shape.separator_margin_top) / 75.0),
+        separator_margin_bottom: LengthPx(f32::from(shape.separator_margin_bottom) / 75.0),
+        note_spacing: LengthPx(f32::from(shape.note_spacing) / 75.0),
+        separator_line_type: shape.separator_line_type,
+        separator_line_width: shape.separator_line_width,
+        separator_color_raw: shape.separator_color,
+        numbering: format!("{:?}", shape.numbering),
+        placement: format!("{:?}", shape.placement),
+        raw_unknown: shape.raw_unknown,
     }
-    if section_def.hide_footer {
-        flags.push("footer");
+}
+
+fn non_control_character(value: char) -> Option<char> {
+    (value != '\0' && !value.is_control()).then_some(value)
+}
+
+fn map_page_border_fill_layout(fill: &rhwp::model::page::PageBorderFill) -> PageBorderFillLayout {
+    PageBorderFillLayout {
+        raw_attributes: fill.attr,
+        spacing_left: LengthPx(f32::from(fill.spacing_left) / 75.0),
+        spacing_right: LengthPx(f32::from(fill.spacing_right) / 75.0),
+        spacing_top: LengthPx(f32::from(fill.spacing_top) / 75.0),
+        spacing_bottom: LengthPx(f32::from(fill.spacing_bottom) / 75.0),
+        border_fill_id: fill.border_fill_id,
     }
-    if section_def.hide_master_page {
-        flags.push("master_page");
+}
+
+fn section_unmodeled_detail_names(section_def: &RhwpSectionDef) -> Vec<&'static str> {
+    let mut details = Vec::new();
+    if !section_def.master_pages.is_empty() {
+        details.push("master pages");
     }
-    if section_def.hide_border {
-        flags.push("border");
-    }
-    if section_def.hide_fill {
-        flags.push("fill");
-    }
-    if section_def.hide_empty_line {
-        flags.push("empty_line");
-    }
-    flags
+    details
 }
 
 fn column_def_fallback_text(column_def: &RhwpColumnDef) -> String {
@@ -6747,7 +6815,7 @@ mod tests {
     }
 
     #[test]
-    fn warns_for_layout_controls_without_visible_fallback_blocks() {
+    fn preserves_section_layout_and_warns_for_unmodeled_columns() {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
@@ -6759,6 +6827,24 @@ mod tests {
                             table_num: 4,
                             outline_numbering_id: 2,
                             hide_header: true,
+                            footnote_shape: rhwp::model::footnote::FootnoteShape {
+                                prefix_char: '[',
+                                suffix_char: ']',
+                                start_number: 5,
+                                separator_length: 750,
+                                ..Default::default()
+                            },
+                            page_border_fill: rhwp::model::page::PageBorderFill {
+                                spacing_left: 75,
+                                border_fill_id: 3,
+                                ..Default::default()
+                            },
+                            raw_ctrl_extra: vec![1, 2, 3],
+                            extra_child_records: vec![rhwp::model::document::RawRecord {
+                                tag_id: 99,
+                                level: 2,
+                                data: vec![4, 5, 6],
+                            }],
                             page_def: rhwp::model::page::PageDef {
                                 width: 59528,
                                 height: 84188,
@@ -6801,11 +6887,36 @@ mod tests {
 
         assert_eq!(blocks.len(), 1);
         assert!(matches!(&blocks[0], Block::Paragraph(_)));
-        assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("layout control `section_def`")
-                && warning.message.contains("page_num=3")
-                && warning.message.contains("hidden=header")
-        }));
+        let layout = bridged.sections[0]
+            .layout
+            .as_ref()
+            .expect("section layout should be preserved");
+        assert_eq!(layout.page_number_start, 3);
+        assert_eq!(layout.page_number_type, 1);
+        assert_eq!(layout.table_number_start, 4);
+        assert_eq!(layout.outline_numbering_id, 2);
+        assert!(layout.hide_header);
+        assert_eq!(layout.page.width, LengthPx(59528.0 / 75.0));
+        assert_eq!(layout.page.height, LengthPx(84188.0 / 75.0));
+        assert_eq!(layout.page.margin_left, LengthPx(100.0 / 75.0));
+        assert_eq!(layout.page.margin_bottom, LengthPx(400.0 / 75.0));
+        assert_eq!(layout.footnote.prefix_character, Some('['));
+        assert_eq!(layout.footnote.start_number, 5);
+        assert_eq!(layout.footnote.separator_length, LengthPx(10.0));
+        assert_eq!(layout.page_border_fills[0].border_fill_id, 3);
+        assert_eq!(layout.page_border_fills[0].spacing_left, LengthPx(1.0));
+        assert_eq!(layout.raw_control_extension, vec![1, 2, 3]);
+        assert_eq!(layout.extra_records[0].tag_id, 99);
+        assert_eq!(layout.extra_records[0].data, vec![4, 5, 6]);
+        let layout_json = serde_json::to_string(layout).expect("layout should serialize");
+        assert!(layout_json.contains(r#""raw_control_extension":"AQID""#));
+        assert!(layout_json.contains(r#""data":"BAUG""#));
+        assert!(
+            !bridged
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("layout control `section_def`"))
+        );
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("layout control `column_def`")
                 && warning.message.contains("column_count=2")

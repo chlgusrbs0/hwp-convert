@@ -518,6 +518,7 @@ mod tests {
                         list: None,
                     })],
                 }],
+                layout: None,
             }],
             notes: crate::ir::NoteStore {
                 notes: vec![Note {

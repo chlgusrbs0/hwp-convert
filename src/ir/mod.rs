@@ -35,7 +35,8 @@ use serde::{Deserialize, Serialize};
 /// v38: added resolved custom tab definitions to `ParagraphStyle`.
 /// v39: added structured shape geometry and object placement metadata.
 /// v40: added script-specific variants to named text styles.
-pub const IR_VERSION: u16 = 40;
+/// v41: added structured section and page layout metadata.
+pub const IR_VERSION: u16 = 41;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -149,6 +150,98 @@ pub struct Section {
     pub headers: Vec<HeaderFooter>,
     #[serde(default)]
     pub footers: Vec<HeaderFooter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<SectionLayout>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SectionLayout {
+    pub raw_flags: u32,
+    pub column_spacing: LengthPx,
+    pub default_tab_spacing: LengthPx,
+    pub page_number_start: u16,
+    pub page_number_type: u8,
+    pub picture_number_start: u16,
+    pub table_number_start: u16,
+    pub equation_number_start: u16,
+    pub outline_numbering_id: u16,
+    pub text_direction: u8,
+    pub hide_header: bool,
+    pub hide_footer: bool,
+    pub hide_master_page: bool,
+    pub hide_border: bool,
+    pub hide_fill: bool,
+    pub hide_empty_line: bool,
+    pub page: PageLayout,
+    pub footnote: NoteLayout,
+    pub endnote: NoteLayout,
+    pub page_border_fills: Vec<PageBorderFillLayout>,
+    #[serde(default, with = "base64_bytes", skip_serializing_if = "Vec::is_empty")]
+    pub raw_control_extension: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_records: Vec<RawSectionRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PageLayout {
+    pub width: LengthPx,
+    pub height: LengthPx,
+    pub margin_left: LengthPx,
+    pub margin_right: LengthPx,
+    pub margin_top: LengthPx,
+    pub margin_bottom: LengthPx,
+    pub margin_header: LengthPx,
+    pub margin_footer: LengthPx,
+    pub margin_gutter: LengthPx,
+    pub raw_attributes: u32,
+    pub landscape: bool,
+    pub binding: PageBinding,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PageBinding {
+    SingleSided,
+    DuplexSided,
+    TopFlip,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NoteLayout {
+    pub raw_attributes: u32,
+    pub number_format: String,
+    pub user_character: Option<char>,
+    pub prefix_character: Option<char>,
+    pub suffix_character: Option<char>,
+    pub start_number: u16,
+    pub separator_length: LengthPx,
+    pub separator_margin_top: LengthPx,
+    pub separator_margin_bottom: LengthPx,
+    pub note_spacing: LengthPx,
+    pub separator_line_type: u8,
+    pub separator_line_width: u8,
+    pub separator_color_raw: u32,
+    pub numbering: String,
+    pub placement: String,
+    pub raw_unknown: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PageBorderFillLayout {
+    pub raw_attributes: u32,
+    pub spacing_left: LengthPx,
+    pub spacing_right: LengthPx,
+    pub spacing_top: LengthPx,
+    pub spacing_bottom: LengthPx,
+    pub border_fill_id: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RawSectionRecord {
+    pub tag_id: u16,
+    pub level: u16,
+    #[serde(with = "base64_bytes")]
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

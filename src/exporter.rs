@@ -4839,6 +4839,7 @@ mod tests {
                         list: None,
                     })],
                 }],
+                layout: None,
             }],
             resources: ResourceStore::default(),
             styles: StyleSheet::default(),

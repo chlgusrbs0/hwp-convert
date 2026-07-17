@@ -2262,6 +2262,7 @@ fn extract_section_xml_section(xml: &str, context: &mut HwpxFallbackContext) -> 
         blocks,
         headers,
         footers,
+        layout: None,
     }
 }
 
