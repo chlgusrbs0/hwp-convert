@@ -1708,38 +1708,10 @@ impl<'a> BridgeContext<'a> {
                 picture.shape_attr.render_b, picture.shape_attr.render_c
             ));
         }
-        let has_unmodeled_layout = !picture.common.treat_as_char
-            || picture.common.horizontal_offset != 0
-            || picture.common.vertical_offset != 0
-            || picture.common.z_order != 0
-            || picture.common.prevent_page_break != 0
-            || picture.common.margin.left != 0
-            || picture.common.margin.right != 0
-            || picture.common.margin.top != 0
-            || picture.common.margin.bottom != 0
-            || picture.common.text_wrap != rhwp::model::shape::TextWrap::Square
-            || picture.common.vert_rel_to != rhwp::model::shape::VertRelTo::Paper
-            || picture.common.horz_rel_to != rhwp::model::shape::HorzRelTo::Paper
-            || picture.common.vert_align != rhwp::model::shape::VertAlign::Top
-            || picture.common.horz_align != rhwp::model::shape::HorzAlign::Left;
-        if has_unmodeled_layout {
-            self.add_warning_once(&format!(
-                "rhwp picture layout (treat_as_char:{},wrap:{:?},vertical:{:?}/{:?}/{},horizontal:{:?}/{:?}/{},z_order:{},margin:{}/{}/{}/{},prevent_page_break:{}) was preserved in Image IR; semantic exporters currently linearize the image without floating placement.",
-                picture.common.treat_as_char,
-                picture.common.text_wrap,
-                picture.common.vert_rel_to,
-                picture.common.vert_align,
-                picture.common.vertical_offset,
-                picture.common.horz_rel_to,
-                picture.common.horz_align,
-                picture.common.horizontal_offset,
-                picture.common.z_order,
-                picture.common.margin.left,
-                picture.common.margin.right,
-                picture.common.margin.top,
-                picture.common.margin.bottom,
-                picture.common.prevent_page_break
-            ));
+        if map_picture_placement(picture).is_some() {
+            self.add_warning_once(
+                "rhwp picture placement was preserved in Image IR; semantic exporters currently linearize images without floating page placement.",
+            );
         }
         // GrayScale is modeled directly. BlackWhite is retained as a visible
         // grayscale approximation with the warning above.
@@ -5017,13 +4989,9 @@ mod tests {
                 && warning.message.contains("preserved in Image IR")
         }));
         assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("picture layout")
+            warning.message.contains("picture placement")
                 && warning.message.contains("preserved in Image IR")
-                && warning.message.contains("vertical:Page/Center/120")
-                && warning.message.contains("horizontal:Column/Right/240")
-                && warning.message.contains("z_order:5")
-                && warning.message.contains("margin:10/20/30/40")
-                && warning.message.contains("prevent_page_break:1")
+                && warning.message.contains("linearize images")
         }));
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("picture visual properties")
