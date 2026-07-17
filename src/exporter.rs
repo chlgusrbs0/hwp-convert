@@ -12,8 +12,8 @@ use crate::ir::{
     Alignment, Block, Border, BorderStyle, Chart, Color, Document, Equation, EquationKind,
     HeaderFooter, HeaderFooterPlacement, Image, Inline, Link, ListInfo, ListKind, Note, NoteId,
     NoteKind, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore,
-    Section, Shape, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextDecorationStyle,
-    TextRun, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
+    Section, Shape, ShapeGeometry, Table, TableCell, TableCellStyle, TableRow, TableStyle,
+    TextDecorationStyle, TextRun, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -1160,6 +1160,20 @@ fn render_html_shape(shape: &Shape) -> String {
     }
     if let Some(border) = &shape.border {
         declarations.push(format!("border: {}", render_css_border(border)));
+    }
+    match &shape.geometry {
+        Some(ShapeGeometry::Rectangle {
+            round_rate_percent, ..
+        }) if *round_rate_percent > 0 => {
+            declarations.push(format!(
+                "border-radius: {}%",
+                (*round_rate_percent).min(100)
+            ));
+        }
+        Some(ShapeGeometry::Ellipse { .. }) => {
+            declarations.push("border-radius: 50%".to_string());
+        }
+        _ => {}
     }
     if let Some(transform) = render_css_transform(
         shape.rotation_degrees,
@@ -4269,6 +4283,10 @@ mod tests {
             padding_right: Some(LengthPx(2.0)),
             padding_bottom: Some(LengthPx(3.0)),
             padding_left: Some(LengthPx(4.0)),
+            geometry: Some(ShapeGeometry::Rectangle {
+                corners: Vec::new(),
+                round_rate_percent: 25,
+            }),
             ..Default::default()
         })]);
 
@@ -4284,6 +4302,7 @@ mod tests {
         assert!(html.contains("padding-bottom: 3px"));
         assert!(html.contains("padding-left: 4px"));
         assert!(html.contains("justify-content: center"));
+        assert!(html.contains("border-radius: 25%"));
     }
 
     #[test]

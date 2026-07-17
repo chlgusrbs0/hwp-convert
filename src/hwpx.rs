@@ -3156,6 +3156,8 @@ fn extract_hwpx_shape_from_xml(
             &["pos"],
             HWPX_PICTURE_VERTICAL_OFFSET_ATTRIBUTES,
         ),
+        geometry: None,
+        placement: None,
     }
 }
 

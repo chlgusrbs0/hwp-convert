@@ -45,10 +45,11 @@ use crate::ir::{
     ImageEffect as IrImageEffect, ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt,
     LengthPx, Link, ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
     NoteKind, NoteStore, ObjectPlacement, Paragraph, ParagraphRole, ParagraphStyle,
-    ParagraphStyleId, Percent, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind,
-    Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle,
-    TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle, TextStyleId,
-    UnknownInline, VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    ParagraphStyleId, Percent, Resource, ResourceId, ResourceStore, Section, Shape, ShapeGeometry,
+    ShapeKind, ShapePoint, Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table,
+    TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun,
+    TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
+    VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1782,13 +1783,14 @@ impl<'a> BridgeContext<'a> {
         let border = drawing.and_then(|drawing| map_shape_border_line(&drawing.border_line));
         let background_color = drawing.and_then(map_shape_background_color);
         let text_box = drawing.and_then(|drawing| drawing.text_box.as_ref());
-        let drawing_details = drawing
-            .map(shape_unmodeled_presentation_details)
-            .unwrap_or_else(|| "drawing details unavailable".to_string());
-        self.add_warning_once(&format!(
-            "rhwp shape {kind:?} remains a semantic placeholder; hwp-convert preserved kind/text, basic size/offset, simple border, and solid fill when available (z_order={}, {drawing_details}).",
-            common.z_order
-        ));
+        self.add_warning_once(
+            "rhwp shape geometry and object placement were preserved in Shape IR; semantic exporters approximate visual layout.",
+        );
+        if let Some(drawing_details) = drawing.and_then(shape_unmodeled_presentation_details) {
+            self.add_warning_once(&format!(
+                "rhwp shape contains presentation details that remain unmodeled: {drawing_details}."
+            ));
+        }
         let description = non_empty_string(&shape.common().description);
         let text_box_text = self.shape_text_box_text(shape);
         let caption_text = match shape.drawing().and_then(|drawing| drawing.caption.as_ref()) {
@@ -1839,6 +1841,8 @@ impl<'a> BridgeContext<'a> {
             height: hwp_units_to_px_option(common.height),
             offset_x: hwp_units_to_px_option(common.horizontal_offset),
             offset_y: hwp_units_to_px_option(common.vertical_offset),
+            geometry: map_shape_geometry(shape),
+            placement: map_object_placement(common),
         }
     }
 
@@ -3181,6 +3185,55 @@ fn hwp_units_to_px_option(value: u32) -> Option<LengthPx> {
     }
 }
 
+fn map_shape_point(point: rhwp::model::Point) -> ShapePoint {
+    ShapePoint {
+        x: LengthPx(point.x as f32 / 75.0),
+        y: LengthPx(point.y as f32 / 75.0),
+    }
+}
+
+fn map_shape_geometry(shape: &ShapeObject) -> Option<ShapeGeometry> {
+    Some(match shape {
+        ShapeObject::Line(line) => ShapeGeometry::Line {
+            start: map_shape_point(line.start),
+            end: map_shape_point(line.end),
+        },
+        ShapeObject::Rectangle(rectangle) => ShapeGeometry::Rectangle {
+            corners: rectangle
+                .x_coords
+                .into_iter()
+                .zip(rectangle.y_coords)
+                .map(|(x, y)| map_shape_point(rhwp::model::Point { x, y }))
+                .collect(),
+            round_rate_percent: rectangle.round_rate,
+        },
+        ShapeObject::Ellipse(ellipse) => ShapeGeometry::Ellipse {
+            center: map_shape_point(ellipse.center),
+            axis1: map_shape_point(ellipse.axis1),
+            axis2: map_shape_point(ellipse.axis2),
+        },
+        ShapeObject::Arc(arc) => ShapeGeometry::Arc {
+            arc_type: arc.arc_type,
+            center: map_shape_point(arc.center),
+            axis1: map_shape_point(arc.axis1),
+            axis2: map_shape_point(arc.axis2),
+        },
+        ShapeObject::Polygon(polygon) => ShapeGeometry::Polygon {
+            points: polygon
+                .points
+                .iter()
+                .copied()
+                .map(map_shape_point)
+                .collect(),
+        },
+        ShapeObject::Curve(curve) => ShapeGeometry::Curve {
+            points: curve.points.iter().copied().map(map_shape_point).collect(),
+            segment_types: curve.segment_types.clone(),
+        },
+        ShapeObject::Group(_) | ShapeObject::Picture(_) => return None,
+    })
+}
+
 fn i16_hwp_units_to_px_option(value: i16) -> Option<LengthPx> {
     if value <= 0 {
         None
@@ -3266,7 +3319,9 @@ fn map_shape_background_color(drawing: &rhwp::model::shape::DrawingObjAttr) -> O
         .flatten()
 }
 
-fn shape_unmodeled_presentation_details(drawing: &rhwp::model::shape::DrawingObjAttr) -> String {
+fn shape_unmodeled_presentation_details(
+    drawing: &rhwp::model::shape::DrawingObjAttr,
+) -> Option<String> {
     let mut details = Vec::new();
     let line_type = (drawing.border_line.attr & 0x3f) as u8;
     if line_type != 0 && !picture_border_line_type_is_modeled(line_type) {
@@ -3285,11 +3340,7 @@ fn shape_unmodeled_presentation_details(drawing: &rhwp::model::shape::DrawingObj
     if drawing.shadow_type != 0 {
         details.push(format!("shadow_type={}", drawing.shadow_type));
     }
-    if details.is_empty() {
-        "no additional drawing effects".to_string()
-    } else {
-        format!("unmodeled {}", details.join(", "))
-    }
+    (!details.is_empty()).then(|| details.join(", "))
 }
 
 fn picture_border_line_type_is_modeled(line_type: u8) -> bool {
@@ -4400,6 +4451,8 @@ mod tests {
                 height: 1800,
                 horizontal_offset: 300,
                 vertical_offset: 400,
+                z_order: 7,
+                treat_as_char: true,
                 ..Default::default()
             },
             drawing: RhwpDrawingObjAttr {
@@ -4437,7 +4490,9 @@ mod tests {
                 }),
                 ..Default::default()
             },
-            ..Default::default()
+            round_rate: 20,
+            x_coords: [0, 3600, 3600, 0],
+            y_coords: [0, 0, 1800, 1800],
         });
         let document = RhwpDocument {
             sections: vec![RhwpSection {
@@ -4461,6 +4516,31 @@ mod tests {
                 assert_eq!(shape.height, Some(LengthPx(24.0)));
                 assert_eq!(shape.offset_x, Some(LengthPx(4.0)));
                 assert_eq!(shape.offset_y, Some(LengthPx(400.0 / 75.0)));
+                assert_eq!(shape.placement.map(|placement| placement.z_order), Some(7));
+                assert_eq!(
+                    shape.geometry,
+                    Some(ShapeGeometry::Rectangle {
+                        corners: vec![
+                            ShapePoint {
+                                x: LengthPx(0.0),
+                                y: LengthPx(0.0),
+                            },
+                            ShapePoint {
+                                x: LengthPx(48.0),
+                                y: LengthPx(0.0),
+                            },
+                            ShapePoint {
+                                x: LengthPx(48.0),
+                                y: LengthPx(24.0),
+                            },
+                            ShapePoint {
+                                x: LengthPx(0.0),
+                                y: LengthPx(24.0),
+                            },
+                        ],
+                        round_rate_percent: 20,
+                    })
+                );
                 assert_eq!(shape.rotation_degrees, Some(90.0));
                 assert_eq!(shape.flip_horizontal, Some(true));
                 assert_eq!(shape.flip_vertical, Some(true));
@@ -4501,8 +4581,9 @@ mod tests {
                 .any(|warning| { warning.message.contains("shape text box paragraphs") })
         );
         assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("shape Rectangle remains")
-                && warning.message.contains("semantic placeholder")
+            warning
+                .message
+                .contains("shape geometry and object placement were preserved")
         }));
     }
 

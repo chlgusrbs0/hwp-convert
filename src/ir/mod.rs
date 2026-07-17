@@ -33,7 +33,8 @@ use serde::{Deserialize, Serialize};
 /// v37: generalized image placement as `ObjectPlacement` and added optional
 /// table placement metadata.
 /// v38: added resolved custom tab definitions to `ParagraphStyle`.
-pub const IR_VERSION: u16 = 38;
+/// v39: added structured shape geometry and object placement metadata.
+pub const IR_VERSION: u16 = 39;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -915,6 +916,47 @@ pub struct Shape {
     pub offset_x: Option<LengthPx>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset_y: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<ShapeGeometry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<ObjectPlacement>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ShapeGeometry {
+    Line {
+        start: ShapePoint,
+        end: ShapePoint,
+    },
+    Rectangle {
+        corners: Vec<ShapePoint>,
+        round_rate_percent: u8,
+    },
+    Ellipse {
+        center: ShapePoint,
+        axis1: ShapePoint,
+        axis2: ShapePoint,
+    },
+    Arc {
+        arc_type: u8,
+        center: ShapePoint,
+        axis1: ShapePoint,
+        axis2: ShapePoint,
+    },
+    Polygon {
+        points: Vec<ShapePoint>,
+    },
+    Curve {
+        points: Vec<ShapePoint>,
+        segment_types: Vec<u8>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ShapePoint {
+    pub x: LengthPx,
+    pub y: LengthPx,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -1361,6 +1403,27 @@ mod tests {
             padding_right: Some(LengthPx(2.0)),
             padding_bottom: Some(LengthPx(3.0)),
             padding_left: Some(LengthPx(4.0)),
+            geometry: Some(ShapeGeometry::Rectangle {
+                corners: vec![
+                    ShapePoint {
+                        x: LengthPx(0.0),
+                        y: LengthPx(0.0),
+                    },
+                    ShapePoint {
+                        x: LengthPx(48.0),
+                        y: LengthPx(0.0),
+                    },
+                    ShapePoint {
+                        x: LengthPx(48.0),
+                        y: LengthPx(24.0),
+                    },
+                    ShapePoint {
+                        x: LengthPx(0.0),
+                        y: LengthPx(24.0),
+                    },
+                ],
+                round_rate_percent: 15,
+            }),
             ..Default::default()
         };
 
