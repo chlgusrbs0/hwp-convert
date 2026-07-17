@@ -2724,6 +2724,7 @@ fn extract_table_cell_from_xml(
         blocks,
         style: TableCellStyle {
             background_color,
+            fill: None,
             vertical_align,
             width: hwpx_table_cell_hwp_units_to_px_with_warning(
                 cell_xml,

@@ -29,8 +29,9 @@ use rhwp::model::shape::{
 use rhwp::model::style::{
     Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, BorderLine as RhwpBorderLine,
     BorderLineType as RhwpBorderLineType, CharShape as RhwpCharShape, FillType as RhwpFillType,
-    HeadType as RhwpHeadType, Numbering as RhwpNumbering, ParaShape as RhwpParaShape,
-    ShapeBorderLine as RhwpShapeBorderLine, UnderlineType as RhwpUnderlineType,
+    HeadType as RhwpHeadType, ImageFillMode as RhwpImageFillMode, Numbering as RhwpNumbering,
+    ParaShape as RhwpParaShape, ShapeBorderLine as RhwpShapeBorderLine,
+    UnderlineType as RhwpUnderlineType,
 };
 use rhwp::model::table::{
     Cell as RhwpCell, Table as RhwpTable, VerticalAlign as RhwpVerticalAlign,
@@ -41,17 +42,18 @@ use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
     BinaryResource, BinaryResourceKind, Block, Border, BorderStyle, CaptionPlacement, Color,
     ColumnDirection as IrColumnDirection, ColumnLayout, ColumnLayoutKind, ConversionWarning,
-    Document, DocumentControl, DocumentField, Equation, EquationKind, FieldKind, HeaderFooter,
-    HeaderFooterPlacement, HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
-    ImageEffect as IrImageEffect, ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt,
-    LengthPx, Link, ListInfo, ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
-    NoteKind, NoteLayout, NoteStore, NumberingKind, ObjectPlacement, PageBinding,
-    PageBorderFillLayout, PageLayout, Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId,
-    Percent, RawSectionRecord, Resource, ResourceId, ResourceStore, ScriptTextStyle, Section,
-    SectionLayout, Shape, ShapeGeometry, ShapeKind, ShapePoint, Spacing, StyleSheet, TabAlignment,
-    TabDefinition, TabStop, Table, TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle,
-    TextDecorationStyle, TextRun, TextScript, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
-    VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    Document, DocumentControl, DocumentField, Equation, EquationKind, FieldKind, FillStyle,
+    GradientColor, HeaderFooter, HeaderFooterPlacement, HorizontalObjectAlignment,
+    HorizontalRelativeTo, Image, ImageCrop, ImageEffect as IrImageEffect, ImageFillMode,
+    ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt, LengthPx, Link, ListInfo,
+    ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
+    NumberingKind, ObjectPlacement, PageBinding, PageBorderFillLayout, PageLayout, Paragraph,
+    ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, RawSectionRecord, Resource,
+    ResourceId, ResourceStore, ScriptTextStyle, Section, SectionLayout, Shape, ShapeGeometry,
+    ShapeKind, ShapePoint, Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table,
+    TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle, TextDecorationStyle, TextRun,
+    TextScript, TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
+    VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1535,14 +1537,22 @@ impl<'a> BridgeContext<'a> {
             },
         );
 
+        let fill = self.border_fill_style(cell.border_fill_id, "table cell background");
+        let background_color = match &fill {
+            Some(FillStyle::Solid {
+                background_color, ..
+            }) => *background_color,
+            _ => None,
+        };
+
         TableCell {
             row_span: (cell.row_span as u32).max(1),
             col_span: (cell.col_span as u32).max(1),
             is_header: cell.is_header,
             blocks,
             style: TableCellStyle {
-                background_color: self
-                    .border_fill_background_color(cell.border_fill_id, "table cell background"),
+                background_color,
+                fill,
                 vertical_align: map_vertical_align(cell.vertical_align),
                 width: hwp_units_to_px_option(cell.width),
                 height: hwp_units_to_px_option(cell.height),
@@ -2544,6 +2554,101 @@ impl<'a> BridgeContext<'a> {
         }
     }
 
+    fn border_fill_style(&mut self, border_fill_id: u16, context: &str) -> Option<FillStyle> {
+        let border_fill = match self.lookup_border_fill(border_fill_id).cloned() {
+            Some(border_fill) => border_fill,
+            None => {
+                if border_fill_id != 0 {
+                    self.warn_missing_border_fill(border_fill_id, context);
+                }
+                return None;
+            }
+        };
+
+        match border_fill.fill.fill_type {
+            RhwpFillType::None => None,
+            RhwpFillType::Solid => match border_fill.fill.solid.as_ref() {
+                Some(solid) => {
+                    if solid.pattern_type > 0 {
+                        self.add_warning_once(&format!(
+                            "rhwp {context} used solid fill pattern type {}; hwp-convert preserved the pattern metadata and approximated it with the background color in HTML.",
+                            solid.pattern_type
+                        ));
+                    }
+                    Some(FillStyle::Solid {
+                        background_color: color_ref_to_color_option(solid.background_color),
+                        background_color_raw: solid.background_color,
+                        pattern_color: color_ref_to_color_option(solid.pattern_color),
+                        pattern_color_raw: solid.pattern_color,
+                        pattern_type: solid.pattern_type,
+                        alpha: border_fill.fill.alpha,
+                    })
+                }
+                None => {
+                    self.add_warning_once(&format!(
+                        "rhwp {context} declared a solid fill without solid fill data; hwp-convert could not preserve the background fill."
+                    ));
+                    None
+                }
+            },
+            RhwpFillType::Gradient => match border_fill.fill.gradient.as_ref() {
+                Some(gradient) => {
+                    self.warn_semantic_table_fill_approximation();
+                    Some(FillStyle::Gradient {
+                        gradient_type: gradient.gradient_type,
+                        angle: gradient.angle,
+                        center_x: gradient.center_x,
+                        center_y: gradient.center_y,
+                        blur: gradient.blur,
+                        colors: gradient
+                            .colors
+                            .iter()
+                            .map(|raw| GradientColor {
+                                color: color_ref_to_color_option(*raw),
+                                raw: *raw,
+                            })
+                            .collect(),
+                        positions: gradient.positions.clone(),
+                        alpha: border_fill.fill.alpha,
+                    })
+                }
+                None => {
+                    self.add_warning_once(&format!(
+                        "rhwp {context} declared a gradient fill without gradient data; hwp-convert could not preserve the background fill."
+                    ));
+                    None
+                }
+            },
+            RhwpFillType::Image => match border_fill.fill.image.as_ref() {
+                Some(image) => {
+                    let resource_id = self.ensure_image_resource(image.bin_data_id);
+                    self.warn_semantic_table_fill_approximation();
+                    Some(FillStyle::Image {
+                        mode: map_image_fill_mode(image.fill_mode),
+                        brightness: image.brightness,
+                        contrast: image.contrast,
+                        effect: image.effect,
+                        source_bin_data_id: image.bin_data_id,
+                        resource_id,
+                        alpha: border_fill.fill.alpha,
+                    })
+                }
+                None => {
+                    self.add_warning_once(&format!(
+                        "rhwp {context} declared an image fill without image fill data; hwp-convert could not preserve the background fill."
+                    ));
+                    None
+                }
+            },
+        }
+    }
+
+    fn warn_semantic_table_fill_approximation(&mut self) {
+        self.add_warning_once(
+            "rhwp table cell gradient and image fills were preserved in structured IR; HTML approximates their visual appearance while other semantic exporters retain them only in JSON.",
+        );
+    }
+
     fn warn_unmodeled_border_fill(&mut self, border_fill: &RhwpBorderFill, context: &str) {
         match border_fill.fill.fill_type {
             RhwpFillType::None => {}
@@ -3360,6 +3465,27 @@ fn decoration_shape_is_approximated(shape: u8) -> bool {
     matches!(shape, 3..=6 | 8..=10 | 12..=u8::MAX)
 }
 
+fn map_image_fill_mode(mode: RhwpImageFillMode) -> ImageFillMode {
+    match mode {
+        RhwpImageFillMode::TileAll => ImageFillMode::TileAll,
+        RhwpImageFillMode::TileHorzTop => ImageFillMode::TileHorizontalTop,
+        RhwpImageFillMode::TileHorzBottom => ImageFillMode::TileHorizontalBottom,
+        RhwpImageFillMode::TileVertLeft => ImageFillMode::TileVerticalLeft,
+        RhwpImageFillMode::TileVertRight => ImageFillMode::TileVerticalRight,
+        RhwpImageFillMode::FitToSize => ImageFillMode::FitToSize,
+        RhwpImageFillMode::Center => ImageFillMode::Center,
+        RhwpImageFillMode::CenterTop => ImageFillMode::CenterTop,
+        RhwpImageFillMode::CenterBottom => ImageFillMode::CenterBottom,
+        RhwpImageFillMode::LeftCenter => ImageFillMode::LeftCenter,
+        RhwpImageFillMode::LeftTop => ImageFillMode::LeftTop,
+        RhwpImageFillMode::LeftBottom => ImageFillMode::LeftBottom,
+        RhwpImageFillMode::RightCenter => ImageFillMode::RightCenter,
+        RhwpImageFillMode::RightTop => ImageFillMode::RightTop,
+        RhwpImageFillMode::RightBottom => ImageFillMode::RightBottom,
+        RhwpImageFillMode::None => ImageFillMode::None,
+    }
+}
+
 fn border_fill_background_color(border_fill: &RhwpBorderFill) -> Option<Color> {
     if border_fill.fill.fill_type != RhwpFillType::Solid {
         return None;
@@ -3946,8 +4072,8 @@ mod tests {
     };
     use rhwp::model::style::{
         Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, Bullet as RhwpBullet,
-        CharShape as RhwpCharShape, Fill, FillType, Font, HeadType as RhwpHeadType,
-        ParaShape as RhwpParaShape, ShapeBorderLine as RhwpShapeBorderLine, SolidFill,
+        CharShape as RhwpCharShape, Fill, FillType, Font, GradientFill, HeadType as RhwpHeadType,
+        ImageFill, ParaShape as RhwpParaShape, ShapeBorderLine as RhwpShapeBorderLine, SolidFill,
         Style as RhwpStyle, UnderlineType as RhwpUnderlineType,
     };
     use rhwp::model::table::{
@@ -6316,7 +6442,7 @@ mod tests {
     }
 
     #[test]
-    fn warns_when_table_background_fill_is_approximated_or_omitted() {
+    fn preserves_table_cell_gradient_fill_and_reports_semantic_approximation() {
         let document = RhwpDocument {
             doc_info: DocInfo {
                 border_fills: vec![
@@ -6336,30 +6462,77 @@ mod tests {
                     RhwpBorderFill {
                         fill: Fill {
                             fill_type: FillType::Gradient,
+                            gradient: Some(GradientFill {
+                                gradient_type: 1,
+                                angle: 45,
+                                center_x: 20,
+                                center_y: 80,
+                                blur: 3,
+                                colors: vec![0x000000FF, 0x00FF0000],
+                                positions: vec![0, 100],
+                            }),
+                            alpha: 192,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    RhwpBorderFill {
+                        fill: Fill {
+                            fill_type: FillType::Image,
+                            image: Some(ImageFill {
+                                fill_mode: RhwpImageFillMode::TileHorzBottom,
+                                brightness: 5,
+                                contrast: -3,
+                                effect: 2,
+                                bin_data_id: 1,
+                            }),
+                            alpha: 200,
                             ..Default::default()
                         },
                         ..Default::default()
                     },
                 ],
+                bin_data_list: vec![BinData {
+                    attr: 0x0101,
+                    data_type: BinDataType::Embedding,
+                    compression: BinDataCompression::Default,
+                    status: BinDataStatus::Success,
+                    storage_id: 7,
+                    extension: Some("png".to_string()),
+                    ..Default::default()
+                }],
                 ..Default::default()
             },
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
                     controls: vec![Control::Table(Box::new(RhwpTable {
                         row_count: 1,
-                        col_count: 1,
+                        col_count: 2,
                         border_fill_id: 1,
-                        cells: vec![RhwpCell {
-                            row: 0,
-                            col: 0,
-                            border_fill_id: 2,
-                            ..Default::default()
-                        }],
+                        cells: vec![
+                            RhwpCell {
+                                row: 0,
+                                col: 0,
+                                border_fill_id: 2,
+                                ..Default::default()
+                            },
+                            RhwpCell {
+                                row: 0,
+                                col: 1,
+                                border_fill_id: 3,
+                                ..Default::default()
+                            },
+                        ],
                         ..Default::default()
                     }))],
                     ..Default::default()
                 }],
                 ..Default::default()
+            }],
+            bin_data_content: vec![BinDataContent {
+                id: 7,
+                data: vec![137, 80, 78, 71],
+                extension: "png".to_string(),
             }],
             ..Default::default()
         };
@@ -6377,7 +6550,52 @@ mod tests {
                         a: 255,
                     })
                 );
-                assert_eq!(table.rows[0].cells[0].style.background_color, None);
+                let cell_style = &table.rows[0].cells[0].style;
+                assert_eq!(cell_style.background_color, None);
+                assert_eq!(
+                    cell_style.fill,
+                    Some(FillStyle::Gradient {
+                        gradient_type: 1,
+                        angle: 45,
+                        center_x: 20,
+                        center_y: 80,
+                        blur: 3,
+                        colors: vec![
+                            GradientColor {
+                                color: Some(Color {
+                                    r: 255,
+                                    g: 0,
+                                    b: 0,
+                                    a: 255,
+                                }),
+                                raw: 0x000000FF,
+                            },
+                            GradientColor {
+                                color: Some(Color {
+                                    r: 0,
+                                    g: 0,
+                                    b: 255,
+                                    a: 255,
+                                }),
+                                raw: 0x00FF0000,
+                            },
+                        ],
+                        positions: vec![0, 100],
+                        alpha: 192,
+                    })
+                );
+                assert_eq!(
+                    table.rows[0].cells[1].style.fill,
+                    Some(FillStyle::Image {
+                        mode: ImageFillMode::TileHorizontalBottom,
+                        brightness: 5,
+                        contrast: -3,
+                        effect: 2,
+                        source_bin_data_id: 1,
+                        resource_id: Some(ResourceId("image-1".to_string())),
+                        alpha: 200,
+                    })
+                );
             }
             other => panic!("expected table block, got {other:?}"),
         }
@@ -6392,8 +6610,15 @@ mod tests {
                 .any(|warning| warning.message.contains("fill opacity 128"))
         );
         assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("gradient fill") && warning.message.contains("omitted")
+            warning.message.contains("gradient and image fills")
+                && warning.message.contains("structured IR")
         }));
+        assert!(
+            !bridged
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("omitted the background fill"))
+        );
     }
 
     #[test]

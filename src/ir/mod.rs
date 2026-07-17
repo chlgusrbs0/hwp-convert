@@ -39,7 +39,8 @@ use serde::{Deserialize, Serialize};
 /// v42: added ordered column layout change blocks.
 /// v43: added structured page and numbering control blocks.
 /// v44: added structured document field inlines.
-pub const IR_VERSION: u16 = 44;
+/// v45: added structured table cell fill styles.
+pub const IR_VERSION: u16 = 45;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1284,6 +1285,7 @@ pub enum TablePageBreak {
 #[serde(default)]
 pub struct TableCellStyle {
     pub background_color: Option<Color>,
+    pub fill: Option<FillStyle>,
     pub vertical_align: Option<VerticalAlign>,
     pub width: Option<LengthPx>,
     pub height: Option<LengthPx>,
@@ -1295,6 +1297,65 @@ pub struct TableCellStyle {
     pub border_right: Option<Border>,
     pub border_bottom: Option<Border>,
     pub border_left: Option<Border>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FillStyle {
+    Solid {
+        background_color: Option<Color>,
+        background_color_raw: u32,
+        pattern_color: Option<Color>,
+        pattern_color_raw: u32,
+        pattern_type: i32,
+        alpha: u8,
+    },
+    Gradient {
+        gradient_type: i16,
+        angle: i16,
+        center_x: i16,
+        center_y: i16,
+        blur: i16,
+        colors: Vec<GradientColor>,
+        positions: Vec<i32>,
+        alpha: u8,
+    },
+    Image {
+        mode: ImageFillMode,
+        brightness: i8,
+        contrast: i8,
+        effect: u8,
+        source_bin_data_id: u16,
+        resource_id: Option<ResourceId>,
+        alpha: u8,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GradientColor {
+    pub color: Option<Color>,
+    pub raw: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageFillMode {
+    TileAll,
+    TileHorizontalTop,
+    TileHorizontalBottom,
+    TileVerticalLeft,
+    TileVerticalRight,
+    FitToSize,
+    Center,
+    CenterTop,
+    CenterBottom,
+    LeftCenter,
+    LeftTop,
+    LeftBottom,
+    RightCenter,
+    RightTop,
+    RightBottom,
+    None,
 }
 
 /// A single border edge: used by table cells (per side) and images (uniform).

@@ -10,10 +10,11 @@ use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
 use crate::ir::{
     Alignment, Block, Border, BorderStyle, Chart, Color, Document, Equation, EquationKind,
-    HeaderFooter, HeaderFooterPlacement, Image, Inline, Link, ListInfo, ListKind, Note, NoteId,
-    NoteKind, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore,
-    Section, Shape, ShapeGeometry, Table, TableCell, TableCellStyle, TableRow, TableStyle,
-    TextDecorationStyle, TextRun, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
+    FillStyle, HeaderFooter, HeaderFooterPlacement, Image, ImageFillMode, Inline, Link, ListInfo,
+    ListKind, Note, NoteId, NoteKind, Paragraph, ParagraphRole, ParagraphStyle, Resource,
+    ResourceId, ResourceStore, Section, Shape, ShapeGeometry, Table, TableCell, TableCellStyle,
+    TableRow, TableStyle, TextDecorationStyle, TextRun, TextStyle, UnknownBlock, UnknownInline,
+    VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -1481,10 +1482,16 @@ fn render_html_table_style(style: &TableStyle) -> String {
     declarations.join("; ")
 }
 
-fn render_html_table_cell_style(style: &TableCellStyle) -> String {
+fn render_html_table_cell_style(
+    style: &TableCellStyle,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let mut declarations = Vec::new();
 
-    if let Some(background_color) = style.background_color {
+    if let Some(fill) = &style.fill {
+        declarations.extend(render_html_fill_style(fill, resources, image_asset_prefix));
+    } else if let Some(background_color) = style.background_color {
         declarations.push(format!(
             "background-color: {}",
             render_css_color(background_color)
@@ -1524,6 +1531,123 @@ fn render_html_table_cell_style(style: &TableCellStyle) -> String {
     }
 
     declarations.join("; ")
+}
+
+fn render_html_fill_style(
+    fill: &FillStyle,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> Vec<String> {
+    match fill {
+        FillStyle::Solid {
+            background_color,
+            alpha,
+            ..
+        } => background_color
+            .map(|color| {
+                format!(
+                    "background-color: {}",
+                    render_css_color(apply_fill_alpha(color, *alpha))
+                )
+            })
+            .into_iter()
+            .collect(),
+        FillStyle::Gradient {
+            gradient_type,
+            angle,
+            center_x,
+            center_y,
+            colors,
+            positions,
+            alpha,
+            ..
+        } => {
+            let color_stops = colors
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| {
+                    let color = apply_fill_alpha(entry.color?, *alpha);
+                    let position = positions
+                        .get(index)
+                        .filter(|position| (0..=100).contains(*position))
+                        .map(|position| format!(" {position}%"))
+                        .unwrap_or_default();
+                    Some(format!("{}{position}", render_css_color(color)))
+                })
+                .collect::<Vec<_>>();
+            if color_stops.len() < 2 {
+                return Vec::new();
+            }
+
+            let stops = color_stops.join(", ");
+            let background = match gradient_type {
+                2 | 4 => format!(
+                    "radial-gradient(at {}% {}%, {stops})",
+                    center_x.clamp(&0, &100),
+                    center_y.clamp(&0, &100)
+                ),
+                3 => format!(
+                    "conic-gradient(from {angle}deg at {}% {}%, {stops})",
+                    center_x.clamp(&0, &100),
+                    center_y.clamp(&0, &100)
+                ),
+                _ => format!("linear-gradient({angle}deg, {stops})"),
+            };
+            vec![format!("background-image: {background}")]
+        }
+        FillStyle::Image {
+            mode, resource_id, ..
+        } => {
+            let Some(resource_id) = resource_id else {
+                return Vec::new();
+            };
+            let path = resource_public_path(resources, resource_id, image_asset_prefix);
+            let mut declarations = vec![format!(
+                "background-image: url('{}')",
+                escape_css_url(&path)
+            )];
+            let (repeat, position, size) = image_fill_css(*mode);
+            declarations.push(format!("background-repeat: {repeat}"));
+            declarations.push(format!("background-position: {position}"));
+            if let Some(size) = size {
+                declarations.push(format!("background-size: {size}"));
+            }
+            declarations
+        }
+    }
+}
+
+fn apply_fill_alpha(mut color: Color, alpha: u8) -> Color {
+    let alpha = if alpha == 0 { 255 } else { alpha };
+    color.a = ((u16::from(color.a) * u16::from(alpha)) / 255) as u8;
+    color
+}
+
+fn image_fill_css(mode: ImageFillMode) -> (&'static str, &'static str, Option<&'static str>) {
+    match mode {
+        ImageFillMode::TileAll => ("repeat", "left top", None),
+        ImageFillMode::TileHorizontalTop => ("repeat-x", "left top", None),
+        ImageFillMode::TileHorizontalBottom => ("repeat-x", "left bottom", None),
+        ImageFillMode::TileVerticalLeft => ("repeat-y", "left top", None),
+        ImageFillMode::TileVerticalRight => ("repeat-y", "right top", None),
+        ImageFillMode::FitToSize => ("no-repeat", "center", Some("100% 100%")),
+        ImageFillMode::Center => ("no-repeat", "center", None),
+        ImageFillMode::CenterTop => ("no-repeat", "center top", None),
+        ImageFillMode::CenterBottom => ("no-repeat", "center bottom", None),
+        ImageFillMode::LeftCenter => ("no-repeat", "left center", None),
+        ImageFillMode::LeftTop => ("no-repeat", "left top", None),
+        ImageFillMode::LeftBottom => ("no-repeat", "left bottom", None),
+        ImageFillMode::RightCenter => ("no-repeat", "right center", None),
+        ImageFillMode::RightTop => ("no-repeat", "right top", None),
+        ImageFillMode::RightBottom => ("no-repeat", "right bottom", None),
+        ImageFillMode::None => ("no-repeat", "left top", None),
+    }
+}
+
+fn escape_css_url(path: &str) -> String {
+    path.replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace(['\r', '\n'], "")
 }
 
 fn render_css_border(border: &Border) -> String {
@@ -1940,7 +2064,11 @@ fn render_html_table_cell(
         String::new()
     };
     let content = render_html_table_cell_blocks(&cell.blocks, resources, image_asset_prefix);
-    let style = render_html_style_attr(&render_html_table_cell_style(&cell.style));
+    let style = render_html_style_attr(&render_html_table_cell_style(
+        &cell.style,
+        resources,
+        image_asset_prefix,
+    ));
     let tag = if cell.is_header { "th" } else { "td" };
 
     format!("<{tag}{rowspan}{colspan}{style}>{content}</{tag}>\n")
@@ -4234,6 +4362,94 @@ mod tests {
         assert!(html.contains("border-collapse: separate"));
         assert!(html.contains("border-spacing: 3px"));
         assert!(!html.contains("<td"));
+    }
+
+    #[test]
+    fn renders_table_cell_gradient_and_image_fills() {
+        let image_id = ResourceId("fill.png".to_string());
+        let mut document = document_with_blocks(vec![Block::Table(Table {
+            rows: vec![TableRow {
+                cells: vec![
+                    TableCell {
+                        blocks: vec![Block::Paragraph(Paragraph::from_plain_text(
+                            "gradient".to_string(),
+                        ))],
+                        style: TableCellStyle {
+                            fill: Some(FillStyle::Gradient {
+                                gradient_type: 1,
+                                angle: 45,
+                                center_x: 50,
+                                center_y: 50,
+                                blur: 0,
+                                colors: vec![
+                                    crate::ir::GradientColor {
+                                        color: Some(Color {
+                                            r: 255,
+                                            g: 0,
+                                            b: 0,
+                                            a: 255,
+                                        }),
+                                        raw: 0x000000FF,
+                                    },
+                                    crate::ir::GradientColor {
+                                        color: Some(Color {
+                                            r: 0,
+                                            g: 0,
+                                            b: 255,
+                                            a: 255,
+                                        }),
+                                        raw: 0x00FF0000,
+                                    },
+                                ],
+                                positions: vec![0, 100],
+                                alpha: 128,
+                            }),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    TableCell {
+                        blocks: vec![Block::Paragraph(Paragraph::from_plain_text(
+                            "image".to_string(),
+                        ))],
+                        style: TableCellStyle {
+                            fill: Some(FillStyle::Image {
+                                mode: ImageFillMode::TileHorizontalBottom,
+                                brightness: 0,
+                                contrast: 0,
+                                effect: 0,
+                                source_bin_data_id: 1,
+                                resource_id: Some(image_id.clone()),
+                                alpha: 255,
+                            }),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                ],
+                height: None,
+            }],
+            ..Default::default()
+        })]);
+        document
+            .resources
+            .entries
+            .push(Resource::Image(ImageResource {
+                id: image_id,
+                media_type: Some("image/png".to_string()),
+                extension: Some("png".to_string()),
+                bytes: vec![137, 80, 78, 71],
+            }));
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+
+        assert!(html.contains("linear-gradient(45deg"));
+        assert!(html.contains("rgba(255, 0, 0"));
+        assert!(html.contains(" 0%"));
+        assert!(html.contains(" 100%"));
+        assert!(html.contains("background-image: url(&apos;sample_assets/images/fill.png&apos;)"));
+        assert!(html.contains("background-repeat: repeat-x"));
+        assert!(html.contains("background-position: left bottom"));
     }
 
     #[test]
