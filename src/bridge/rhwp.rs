@@ -1716,17 +1716,21 @@ impl<'a> BridgeContext<'a> {
 
     fn map_picture_block(&mut self, picture: &Picture) -> Block {
         self.warn_unsupported_picture_transform(picture);
-        let caption_placement = picture
-            .caption
-            .as_ref()
-            .map(|caption| map_caption_placement(caption.direction));
-        let caption_layout = picture
-            .caption
-            .as_ref()
-            .map(|caption| self.map_caption_layout(caption, "image"));
-        if caption_layout.is_some() {
+        let caption_content = picture.caption.as_ref().map(|caption| ObjectCaption {
+            blocks: self.map_caption_blocks(caption),
+            placement: map_caption_placement(caption.direction),
+            layout: Some(self.map_caption_layout(caption, "image")),
+        });
+        let caption = caption_content.as_ref().and_then(|caption| {
+            non_empty_string(&crate::util::plain_text::blocks_to_plain_text(
+                &caption.blocks,
+            ))
+        });
+        let caption_placement = caption_content.as_ref().map(|caption| caption.placement);
+        let caption_layout = caption_content.as_ref().and_then(|caption| caption.layout);
+        if caption_content.is_some() {
             self.add_warning_once(
-                "rHWP image caption layout was preserved in Document IR; HTML approximates it while other semantic exporters retain caption text without layout.",
+                "rHWP image caption structure and layout were preserved in Document IR; HTML approximates the layout while other semantic exporters preserve caption content and order without page layout.",
             );
         }
 
@@ -1734,9 +1738,8 @@ impl<'a> BridgeContext<'a> {
             Some(resource_id) => Block::Image(Image {
                 resource_id,
                 alt: non_empty_string(&picture.common.description),
-                caption: self.caption_plain_text(
-                    picture.caption.as_ref().map(|caption| &caption.paragraphs),
-                ),
+                caption,
+                caption_content,
                 caption_placement,
                 caption_layout,
                 crop: map_picture_crop(picture),
@@ -3021,14 +3024,6 @@ impl<'a> BridgeContext<'a> {
             .doc_info
             .border_fills
             .get(border_fill_id as usize)
-    }
-
-    fn caption_plain_text(&mut self, paragraphs: Option<&Vec<RhwpParagraph>>) -> Option<String> {
-        let paragraphs = paragraphs?;
-        let blocks = self.map_blocks_from_paragraphs(paragraphs, 0);
-        let text = crate::util::plain_text::blocks_to_plain_text(&blocks);
-
-        non_empty_string(&text)
     }
 
     fn map_caption_layout(&mut self, caption: &RhwpCaption, object_kind: &str) -> CaptionLayout {
@@ -5661,6 +5656,20 @@ mod tests {
         match &bridged.sections[0].blocks[0] {
             Block::Image(image) => {
                 assert_eq!(image.caption.as_deref(), Some("caption field"));
+                let caption = image
+                    .caption_content
+                    .as_ref()
+                    .expect("structured image caption");
+                assert_eq!(caption.placement, CaptionPlacement::Left);
+                assert!(matches!(
+                    &caption.blocks[0],
+                    Block::Paragraph(paragraph)
+                        if paragraph.role == ParagraphRole::Caption
+                            && matches!(
+                                paragraph.inlines.as_slice(),
+                                [Inline::Field(field)] if field.fallback_text == "caption field"
+                            )
+                ));
                 assert_eq!(image.caption_placement, Some(CaptionPlacement::Left));
                 assert_eq!(
                     image.caption_layout,

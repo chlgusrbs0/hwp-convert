@@ -44,6 +44,8 @@
 
 표의 선언 행·열 수와 HWP `HWPTAG_TABLE` 원본 속성값은 source metadata로 보존하고 HTML `data-*`로 출력한다. `row_sizes`는 공식 HWP 5.0 사양의 `HWPUNIT16 Row Size`에 따라 행 높이로 해석하며, 누락·무효일 때는 단일 행 셀 높이로 보강하고 warning을 남긴다.
 
+HWP 이미지 캡션은 호환용 평문과 함께 `ObjectCaption` 문단 블록을 보존하므로 링크·필드·스타일이 JSON에서 사라지지 않는다. HTML/Markdown/TXT/SVG는 구조화된 캡션을 우선하고 원본 앞뒤 순서를 유지한다. HWPX 폴백은 기존 평문 캡션만 유지하며 신규 구조화는 추가하지 않는다.
+
 ### 핵심 관찰
 
 1. 가장 안정적인 경로: `text -> paragraph -> simple table/list/link -> JSON/HTML/Markdown/TXT/SVG`.

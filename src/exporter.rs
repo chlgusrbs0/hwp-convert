@@ -370,6 +370,11 @@ fn collect_block_unknown_warnings(blocks: &[Block], warnings: &mut Vec<String>) 
                 collect_block_unknown_warnings(&shape.content, warnings);
                 collect_block_unknown_warnings(&shape.children, warnings);
             }
+            Block::Image(image) => {
+                if let Some(caption) = &image.caption_content {
+                    collect_block_unknown_warnings(&caption.blocks, warnings);
+                }
+            }
             Block::Unknown(unknown) => {
                 if let Some(message) = &unknown.message {
                     push_warning_once(
@@ -380,7 +385,6 @@ fn collect_block_unknown_warnings(blocks: &[Block], warnings: &mut Vec<String>) 
             }
             Block::ColumnLayout(_)
             | Block::DocumentControl(_)
-            | Block::Image(_)
             | Block::Equation(_)
             | Block::Chart(_) => {}
         }
@@ -2262,6 +2266,16 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
         format!("<img src=\"{src}\" alt=\"{alt}\"{width}{height}{style} />")
     });
 
+    if let Some(caption) = &image.caption_content {
+        return render_html_object_caption(
+            format!("{tag}\n"),
+            Some(caption),
+            "image",
+            resources,
+            image_asset_prefix,
+        );
+    }
+
     if let Some(caption) = &image.caption {
         let (figure_metadata, figure_style, caption_style) =
             render_html_caption_layout(image.caption_layout, image.caption_placement);
@@ -2901,6 +2915,14 @@ fn render_markdown_image(
     ));
 
     let mut markdown = format!("![{alt}]({path})");
+    if image.caption_content.is_some() {
+        return render_markdown_object_caption(
+            markdown,
+            image.caption_content.as_ref(),
+            resources,
+            image_asset_prefix,
+        );
+    }
     if let Some(caption) = image
         .caption
         .as_deref()
@@ -4571,14 +4593,38 @@ mod tests {
     fn renders_markdown_image_caption_from_document_ir() {
         let mut document = document_with_image_block("image-1", Some("logo"), Some("png"));
         if let Block::Image(image) = &mut document.sections[0].blocks[0] {
-            image.caption = Some("Image caption".to_string());
+            image.caption = Some("Legacy caption".to_string());
+            image.caption_content = Some(ObjectCaption {
+                blocks: vec![Block::Paragraph(Paragraph {
+                    role: ParagraphRole::Caption,
+                    inlines: vec![Inline::Link(Link {
+                        url: "https://example.com".to_string(),
+                        title: None,
+                        inlines: vec![Inline::Text(TextRun {
+                            text: "Structured caption".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        })],
+                    })],
+                    style: ParagraphStyle::default(),
+                    style_ref: None,
+                    list: None,
+                })],
+                placement: CaptionPlacement::Bottom,
+                layout: None,
+            });
         }
 
         let asset_prefix = image_asset_public_prefix(Path::new("sample.md"));
         let markdown = render_markdown_document_with_asset_prefix(&document, &asset_prefix);
 
         assert!(markdown.contains("![logo](sample_assets/images/image-1.png)"));
-        assert!(markdown.contains("Image caption"));
+        assert!(markdown.contains("[Structured caption](https://example.com)"));
+        assert!(!markdown.contains("Legacy caption"));
+        assert_eq!(
+            plain_text::to_plain_text(&document),
+            "[이미지: logo]\nStructured caption"
+        );
     }
 
     #[test]

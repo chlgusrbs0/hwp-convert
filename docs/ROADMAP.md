@@ -325,6 +325,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - HWP 표 캡션 구조 IR 확장: `IR_VERSION` 62 → 63. rHWP 공개 `Table.caption`의 문단 블록, 방향, 수직정렬, 폭, 개체와의 간격, 최대 폭, 마진 포함 여부를 표 내부의 `TableCaption`으로 보존한다. HTML은 figure/figcaption으로 근사하고 Markdown/TXT는 원본 앞뒤 순서로 캡션 내용을 선형화한다. 동결된 HWPX 폴백의 기존 인접 캡션 복구는 변경하지 않는다.
 - HWP 도형 캡션 구조 IR 확장: `IR_VERSION` 63 → 64. rHWP 공개 일반 도형과 그룹 도형의 `Caption` 문단 블록·방향·수직정렬·폭·간격·최대 폭·마진 포함 여부를 공통 `ObjectCaption`으로 보존한다. 그룹 캡션도 더 이상 도형 바깥 단락으로 분리하지 않으며 HTML은 figure/figcaption, Markdown/TXT는 원본 앞뒤 순서로 출력한다. 동결된 HWPX 폴백에는 신규 도형 캡션 구조화를 추가하지 않는다.
 - HWP 표 원본 크기 메타데이터 IR 확장: `IR_VERSION` 64 → 65. rHWP 공개 표의 선언 행·열 수와 HWP `HWPTAG_TABLE` 원본 속성값을 보존하고 HTML `data-*`로 남긴다. 한컴 HWP 5.0 revision 1.3 사양의 `HWPUNIT16 Row Size` 정의에 따라 rHWP `row_sizes`는 행 높이로 매핑하며, 값이 없거나 유효하지 않을 때만 단일 행 셀 높이의 최댓값으로 보강하고 warning을 남긴다.
+- HWP 이미지 캡션 내용 IR 확장: `IR_VERSION` 65 → 66. rHWP 공개 이미지 캡션 문단을 `ObjectCaption` 블록으로 보존해 링크·필드·스타일을 평문으로 축약하지 않는다. 기존 `Image.caption` 문자열과 배치·레이아웃 필드는 JSON/Rust 호환성을 위해 함께 유지하며 exporter는 구조화된 내용을 우선한다. 동결된 HWPX 폴백은 기존 평문 캡션 경로를 유지한다.
 - raw HWP record, unknown control bytes, HWPX XML을 직접 해석한 독자 기능 구현을 금지했다.
 - `src/hwpx.rs`는 즉시 삭제하지 않되 legacy 호환성 안전망으로 동결하고, 회귀·보안·기존 silent-drop 수정만 허용하기로 결정했다.
 - 신규 정확도 작업은 rHWP 공개 surface를 `mapped`, `normalized`, `warning/unknown`, `render-only`, `unmapped`, `upstream-needed`로 분류한 뒤 진행한다.

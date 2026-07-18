@@ -131,6 +131,11 @@ fn supplement_list_markers(primary: &mut [Block], fallback: &[Block]) -> usize {
                 recovered += supplement_list_markers(&mut shape.content, fallback);
                 recovered += supplement_list_markers(&mut shape.children, fallback);
             }
+            Block::Image(image) => {
+                if let Some(caption) = &mut image.caption_content {
+                    recovered += supplement_list_markers(&mut caption.blocks, fallback);
+                }
+            }
             _ => {}
         }
     }
@@ -171,6 +176,11 @@ fn collect_matching_list_info<'a>(
                 }
                 collect_matching_list_info(&shape.content, text, kind, level, matches);
                 collect_matching_list_info(&shape.children, text, kind, level, matches);
+            }
+            Block::Image(image) => {
+                if let Some(caption) = &image.caption_content {
+                    collect_matching_list_info(&caption.blocks, text, kind, level, matches);
+                }
             }
             _ => {}
         }
@@ -296,6 +306,9 @@ impl SemanticCoverage {
             }
             Block::Image(image) => {
                 self.images += 1;
+                if let Some(caption) = &image.caption_content {
+                    self.count_blocks(&caption.blocks);
+                }
                 self.styled_images += usize::from(
                     image.width.is_some()
                         || image.height.is_some()
@@ -513,8 +526,28 @@ fn collect_blocks_text(blocks: &[Block], chunks: &mut Vec<String>) {
                 }
             }
             Block::Image(image) => {
+                let caption_before = image.caption_content.as_ref().is_some_and(|caption| {
+                    matches!(
+                        caption.placement,
+                        crate::ir::CaptionPlacement::Left | crate::ir::CaptionPlacement::Top
+                    )
+                });
+                if caption_before {
+                    collect_blocks_text(
+                        &image
+                            .caption_content
+                            .as_ref()
+                            .expect("caption checked above")
+                            .blocks,
+                        chunks,
+                    );
+                }
                 push_text(image.alt.as_deref(), chunks);
-                push_text(image.caption.as_deref(), chunks);
+                if let Some(caption) = image.caption_content.as_ref().filter(|_| !caption_before) {
+                    collect_blocks_text(&caption.blocks, chunks);
+                } else if image.caption_content.is_none() {
+                    push_text(image.caption.as_deref(), chunks);
+                }
             }
             Block::Equation(equation) => {
                 push_text(

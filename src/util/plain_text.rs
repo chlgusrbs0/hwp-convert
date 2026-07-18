@@ -141,6 +141,9 @@ pub(crate) fn image_to_plain_text(image: &Image) -> String {
         .unwrap_or_else(|| image.resource_id.as_str());
 
     let mut text = format!("[\u{C774}\u{BBF8}\u{C9C0}: {label}]");
+    if image.caption_content.is_some() {
+        return render_captioned_plain_text(text, image.caption_content.as_ref());
+    }
     if let Some(caption) = image
         .caption
         .as_deref()

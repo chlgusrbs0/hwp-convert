@@ -780,6 +780,11 @@ fn collect_shapes_from_blocks<'a>(blocks: &'a [Block], shapes: &mut Vec<&'a Shap
                     }
                 }
             }
+            Block::Image(image) => {
+                if let Some(caption) = &image.caption_content {
+                    collect_shapes_from_blocks(&caption.blocks, shapes);
+                }
+            }
             _ => {}
         }
     }
@@ -1506,7 +1511,12 @@ impl DocumentStats {
                     }
                 }
             }
-            Block::Image(_) => self.images += 1,
+            Block::Image(image) => {
+                self.images += 1;
+                if let Some(caption) = &image.caption_content {
+                    self.count_blocks(&caption.blocks);
+                }
+            }
             Block::Equation(_) => self.equations += 1,
             Block::Shape(shape) => {
                 self.shapes += 1;

@@ -60,7 +60,8 @@ use serde::{Deserialize, Serialize};
 /// v63: added structured table caption blocks and layout metadata.
 /// v64: added structured shape caption blocks and layout metadata.
 /// v65: added source table dimensions and record attributes.
-pub const IR_VERSION: u16 = 65;
+/// v66: added structured image caption content while retaining legacy text.
+pub const IR_VERSION: u16 = 66;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1070,6 +1071,8 @@ pub struct Image {
     pub alt: Option<String>,
     pub caption: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption_content: Option<ObjectCaption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption_placement: Option<CaptionPlacement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption_layout: Option<CaptionLayout>,
@@ -1847,6 +1850,7 @@ mod tests {
         )
         .expect("older image JSON should deserialize");
 
+        assert_eq!(image.caption_content, None);
         assert_eq!(image.border, None);
         assert!(!image.grayscale);
         assert_eq!(image.effect, None);

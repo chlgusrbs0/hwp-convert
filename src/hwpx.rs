@@ -3383,6 +3383,7 @@ fn extract_hwpx_image_from_pic_xml(
             first_hwpx_direct_child_element_text(pic_xml, &["shapeComment"]),
         ]),
         caption: caption.as_ref().map(|(text, _)| text.clone()),
+        caption_content: None,
         caption_placement: caption.map(|(_, placement)| placement),
         caption_layout: None,
         crop,
