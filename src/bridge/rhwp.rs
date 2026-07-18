@@ -2500,7 +2500,7 @@ impl<'a> BridgeContext<'a> {
 
         if para_shape.border_spacing.iter().any(|spacing| *spacing < 0) {
             self.add_warning_once(&format!(
-                "rhwp paragraph border spacing {:?} contained negative HWPUNIT values; hwp-convert omitted the negative sides.",
+                "rhwp paragraph border spacing {:?} contained negative HWPUNIT values; ParagraphStyle IR preserves the values, but semantic HTML omits negative CSS padding.",
                 para_shape.border_spacing
             ));
         }
@@ -3860,7 +3860,7 @@ fn i32_hwp_units_to_pt_option(value: i32) -> Option<LengthPt> {
 }
 
 fn i16_hwp_units_to_pt_option(value: i16) -> Option<LengthPt> {
-    (value > 0).then(|| LengthPt(value as f32 / 100.0))
+    (value != 0).then(|| LengthPt(value as f32 / 100.0))
 }
 
 fn paragraph_layout_flag(para_shape: &RhwpParaShape, attr1_bit: u32, attr2_bit: u32) -> bool {
@@ -7380,7 +7380,7 @@ mod tests {
                     attr2: (1 << 6) | (1 << 8),
                     border_fill_id: 1,
                     // rhwp order: left, right, top, bottom
-                    border_spacing: [100, 200, 300, 400],
+                    border_spacing: [-100, 200, 300, 400],
                     ..Default::default()
                 }],
                 border_fills: vec![RhwpBorderFill {
@@ -7428,7 +7428,7 @@ mod tests {
                 a: 255,
             })
         );
-        assert_eq!(style.padding_left_pt, Some(LengthPt(1.0)));
+        assert_eq!(style.padding_left_pt, Some(LengthPt(-1.0)));
         assert_eq!(style.padding_right_pt, Some(LengthPt(2.0)));
         assert_eq!(style.padding_top_pt, Some(LengthPt(3.0)));
         assert_eq!(style.padding_bottom_pt, Some(LengthPt(4.0)));
@@ -7455,6 +7455,12 @@ mod tests {
         assert!(!bridged.warnings.iter().any(|warning| {
             warning.message.contains("paragraph borders")
                 || warning.message.contains("paragraph background")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("paragraph border spacing [-100, 200, 300, 400]")
+                && warning.message.contains("ParagraphStyle IR preserves")
         }));
     }
 

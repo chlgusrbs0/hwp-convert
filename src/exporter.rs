@@ -2059,7 +2059,7 @@ fn render_html_paragraph_style(
         (style.padding_bottom_pt, "padding-bottom"),
         (style.padding_left_pt, "padding-left"),
     ] {
-        if let Some(value) = value {
+        if let Some(value) = value.filter(|value| value.0 >= 0.0) {
             declarations.push(format!("{property}: {}pt", value.0));
         }
     }
@@ -6501,6 +6501,25 @@ mod tests {
         assert!(html.contains("break-after: avoid-page"));
         assert!(html.contains("break-inside: avoid"));
         assert!(html.contains("break-before: page"));
+    }
+
+    #[test]
+    fn omits_negative_paragraph_padding_css() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            inlines: vec![Inline::Text(TextRun {
+                text: "framed paragraph".to_string(),
+                ..Default::default()
+            })],
+            style: ParagraphStyle {
+                padding_left_pt: Some(LengthPt(-1.0)),
+                ..Default::default()
+            },
+            ..Default::default()
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+
+        assert!(!html.contains("padding-left: -1pt"));
     }
 
     #[test]
