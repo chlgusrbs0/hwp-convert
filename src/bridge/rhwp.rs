@@ -43,20 +43,21 @@ use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_r
 
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
-    BinaryResource, BinaryResourceKind, Block, Border, BorderFillDiagonal, BorderStyle,
-    CaptionLayout, CaptionPlacement, CharacterOverlap, Color, ColumnDirection as IrColumnDirection,
-    ColumnLayout, ColumnLayoutKind, ConversionWarning, Document, DocumentControl, DocumentField,
-    Equation, EquationKind, FieldKind, FillStyle, FontFallback, FormControlKind, GradientColor,
-    HeaderFooter, HeaderFooterPlacement, HorizontalObjectAlignment, HorizontalRelativeTo, Image,
-    ImageCrop, ImageEffect as IrImageEffect, ImageFillMode, ImagePlacement, ImageResource,
-    ImageTextWrap, Inline, LengthPt, LengthPx, LineSpacingMode, Link, ListInfo, ListKind,
-    ListMarkerLayout, MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind,
-    NoteLayout, NoteStore, NumberingKind, ObjectCaption, ObjectPlacement, PageBinding,
-    PageBorderFillLayout, PageLayout, Paragraph, ParagraphBreakKind, ParagraphRole, ParagraphStyle,
-    ParagraphStyleId, Percent, RawSectionRecord, Resource, ResourceId, ResourceStore,
-    RubyAnnotation, ScriptTextStyle, Section, SectionLayout, Shape, ShapeGeometry, ShapeKind,
-    ShapePoint, ShapeShadow, SourceStyleDefinition, SourceStyleKind, Spacing, StyleSheet,
-    TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle, TableCellTextDirection,
+    AffineTransform, BinaryResource, BinaryResourceKind, Block, Border, BorderFillDiagonal,
+    BorderStyle, CaptionLayout, CaptionPlacement, CharacterOverlap, Color,
+    ColumnDirection as IrColumnDirection, ColumnLayout, ColumnLayoutKind, ConversionWarning,
+    Document, DocumentControl, DocumentField, Equation, EquationKind, FieldKind, FillStyle,
+    FontFallback, FormControlKind, GradientColor, HeaderFooter, HeaderFooterPlacement,
+    HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
+    ImageEffect as IrImageEffect, ImageFillMode, ImagePlacement, ImageResource, ImageTextWrap,
+    Inline, LengthPt, LengthPx, LineSpacingMode, Link, ListInfo, ListKind, ListMarkerLayout,
+    MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
+    NumberingKind, ObjectCaption, ObjectPlacement, PageBinding, PageBorderFillLayout, PageLayout,
+    Paragraph, ParagraphBreakKind, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent,
+    RawSectionRecord, Resource, ResourceId, ResourceStore, RubyAnnotation, ScriptTextStyle,
+    Section, SectionLayout, Shape, ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow,
+    ShapeTransform, SourceStyleDefinition, SourceStyleKind, Spacing, StyleSheet, TabAlignment,
+    TabDefinition, TabStop, Table, TableCell, TableCellStyle, TableCellTextDirection,
     TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill, TextDecorationStyle, TextRun,
     TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
     VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
@@ -1882,6 +1883,7 @@ impl<'a> BridgeContext<'a> {
         let content = text_box
             .map(|text_box| self.map_blocks_from_paragraphs(&text_box.paragraphs, 0))
             .unwrap_or_default();
+        let transform = self.map_shape_transform(shape.shape_attr());
         self.add_warning_once(
             "rhwp shape geometry and object placement were preserved in Shape IR; semantic exporters approximate visual layout.",
         );
@@ -1956,11 +1958,71 @@ impl<'a> BridgeContext<'a> {
             offset_x: hwp_units_to_px_option(common.horizontal_offset),
             offset_y: hwp_units_to_px_option(common.vertical_offset),
             geometry: map_shape_geometry(shape),
+            transform,
             placement: map_object_placement(common),
             children: Vec::new(),
             content,
             caption,
         }
+    }
+
+    fn map_shape_transform(
+        &mut self,
+        source: &rhwp::model::shape::ShapeComponentAttr,
+    ) -> Option<ShapeTransform> {
+        let affine_values = [
+            source.render_sx,
+            source.render_b,
+            source.render_tx,
+            source.render_c,
+            source.render_sy,
+            source.render_ty,
+        ];
+        let affine = if affine_values.iter().all(|value| value.is_finite()) {
+            (source.render_sx != 1.0
+                || source.render_b != 0.0
+                || source.render_tx != 0.0
+                || source.render_c != 0.0
+                || source.render_sy != 1.0
+                || source.render_ty != 0.0)
+                .then_some(AffineTransform {
+                    scale_x: source.render_sx,
+                    shear_x: source.render_b,
+                    translate_x: LengthPx(source.render_tx as f32 / 75.0),
+                    shear_y: source.render_c,
+                    scale_y: source.render_sy,
+                    translate_y: LengthPx(source.render_ty as f32 / 75.0),
+                })
+        } else {
+            self.add_warning_once(
+                "rhwp shape affine transform contained non-finite values; hwp-convert omitted the invalid matrix while preserving other shape metadata.",
+            );
+            None
+        };
+
+        let transform = ShapeTransform {
+            original_width: hwp_units_to_px_option(source.original_width),
+            original_height: hwp_units_to_px_option(source.original_height),
+            current_width: hwp_units_to_px_option(source.current_width),
+            current_height: hwp_units_to_px_option(source.current_height),
+            group_offset_x: signed_hwp_units_to_px_option(source.offset_x),
+            group_offset_y: signed_hwp_units_to_px_option(source.offset_y),
+            rotation_center: (source.rotation_center.x != 0 || source.rotation_center.y != 0)
+                .then(|| map_shape_point(source.rotation_center)),
+            affine,
+        };
+
+        if transform.affine.is_some()
+            || transform.group_offset_x.is_some()
+            || transform.group_offset_y.is_some()
+            || transform.rotation_center.is_some()
+        {
+            self.add_warning_once(
+                "rhwp shape source sizes, group offsets, rotation center, and affine transform were preserved in ShapeTransform IR and HTML metadata; semantic exporters do not apply the full group coordinate transform.",
+            );
+        }
+
+        (!transform.is_empty()).then_some(transform)
     }
 
     fn map_shape_blocks(&mut self, shape: &ShapeObject) -> Vec<Block> {
@@ -3486,6 +3548,10 @@ fn hwp_units_to_px_option(value: u32) -> Option<LengthPx> {
     } else {
         Some(LengthPx(value as f32 / 75.0))
     }
+}
+
+fn signed_hwp_units_to_px_option(value: i32) -> Option<LengthPx> {
+    (value != 0).then(|| LengthPx(value as f32 / 75.0))
 }
 
 fn map_shape_point(point: rhwp::model::Point) -> ShapePoint {
@@ -5090,9 +5156,22 @@ mod tests {
             },
             drawing: RhwpDrawingObjAttr {
                 shape_attr: RhwpShapeComponentAttr {
+                    offset_x: 75,
+                    offset_y: -150,
+                    original_width: 3600,
+                    original_height: 1800,
+                    current_width: 7200,
+                    current_height: 900,
                     rotation_angle: 90,
+                    rotation_center: rhwp::model::Point { x: 1800, y: 900 },
                     horz_flip: true,
                     vert_flip: true,
+                    render_tx: 300.0,
+                    render_ty: 375.0,
+                    render_sx: 2.0,
+                    render_sy: 0.5,
+                    render_b: 0.25,
+                    render_c: -0.125,
                     ..Default::default()
                 },
                 border_line: RhwpShapeBorderLine {
@@ -5182,6 +5261,29 @@ mod tests {
                 assert_eq!(shape.rotation_degrees, Some(90.0));
                 assert_eq!(shape.flip_horizontal, Some(true));
                 assert_eq!(shape.flip_vertical, Some(true));
+                assert_eq!(
+                    shape.transform,
+                    Some(ShapeTransform {
+                        original_width: Some(LengthPx(48.0)),
+                        original_height: Some(LengthPx(24.0)),
+                        current_width: Some(LengthPx(96.0)),
+                        current_height: Some(LengthPx(12.0)),
+                        group_offset_x: Some(LengthPx(1.0)),
+                        group_offset_y: Some(LengthPx(-2.0)),
+                        rotation_center: Some(ShapePoint {
+                            x: LengthPx(24.0),
+                            y: LengthPx(12.0),
+                        }),
+                        affine: Some(AffineTransform {
+                            scale_x: 2.0,
+                            shear_x: 0.25,
+                            translate_x: LengthPx(4.0),
+                            shear_y: -0.125,
+                            scale_y: 0.5,
+                            translate_y: LengthPx(5.0),
+                        }),
+                    })
+                );
                 assert_eq!(shape.text_vertical_align, Some(VerticalAlign::Middle));
                 assert_eq!(shape.padding_top, Some(LengthPx(3.0)));
                 assert_eq!(shape.padding_right, Some(LengthPx(2.0)));
@@ -5260,6 +5362,11 @@ mod tests {
             warning
                 .message
                 .contains("shape shadow type, color, offsets, and transparency were preserved")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("affine transform were preserved in ShapeTransform IR")
         }));
     }
 

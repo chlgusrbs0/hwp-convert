@@ -333,6 +333,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - HWP 숨은 설명글 IR 확장: `IR_VERSION` 70 → 71. rHWP 공개 `HiddenComment.paragraphs`를 전용 block 내부에 보존해 링크·필드·스타일을 평문 fallback으로 축약하지 않는다. HTML/Markdown/TXT는 명시적인 설명글 레이블과 함께 내용을 선형화하며, 원본의 숨김 상태나 페이지 배치를 재현한다고 주장하지 않는다.
 - HWP 문단 줄 간격 모드 IR 확장: `IR_VERSION` 71 → 72. rHWP 공개 `LineSpacingType`의 백분율·고정값·글자에 따라·최소 모드를 수치와 함께 보존한다. HTML은 원본 모드를 `data-*`로 남기고, CSS가 동일 의미를 제공하지 않는 `space_only`와 `minimum`은 기존 고정 line-height 근사와 warning을 유지한다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - HWP 문단 특수 정렬 IR 확장: `IR_VERSION` 72 → 73. rHWP 공개 `Alignment::Distribute`와 `Alignment::Split`을 일반 `Justify`와 구분해 보존한다. HTML은 원본 종류를 `data-*`로 남기고 CSS `justify`로 근사하며, 동결된 HWPX 폴백의 기존 정렬 복구는 변경하지 않는다.
+- HWP 도형 원본 변환 IR 확장: `IR_VERSION` 73 → 74. rHWP 공개 `ShapeComponentAttr`의 원본·현재 크기, 그룹 내부 오프셋, 회전 중심과 합성 affine 행렬을 `ShapeTransform`에 보존한다. HTML은 정확한 후속 처리를 위한 `data-*` 메타데이터를 출력하되 전체 그룹 좌표계를 임의로 재현하지 않는다. 비정상 비유한 실수 행렬은 JSON 직렬화 실패를 막기 위해 warning 후 제외하며, 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - raw HWP record, unknown control bytes, HWPX XML을 직접 해석한 독자 기능 구현을 금지했다.
 - `src/hwpx.rs`는 즉시 삭제하지 않되 legacy 호환성 안전망으로 동결하고, 회귀·보안·기존 silent-drop 수정만 허용하기로 결정했다.
 - 신규 정확도 작업은 rHWP 공개 surface를 `mapped`, `normalized`, `warning/unknown`, `render-only`, `unmapped`, `upstream-needed`로 분류한 뒤 진행한다.

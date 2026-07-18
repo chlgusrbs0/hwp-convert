@@ -1600,16 +1600,64 @@ fn render_html_shape_element(
     if let Some(offset_y) = shape.offset_y {
         declarations.push(format!("margin-top: {}px", offset_y.0));
     }
+    let transform_metadata = render_html_shape_transform_metadata(shape);
     let style = render_html_style_attr(&declarations.join("; "));
     if !shape.children.is_empty() {
         let content = render_html_blocks(&shape.children, resources, image_asset_prefix);
-        format!("<div class=\"shape-group\"{style}>\n{content}</div>\n")
+        format!("<div class=\"shape-group\"{transform_metadata}{style}>\n{content}</div>\n")
     } else if !shape.content.is_empty() {
         let content = render_html_blocks(&shape.content, resources, image_asset_prefix);
-        format!("<div class=\"shape-placeholder shape-content\"{style}>\n{content}</div>\n")
+        format!(
+            "<div class=\"shape-placeholder shape-content\"{transform_metadata}{style}>\n{content}</div>\n"
+        )
     } else {
         let content = render_html_fallback_text(&shape_display_text(shape));
-        format!("<p><span class=\"shape-placeholder\"{style}>{content}</span></p>\n")
+        format!(
+            "<p><span class=\"shape-placeholder\"{transform_metadata}{style}>{content}</span></p>\n"
+        )
+    }
+}
+
+fn render_html_shape_transform_metadata(shape: &Shape) -> String {
+    let Some(transform) = &shape.transform else {
+        return String::new();
+    };
+    let mut attributes = Vec::new();
+    for (name, value) in [
+        ("data-original-width-px", transform.original_width),
+        ("data-original-height-px", transform.original_height),
+        ("data-current-width-px", transform.current_width),
+        ("data-current-height-px", transform.current_height),
+        ("data-group-offset-x-px", transform.group_offset_x),
+        ("data-group-offset-y-px", transform.group_offset_y),
+    ] {
+        if let Some(value) = value {
+            attributes.push(format!("{name}=\"{}\"", value.0));
+        }
+    }
+    if let Some(center) = transform.rotation_center {
+        attributes.push(format!("data-rotation-center-x-px=\"{}\"", center.x.0));
+        attributes.push(format!("data-rotation-center-y-px=\"{}\"", center.y.0));
+    }
+    if let Some(affine) = transform.affine {
+        attributes.push(format!("data-affine-scale-x=\"{}\"", affine.scale_x));
+        attributes.push(format!("data-affine-shear-x=\"{}\"", affine.shear_x));
+        attributes.push(format!(
+            "data-affine-translate-x-px=\"{}\"",
+            affine.translate_x.0
+        ));
+        attributes.push(format!("data-affine-shear-y=\"{}\"", affine.shear_y));
+        attributes.push(format!("data-affine-scale-y=\"{}\"", affine.scale_y));
+        attributes.push(format!(
+            "data-affine-translate-y-px=\"{}\"",
+            affine.translate_y.0
+        ));
+    }
+
+    if attributes.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", attributes.join(" "))
     }
 }
 
@@ -3720,15 +3768,16 @@ fn starts_with_ordered_list_marker(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::ir::{
-        Alignment, BinaryResource, BinaryResourceKind, Border, BorderFillDiagonal, BorderStyle,
-        CharacterOverlap, Chart, Color, ConversionWarning, DocumentControl, Equation, EquationKind,
-        FillStyle, FormControlKind, HeaderFooter, HeaderFooterPlacement, IR_VERSION, Image,
-        ImageCrop, ImageResource, Indent, LengthPt, LengthPx, LineSpacingMode, Link, ListInfo,
-        ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId, NoteKind, NoteStore,
-        ObjectCaption, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource, ResourceId,
-        ResourceStore, RubyAnnotation, Section, Shape, ShapeKind, Spacing, StyleSheet, Table,
-        TableCaption, TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle,
-        TextBorderFill, TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
+        AffineTransform, Alignment, BinaryResource, BinaryResourceKind, Border, BorderFillDiagonal,
+        BorderStyle, CharacterOverlap, Chart, Color, ConversionWarning, DocumentControl, Equation,
+        EquationKind, FillStyle, FormControlKind, HeaderFooter, HeaderFooterPlacement, IR_VERSION,
+        Image, ImageCrop, ImageResource, Indent, LengthPt, LengthPx, LineSpacingMode, Link,
+        ListInfo, ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId, NoteKind,
+        NoteStore, ObjectCaption, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource,
+        ResourceId, ResourceStore, RubyAnnotation, Section, Shape, ShapeKind, ShapePoint,
+        ShapeTransform, Spacing, StyleSheet, Table, TableCaption, TableCell, TableCellStyle,
+        TableCellTextDirection, TableRow, TableStyle, TextBorderFill, TextRun, TextShadow,
+        TextStyle, UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -5788,6 +5837,26 @@ mod tests {
                 corners: Vec::new(),
                 round_rate_percent: 25,
             }),
+            transform: Some(ShapeTransform {
+                original_width: Some(LengthPx(48.0)),
+                original_height: Some(LengthPx(24.0)),
+                current_width: Some(LengthPx(96.0)),
+                current_height: Some(LengthPx(12.0)),
+                group_offset_x: Some(LengthPx(1.0)),
+                group_offset_y: Some(LengthPx(-2.0)),
+                rotation_center: Some(ShapePoint {
+                    x: LengthPx(24.0),
+                    y: LengthPx(12.0),
+                }),
+                affine: Some(AffineTransform {
+                    scale_x: 2.0,
+                    shear_x: 0.25,
+                    translate_x: LengthPx(4.0),
+                    shear_y: -0.125,
+                    scale_y: 0.5,
+                    translate_y: LengthPx(5.0),
+                }),
+            }),
             content: vec![Block::Paragraph(Paragraph::from_plain_text(
                 "inside shape".to_string(),
             ))],
@@ -5823,6 +5892,11 @@ mod tests {
         assert!(html.contains("padding-left: 4px"));
         assert!(html.contains("justify-content: center"));
         assert!(html.contains("border-radius: 25%"));
+        assert!(html.contains("data-original-width-px=\"48\""));
+        assert!(html.contains("data-group-offset-y-px=\"-2\""));
+        assert!(html.contains("data-rotation-center-x-px=\"24\""));
+        assert!(html.contains("data-affine-shear-x=\"0.25\""));
+        assert!(html.contains("data-affine-translate-y-px=\"5\""));
         assert!(html.contains("class=\"shape-placeholder shape-content\""));
         assert!(html.contains("inside shape"));
         assert!(html.contains("<figure data-object-kind=\"shape\""));

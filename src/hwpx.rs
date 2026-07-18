@@ -3198,6 +3198,7 @@ fn extract_hwpx_shape_from_xml(
             HWPX_PICTURE_VERTICAL_OFFSET_ATTRIBUTES,
         ),
         geometry: None,
+        transform: None,
         placement: None,
         children: Vec::new(),
         content: Vec::new(),

@@ -68,7 +68,8 @@ use serde::{Deserialize, Serialize};
 /// v71: added structured hidden-comment blocks.
 /// v72: added paragraph line-spacing mode metadata.
 /// v73: preserved distribute and split paragraph alignments.
-pub const IR_VERSION: u16 = 73;
+/// v74: added structured shape source-transform metadata.
+pub const IR_VERSION: u16 = 74;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1443,6 +1444,8 @@ pub struct Shape {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geometry: Option<ShapeGeometry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<ShapeTransform>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<ObjectPlacement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<Block>,
@@ -1450,6 +1453,42 @@ pub struct Shape {
     pub content: Vec<Block>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption: Option<ObjectCaption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ShapeTransform {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_width: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_height: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_width: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_height: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_offset_x: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_offset_y: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_center: Option<ShapePoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affine: Option<AffineTransform>,
+}
+
+impl ShapeTransform {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct AffineTransform {
+    pub scale_x: f64,
+    pub shear_x: f64,
+    pub translate_x: LengthPx,
+    pub shear_y: f64,
+    pub scale_y: f64,
+    pub translate_y: LengthPx,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

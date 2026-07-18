@@ -65,6 +65,8 @@ HWP 문단 줄 간격은 rHWP가 공개하는 `percent`, `fixed`, `space_only`, 
 
 HWP 문단의 배분 정렬(`distribute`)과 나눔 정렬(`split`)은 일반 양쪽 정렬과 구분해 IR에 보존한다. HTML은 원본 종류를 `data-alignment`로 남기고 CSS `justify`로 근사한다.
 
+HWP 도형은 rHWP가 공개하는 원본·현재 크기, 그룹 내부 오프셋, 회전 중심과 합성 affine 행렬을 `ShapeTransform`에 보존한다. HTML은 이 값을 `data-*`로 남기지만 전체 그룹 좌표 변환은 적용하지 않으며, 정확한 시각 배치는 renderer 경로의 책임이다.
+
 ### 미지원 control warning 동작
 
 `src/bridge/rhwp.rs`는 parser가 노출하지만 아직 완전히 매핑하지 못한 known control에 대해 `ConversionWarning`을 기록한다. 현재 대상: auto number, new number, page number position, page hide, hidden comment, non-hyperlink fields. 이름 있는 bookmark는 `Anchor` inline으로 보존하고, 복구 가능한 command string이 있는 non-hyperlink field는 `UnknownInline` fallback text로 남긴다. 덧말과 글자 겹침은 전용 structured inline, 양식 개체는 structured `DocumentControl`, 숨은 설명글 문단은 structured `HiddenComment` block으로 보존한다. 복구 가능한 텍스트가 있는 그 밖의 unsupported control은 `UnknownBlock` fallback text로 남긴다.
