@@ -1524,8 +1524,13 @@ fn render_html_equation(equation: &Equation) -> String {
     if let Some(height) = equation.height {
         declarations.push(format!("height: {}px", height.0));
     }
+    let source_metadata =
+        render_html_object_source_metadata(equation.source_common_instance_id, None);
+    let size_metadata = render_html_object_size_metadata(equation.placement.as_ref());
     let style = render_html_style_attr(&declarations.join("; "));
-    format!("<p><span class=\"equation\"{style}>{content}</span></p>\n")
+    format!(
+        "<p><span class=\"equation\"{source_metadata}{size_metadata}{style}>{content}</span></p>\n"
+    )
 }
 
 fn render_html_shape(shape: &Shape, resources: &ResourceStore, image_asset_prefix: &str) -> String {
@@ -6981,6 +6986,7 @@ mod tests {
         let document = document_with_blocks(vec![
             Block::Equation(Equation {
                 kind: EquationKind::PlainText,
+                source_common_instance_id: Some(77),
                 content: Some("x + y".to_string()),
                 fallback_text: None,
                 resource_id: None,
@@ -7001,7 +7007,9 @@ mod tests {
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
-        assert!(html.contains("<span class=\"equation\">[equation: x + y]</span>"));
+        assert!(html.contains(
+            "<span class=\"equation\" data-source-common-instance-id=\"77\">[equation: x + y]</span>"
+        ));
         assert!(html.contains("<span class=\"shape-placeholder\" style=\"display: inline-block\">[shape: callout box]</span>"));
         assert!(html.contains("<span class=\"chart-placeholder\">[chart: Sales]</span>"));
     }

@@ -1845,8 +1845,17 @@ impl<'a> BridgeContext<'a> {
 
     fn map_equation(&mut self, equation: &RhwpEquation) -> Equation {
         let content = non_empty_string(&equation.script);
+        let (width, height) = self.map_object_display_size(&equation.common, "equation");
+        let placement = map_object_placement(&equation.common);
+        if placement.is_some() {
+            self.add_warning_once(
+                "rhwp equation object placement was preserved in Equation IR; semantic exporters linearize equations without floating page placement.",
+            );
+        }
         Equation {
             kind: EquationKind::PlainText,
+            source_common_instance_id: (equation.common.instance_id != 0)
+                .then_some(equation.common.instance_id),
             fallback_text: content.clone().or_else(|| Some("[equation]".to_string())),
             content,
             resource_id: None,
@@ -1857,10 +1866,12 @@ impl<'a> BridgeContext<'a> {
                 .then(|| LengthPt(equation.baseline as f32 / 100.0)),
             font_family: non_empty_string(&equation.font_name),
             version: non_empty_string(&equation.version_info),
-            width: hwp_units_to_px_option(equation.common.width),
-            height: hwp_units_to_px_option(equation.common.height),
+            width,
+            height,
             offset_x: hwp_units_to_px_option(equation.common.horizontal_offset),
             offset_y: hwp_units_to_px_option(equation.common.vertical_offset),
+            placement,
+            raw_control_data: equation.raw_ctrl_data.clone(),
         }
     }
 
@@ -5579,10 +5590,15 @@ mod tests {
     fn preserves_equation_presentation_metadata() {
         let equation = RhwpEquation {
             common: RhwpCommonObjAttr {
+                attr: 0x1234,
                 width: 7500,
                 height: 1500,
+                width_criterion: rhwp::model::shape::SizeCriterion::Paper,
                 horizontal_offset: 300,
                 vertical_offset: 400,
+                z_order: 5,
+                text_wrap: rhwp::model::shape::TextWrap::TopAndBottom,
+                instance_id: 77,
                 ..Default::default()
             },
             script: "x over y".to_string(),
@@ -5591,7 +5607,7 @@ mod tests {
             baseline: -10,
             font_name: "HancomEQN".to_string(),
             version_info: "60".to_string(),
-            ..Default::default()
+            raw_ctrl_data: vec![1, 2, 3, 4],
         };
         let document = RhwpDocument {
             sections: vec![RhwpSection {
@@ -5606,27 +5622,50 @@ mod tests {
 
         let bridged = BridgeContext::new(&document).into_document();
 
-        assert!(matches!(
-            &bridged.sections[0].blocks[0],
-            Block::Equation(equation)
-                if equation.content.as_deref() == Some("x over y")
-                    && equation.fallback_text.as_deref() == Some("x over y")
-                    && equation.font_size_pt == Some(LengthPt(12.0))
-                    && equation.color == Some(Color { r: 0x33, g: 0x22, b: 0x11, a: 255 })
-                    && equation.baseline_pt == Some(LengthPt(-0.1))
-                    && equation.font_family.as_deref() == Some("HancomEQN")
-                    && equation.version.as_deref() == Some("60")
-                    && equation.width == Some(LengthPx(100.0))
-                    && equation.height == Some(LengthPx(20.0))
-                    && equation.offset_x == Some(LengthPx(4.0))
-                    && equation.offset_y == Some(LengthPx(400.0 / 75.0))
-        ));
-        assert!(
-            !bridged
-                .warnings
-                .iter()
-                .any(|warning| warning.message.contains("equation presentation metadata"))
+        let Block::Equation(equation) = &bridged.sections[0].blocks[0] else {
+            panic!("expected equation block");
+        };
+        assert_eq!(equation.content.as_deref(), Some("x over y"));
+        assert_eq!(equation.fallback_text.as_deref(), Some("x over y"));
+        assert_eq!(equation.source_common_instance_id, Some(77));
+        assert_eq!(equation.font_size_pt, Some(LengthPt(12.0)));
+        assert_eq!(
+            equation.color,
+            Some(Color {
+                r: 0x33,
+                g: 0x22,
+                b: 0x11,
+                a: 255,
+            })
         );
+        assert_eq!(equation.baseline_pt, Some(LengthPt(-0.1)));
+        assert_eq!(equation.font_family.as_deref(), Some("HancomEQN"));
+        assert_eq!(equation.version.as_deref(), Some("60"));
+        assert_eq!(equation.width, None);
+        assert_eq!(equation.height, Some(LengthPx(20.0)));
+        assert_eq!(equation.offset_x, Some(LengthPx(4.0)));
+        assert_eq!(equation.offset_y, Some(LengthPx(400.0 / 75.0)));
+        assert_eq!(equation.raw_control_data, vec![1, 2, 3, 4]);
+        let placement = equation.placement.expect("equation placement");
+        assert_eq!(placement.source_attributes, Some(0x1234));
+        assert_eq!(placement.z_order, 5);
+        assert_eq!(placement.text_wrap, ImageTextWrap::TopAndBottom);
+        assert_eq!(placement.width_criterion, Some(ObjectSizeCriterion::Paper));
+        assert_eq!(
+            placement.height_criterion,
+            Some(ObjectSizeCriterion::Absolute)
+        );
+        assert_eq!(placement.source_width_value, Some(7500));
+        assert_eq!(placement.source_height_value, Some(1500));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("equation object placement")
+                && warning.message.contains("preserved in Equation IR")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("equation used relative size criteria")
+        }));
     }
 
     #[test]

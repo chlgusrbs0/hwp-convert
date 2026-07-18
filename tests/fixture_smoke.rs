@@ -280,8 +280,10 @@ fn assert_equation_export_artifacts(
             input.label
         ),
         OutputFormat::Json => assert!(
-            output.contains("\"plain_text\""),
-            "fixture {} should preserve equation kind in JSON",
+            output.contains("\"plain_text\"")
+                && output.contains("\"raw_control_data\"")
+                && output.contains("\"width_criterion\": \"absolute\""),
+            "fixture {} should preserve equation kind and source object metadata in JSON",
             input.label
         ),
         _ => {}
@@ -1023,6 +1025,27 @@ fn assert_equation_fixture(input: &FixtureInput, document: &Document) {
         "fixture {} should preserve equation fallback text",
         input.label
     );
+    assert_eq!(equation.width, Some(hwp_convert::ir::LengthPx(32.0)));
+    assert_eq!(equation.height, Some(hwp_convert::ir::LengthPx(16.0)));
+    assert!(
+        !equation.raw_control_data.is_empty(),
+        "fixture {} should preserve equation raw control data",
+        input.label
+    );
+    let placement = equation
+        .placement
+        .expect("equation fixture should preserve object placement");
+    assert_eq!(placement.source_attributes, Some(0x000a0000));
+    assert_eq!(
+        placement.width_criterion,
+        Some(hwp_convert::ir::ObjectSizeCriterion::Absolute)
+    );
+    assert_eq!(
+        placement.height_criterion,
+        Some(hwp_convert::ir::ObjectSizeCriterion::Absolute)
+    );
+    assert_eq!(placement.source_width_value, Some(2400));
+    assert_eq!(placement.source_height_value, Some(1200));
 }
 
 fn assert_header_footer_fixture(input: &FixtureInput, document: &Document) {

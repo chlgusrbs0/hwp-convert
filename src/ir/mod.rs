@@ -79,7 +79,8 @@ use serde::{Deserialize, Serialize};
 /// v82: added shape text-box direction and generalized its shared enum.
 /// v83: added object size criteria and raw source dimensions.
 /// v84: added raw source object attributes to placement metadata.
-pub const IR_VERSION: u16 = 84;
+/// v85: added equation source instance, object placement, and raw control data.
+pub const IR_VERSION: u16 = 85;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1427,6 +1428,8 @@ pub struct ImageCrop {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct Equation {
     pub kind: EquationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_common_instance_id: Option<u32>,
     pub content: Option<String>,
     pub fallback_text: Option<String>,
     pub resource_id: Option<ResourceId>,
@@ -1448,6 +1451,10 @@ pub struct Equation {
     pub offset_x: Option<LengthPx>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset_y: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<ObjectPlacement>,
+    #[serde(default, with = "base64_bytes", skip_serializing_if = "Vec::is_empty")]
+    pub raw_control_data: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
