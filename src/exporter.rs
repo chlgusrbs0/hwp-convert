@@ -1239,9 +1239,9 @@ fn render_html_text_run(
         .border_fill
         .as_ref()
         .map(|border_fill| {
-            format!(
-                " data-border-fill-id=\"{}\"",
-                border_fill.source_border_fill_id
+            render_html_border_fill_metadata(
+                Some(border_fill.source_border_fill_id),
+                border_fill.diagonal.as_ref(),
             )
         })
         .unwrap_or_default();
@@ -1268,6 +1268,37 @@ fn render_html_text_shadow_metadata(style: &TextStyle) -> String {
         " data-shadow-kind=\"{}\" data-shadow-offset-x-percent=\"{}\" data-shadow-offset-y-percent=\"{}\" data-shadow-color-raw=\"{}\"",
         shadow.kind, shadow.offset_x_percent, shadow.offset_y_percent, shadow.raw_color
     )
+}
+
+fn render_html_border_fill_metadata(
+    source_id: Option<u16>,
+    diagonal: Option<&crate::ir::BorderFillDiagonal>,
+) -> String {
+    let mut attributes = Vec::new();
+    if let Some(source_id) = source_id {
+        attributes.push(format!("data-border-fill-id=\"{source_id}\""));
+    }
+    if let Some(diagonal) = diagonal {
+        attributes.push(format!(
+            "data-diagonal-attributes=\"{}\"",
+            diagonal.raw_attributes
+        ));
+        attributes.push(format!("data-diagonal-type=\"{}\"", diagonal.diagonal_type));
+        attributes.push(format!(
+            "data-diagonal-width-index=\"{}\"",
+            diagonal.width_index
+        ));
+        attributes.push(format!(
+            "data-diagonal-color-raw=\"{}\"",
+            diagonal.raw_color
+        ));
+    }
+
+    if attributes.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", attributes.join(" "))
+    }
 }
 
 fn render_html_link(link: &Link, resources: &ResourceStore, image_asset_prefix: &str) -> String {
@@ -2321,11 +2352,10 @@ fn render_html_table_row(
     for cell in &row.cells {
         let source_row = cell.source_row.unwrap_or(inferred_row);
         let source_column = cell.source_column.unwrap_or(inferred_column);
-        let zone_fill = table_zone_for_cell(&table.zones, source_row, source_column)
-            .and_then(|zone| zone.fill.as_ref());
+        let fallback_zone = table_zone_for_cell(&table.zones, source_row, source_column);
         html.push_str(&render_html_table_cell(
             cell,
-            zone_fill,
+            fallback_zone,
             resources,
             image_asset_prefix,
         ));
@@ -2349,7 +2379,7 @@ fn table_zone_for_cell(
 
 fn render_html_table_cell(
     cell: &TableCell,
-    fallback_fill: Option<&FillStyle>,
+    fallback_zone: Option<&TableZone>,
     resources: &ResourceStore,
     image_asset_prefix: &str,
 ) -> String {
@@ -2366,13 +2396,23 @@ fn render_html_table_cell(
     let content = render_html_table_cell_blocks(&cell.blocks, resources, image_asset_prefix);
     let style = render_html_style_attr(&render_html_table_cell_style(
         &cell.style,
-        fallback_fill,
+        fallback_zone.and_then(|zone| zone.fill.as_ref()),
         resources,
         image_asset_prefix,
     ));
+    let diagonal = cell
+        .style
+        .diagonal
+        .as_ref()
+        .or_else(|| fallback_zone.and_then(|zone| zone.diagonal.as_ref()));
+    let source_border_fill_id = cell
+        .style
+        .source_border_fill_id
+        .or_else(|| fallback_zone.map(|zone| zone.source_border_fill_id));
+    let border_fill_metadata = render_html_border_fill_metadata(source_border_fill_id, diagonal);
     let tag = if cell.is_header { "th" } else { "td" };
 
-    format!("<{tag}{rowspan}{colspan}{style}>{content}</{tag}>\n")
+    format!("<{tag}{rowspan}{colspan}{border_fill_metadata}{style}>{content}</{tag}>\n")
 }
 
 fn render_html_table_cell_blocks(
@@ -3235,13 +3275,14 @@ fn starts_with_ordered_list_marker(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::ir::{
-        Alignment, BinaryResource, BinaryResourceKind, Border, BorderStyle, Chart, Color,
-        ConversionWarning, Equation, EquationKind, FillStyle, HeaderFooter, HeaderFooterPlacement,
-        IR_VERSION, Image, ImageCrop, ImageResource, Indent, LengthPt, LengthPx, Link, ListInfo,
-        ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId, NoteKind, NoteStore,
-        Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource, ResourceId, ResourceStore,
-        Section, Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow,
-        TableStyle, TextBorderFill, TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
+        Alignment, BinaryResource, BinaryResourceKind, Border, BorderFillDiagonal, BorderStyle,
+        Chart, Color, ConversionWarning, Equation, EquationKind, FillStyle, HeaderFooter,
+        HeaderFooterPlacement, IR_VERSION, Image, ImageCrop, ImageResource, Indent, LengthPt,
+        LengthPx, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId,
+        NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource,
+        ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table,
+        TableCell, TableCellStyle, TableRow, TableStyle, TextBorderFill, TextRun, TextShadow,
+        TextStyle, UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -4530,13 +4571,35 @@ mod tests {
 
     #[test]
     fn renders_html_table_from_document_ir() {
-        let document = document_with_blocks(vec![simple_table_block()]);
+        let mut table = match simple_table_block() {
+            Block::Table(table) => table,
+            other => panic!("expected table block, got {other:?}"),
+        };
+        table.rows[0].cells[0].style.source_border_fill_id = Some(7);
+        table.rows[0].cells[0].style.diagonal = Some(BorderFillDiagonal {
+            raw_attributes: 8,
+            diagonal_type: 1,
+            width_index: 3,
+            color: Some(Color {
+                r: 0x44,
+                g: 0x55,
+                b: 0x66,
+                a: 255,
+            }),
+            raw_color: 0x00665544,
+        });
+        let document = document_with_blocks(vec![Block::Table(table)]);
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
         assert!(html.contains("<table>"));
         assert!(html.contains("<tr>"));
-        assert!(html.contains("<td><p>cell1</p>\n</td>"));
+        assert!(html.contains("<td data-border-fill-id=\"7\""));
+        assert!(html.contains("data-diagonal-attributes=\"8\""));
+        assert!(html.contains("data-diagonal-type=\"1\""));
+        assert!(html.contains("data-diagonal-width-index=\"3\""));
+        assert!(html.contains("data-diagonal-color-raw=\"6706500\""));
+        assert!(html.contains("<p>cell1</p>\n</td>"));
         assert!(html.contains("<td><p>cell4</p>\n</td>"));
     }
 
@@ -4599,7 +4662,7 @@ mod tests {
                         b: 51,
                         a: 255,
                     }),
-                    border_fill: Some(TextBorderFill {
+                    border_fill: Some(Box::new(TextBorderFill {
                         source_border_fill_id: 3,
                         fill: Some(FillStyle::Solid {
                             background_color: Some(Color {
@@ -4625,7 +4688,7 @@ mod tests {
                             }),
                         }),
                         ..Default::default()
-                    }),
+                    })),
                     ..Default::default()
                 },
                 style_ref: None,

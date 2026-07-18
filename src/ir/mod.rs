@@ -52,7 +52,8 @@ use serde::{Deserialize, Serialize};
 /// v55: added structured character border-fill metadata.
 /// v56: added source document style definitions and relationships.
 /// v57: added alternate and default font metadata.
-pub const IR_VERSION: u16 = 57;
+/// v58: added structured border-fill diagonal metadata.
+pub const IR_VERSION: u16 = 58;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -509,7 +510,7 @@ pub struct TextStyle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow_details: Option<TextShadow>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub border_fill: Option<TextBorderFill>,
+    pub border_fill: Option<Box<TextBorderFill>>,
     pub font_family: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_fallback: Option<Box<FontFallback>>,
@@ -557,6 +558,8 @@ pub struct FontFallback {
 #[serde(default)]
 pub struct TextBorderFill {
     pub source_border_fill_id: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagonal: Option<BorderFillDiagonal>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fill: Option<FillStyle>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1412,6 +1415,8 @@ pub struct TableZone {
     pub end_row: u32,
     pub end_column: u32,
     pub source_border_fill_id: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagonal: Option<BorderFillDiagonal>,
     pub fill: Option<FillStyle>,
     pub border_top: Option<Border>,
     pub border_right: Option<Border>,
@@ -1445,6 +1450,10 @@ pub enum TablePageBreak {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct TableCellStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_border_fill_id: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagonal: Option<BorderFillDiagonal>,
     pub background_color: Option<Color>,
     pub fill: Option<FillStyle>,
     pub vertical_align: Option<VerticalAlign>,
@@ -1458,6 +1467,15 @@ pub struct TableCellStyle {
     pub border_right: Option<Border>,
     pub border_bottom: Option<Border>,
     pub border_left: Option<Border>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+pub struct BorderFillDiagonal {
+    pub raw_attributes: u16,
+    pub diagonal_type: u8,
+    pub width_index: u8,
+    pub color: Option<Color>,
+    pub raw_color: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

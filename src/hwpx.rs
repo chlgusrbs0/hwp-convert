@@ -2740,6 +2740,8 @@ fn extract_table_cell_from_xml(
         source_column,
         blocks,
         style: TableCellStyle {
+            source_border_fill_id: None,
+            diagonal: None,
             background_color,
             fill: None,
             vertical_align,

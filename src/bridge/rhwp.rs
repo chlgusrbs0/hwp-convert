@@ -42,21 +42,22 @@ use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_r
 
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
-    BinaryResource, BinaryResourceKind, Block, Border, BorderStyle, CaptionPlacement, Color,
-    ColumnDirection as IrColumnDirection, ColumnLayout, ColumnLayoutKind, ConversionWarning,
-    Document, DocumentControl, DocumentField, Equation, EquationKind, FieldKind, FillStyle,
-    FontFallback, GradientColor, HeaderFooter, HeaderFooterPlacement, HorizontalObjectAlignment,
-    HorizontalRelativeTo, Image, ImageCrop, ImageEffect as IrImageEffect, ImageFillMode,
-    ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt, LengthPx, Link, ListInfo,
-    ListKind, ListMarkerLayout, MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
-    NoteKind, NoteLayout, NoteStore, NumberingKind, ObjectPlacement, PageBinding,
-    PageBorderFillLayout, PageLayout, Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId,
-    Percent, RawSectionRecord, Resource, ResourceId, ResourceStore, ScriptTextStyle, Section,
-    SectionLayout, Shape, ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow, SourceStyleDefinition,
-    SourceStyleKind, Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell,
-    TableCellStyle, TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill,
-    TextDecorationStyle, TextRun, TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline,
-    VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    BinaryResource, BinaryResourceKind, Block, Border, BorderFillDiagonal, BorderStyle,
+    CaptionPlacement, Color, ColumnDirection as IrColumnDirection, ColumnLayout, ColumnLayoutKind,
+    ConversionWarning, Document, DocumentControl, DocumentField, Equation, EquationKind, FieldKind,
+    FillStyle, FontFallback, GradientColor, HeaderFooter, HeaderFooterPlacement,
+    HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
+    ImageEffect as IrImageEffect, ImageFillMode, ImagePlacement, ImageResource, ImageTextWrap,
+    Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage,
+    NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
+    NumberingKind, ObjectPlacement, PageBinding, PageBorderFillLayout, PageLayout, Paragraph,
+    ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, RawSectionRecord, Resource,
+    ResourceId, ResourceStore, ScriptTextStyle, Section, SectionLayout, Shape, ShapeGeometry,
+    ShapeKind, ShapePoint, ShapeShadow, SourceStyleDefinition, SourceStyleKind, Spacing,
+    StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle,
+    TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill, TextDecorationStyle, TextRun,
+    TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
+    VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1501,6 +1502,8 @@ impl<'a> BridgeContext<'a> {
             end_row: u32::from(zone.end_row),
             end_column: u32::from(zone.end_col),
             source_border_fill_id: zone.border_fill_id,
+            diagonal: self
+                .map_border_fill_diagonal(zone.border_fill_id, "table border-fill zone diagonal"),
             fill: self.border_fill_style(zone.border_fill_id, "table border-fill zone background"),
             border_top,
             border_right,
@@ -1618,6 +1621,7 @@ impl<'a> BridgeContext<'a> {
         );
 
         let fill = self.border_fill_style(cell.border_fill_id, "table cell background");
+        let diagonal = self.map_border_fill_diagonal(cell.border_fill_id, "table cell diagonal");
         let background_color = match &fill {
             Some(FillStyle::Solid {
                 background_color, ..
@@ -1633,6 +1637,8 @@ impl<'a> BridgeContext<'a> {
             source_column: Some(u32::from(cell.col)),
             blocks,
             style: TableCellStyle {
+                source_border_fill_id: (cell.border_fill_id != 0).then_some(cell.border_fill_id),
+                diagonal,
                 background_color,
                 fill,
                 vertical_align: map_vertical_align(cell.vertical_align),
@@ -2719,7 +2725,7 @@ impl<'a> BridgeContext<'a> {
         &mut self,
         border_fill_id: u16,
         context: &str,
-    ) -> Option<TextBorderFill> {
+    ) -> Option<Box<TextBorderFill>> {
         if border_fill_id == 0 {
             return None;
         }
@@ -2727,14 +2733,56 @@ impl<'a> BridgeContext<'a> {
         let [border_left, border_right, border_top, border_bottom] =
             self.map_borders(border_fill_id, context);
         let fill = self.border_fill_style(border_fill_id, context);
+        let diagonal = self.map_border_fill_diagonal(border_fill_id, context);
 
-        Some(TextBorderFill {
+        Some(Box::new(TextBorderFill {
             source_border_fill_id: border_fill_id,
+            diagonal,
             fill,
             border_top,
             border_right,
             border_bottom,
             border_left,
+        }))
+    }
+
+    fn map_border_fill_diagonal(
+        &mut self,
+        border_fill_id: u16,
+        context: &str,
+    ) -> Option<BorderFillDiagonal> {
+        let border_fill = match self.lookup_border_fill(border_fill_id).cloned() {
+            Some(border_fill) => border_fill,
+            None => {
+                if border_fill_id != 0 {
+                    self.warn_missing_border_fill(border_fill_id, context);
+                }
+                return None;
+            }
+        };
+        let diagonal = border_fill.diagonal;
+        if border_fill.attr == 0
+            && diagonal.diagonal_type == 0
+            && diagonal.width == 0
+            && diagonal.color == 0
+        {
+            return None;
+        }
+
+        let slash = (border_fill.attr >> 2) & 0x07;
+        let backslash = (border_fill.attr >> 5) & 0x07;
+        if diagonal.diagonal_type != 0 && (slash != 0 || backslash != 0) {
+            self.add_warning_once(
+                "rhwp border-fill diagonals were preserved in structured IR and HTML metadata; semantic HTML does not draw their layout-dependent geometry.",
+            );
+        }
+
+        Some(BorderFillDiagonal {
+            raw_attributes: border_fill.attr,
+            diagonal_type: diagonal.diagonal_type,
+            width_index: diagonal.width,
+            color: color_ref_to_color_option(diagonal.color),
+            raw_color: diagonal.color,
         })
     }
 
@@ -4259,9 +4307,10 @@ mod tests {
     };
     use rhwp::model::style::{
         Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, Bullet as RhwpBullet,
-        CharShape as RhwpCharShape, Fill, FillType, Font, GradientFill, HeadType as RhwpHeadType,
-        ImageFill, ParaShape as RhwpParaShape, ShapeBorderLine as RhwpShapeBorderLine, SolidFill,
-        Style as RhwpStyle, UnderlineType as RhwpUnderlineType,
+        CharShape as RhwpCharShape, DiagonalLine as RhwpDiagonalLine, Fill, FillType, Font,
+        GradientFill, HeadType as RhwpHeadType, ImageFill, ParaShape as RhwpParaShape,
+        ShapeBorderLine as RhwpShapeBorderLine, SolidFill, Style as RhwpStyle,
+        UnderlineType as RhwpUnderlineType,
     };
     use rhwp::model::table::{
         Cell as RhwpCell, Table as RhwpTable, VerticalAlign as RhwpVerticalAlign,
@@ -4683,6 +4732,7 @@ mod tests {
         let document = RhwpDocument {
             doc_info: DocInfo {
                 border_fills: vec![RhwpBorderFill {
+                    attr: 2 << 2,
                     // rhwp order: left, right, top, bottom
                     borders: [
                         border(RhwpBorderLineType::Solid, 7, 0x00112233),
@@ -4690,6 +4740,11 @@ mod tests {
                         border(RhwpBorderLineType::None, 0, 0),
                         border(RhwpBorderLineType::Dot, 1, 0),
                     ],
+                    diagonal: RhwpDiagonalLine {
+                        diagonal_type: 1,
+                        width: 3,
+                        color: 0x00665544,
+                    },
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -4743,9 +4798,29 @@ mod tests {
                     style.border_bottom.as_ref().expect("bottom border").style,
                     BorderStyle::Dotted
                 );
+                assert_eq!(style.source_border_fill_id, Some(1));
+                assert_eq!(
+                    style.diagonal,
+                    Some(BorderFillDiagonal {
+                        raw_attributes: 2 << 2,
+                        diagonal_type: 1,
+                        width_index: 3,
+                        color: Some(Color {
+                            r: 0x44,
+                            g: 0x55,
+                            b: 0x66,
+                            a: 255,
+                        }),
+                        raw_color: 0x00665544,
+                    })
+                );
             }
             other => panic!("expected table block, got {other:?}"),
         }
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("border-fill diagonals")
+                && warning.message.contains("HTML metadata")
+        }));
     }
 
     #[test]
