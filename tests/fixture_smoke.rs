@@ -275,7 +275,11 @@ fn assert_equation_export_artifacts(
 
     match format {
         OutputFormat::Html => assert!(
-            output.contains("class=\"equation\""),
+            output.contains("class=\"equation\"")
+                && output.contains("data-source-object-attributes=\"655360\"")
+                && output.contains("data-width-criterion=\"absolute\"")
+                && output.contains("data-height-criterion=\"absolute\"")
+                && output.contains("data-text-wrap=\"square\""),
             "fixture {} should render equation fallback with semantic HTML class",
             input.label
         ),
