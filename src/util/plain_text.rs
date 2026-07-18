@@ -1,7 +1,7 @@
 use crate::ir::{
     Block, CaptionPlacement, Chart, Document, Equation, EquationKind, HeaderFooter, Image, Inline,
-    ListInfo, ListKind, MasterPage, Note, NoteKind, Paragraph, Shape, Table, TableCell,
-    UnknownBlock, UnknownInline,
+    ListInfo, ListKind, MasterPage, Note, NoteKind, ObjectCaption, Paragraph, Shape, Table,
+    TableCell, UnknownBlock, UnknownInline,
 };
 
 const TABLE_FALLBACK_LABEL: &str = "[\u{D45C}]";
@@ -89,8 +89,12 @@ pub(crate) fn blocks_to_plain_text(blocks: &[Block]) -> String {
 
 pub(crate) fn table_to_plain_text(table: &Table) -> String {
     let table_text = table_body_to_plain_text(table);
-    let Some(caption) = &table.caption else {
-        return table_text;
+    render_captioned_plain_text(table_text, table.caption.as_ref())
+}
+
+fn render_captioned_plain_text(object_text: String, caption: Option<&ObjectCaption>) -> String {
+    let Some(caption) = caption else {
+        return object_text;
     };
     let caption_text = caption
         .blocks
@@ -100,15 +104,15 @@ pub(crate) fn table_to_plain_text(table: &Table) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     if caption_text.is_empty() {
-        return table_text;
+        return object_text;
     }
 
     match caption.placement {
         CaptionPlacement::Left | CaptionPlacement::Top => {
-            format!("{caption_text}\n{table_text}")
+            format!("{caption_text}\n{object_text}")
         }
         CaptionPlacement::Right | CaptionPlacement::Bottom => {
-            format!("{table_text}\n{caption_text}")
+            format!("{object_text}\n{caption_text}")
         }
     }
 }
@@ -179,30 +183,31 @@ pub(crate) fn shape_to_plain_text(shape: &Shape) -> String {
     } else {
         &shape.children
     };
-    if !nested_blocks.is_empty() {
-        return nested_blocks
+    let shape_text = if !nested_blocks.is_empty() {
+        nested_blocks
             .iter()
             .map(block_to_plain_text)
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
-            .join("\n");
-    }
+            .join("\n")
+    } else {
+        let text = shape
+            .fallback_text
+            .as_deref()
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                shape
+                    .description
+                    .as_deref()
+                    .filter(|text| !text.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_else(|| "unsupported".to_string());
+        format!("[shape: {text}]")
+    };
 
-    let text = shape
-        .fallback_text
-        .as_deref()
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            shape
-                .description
-                .as_deref()
-                .filter(|text| !text.is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| "unsupported".to_string());
-
-    format!("[shape: {text}]")
+    render_captioned_plain_text(shape_text, shape.caption.as_ref())
 }
 
 pub(crate) fn chart_to_plain_text(chart: &Chart) -> String {

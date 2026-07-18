@@ -50,14 +50,14 @@ use crate::ir::{
     ImageEffect as IrImageEffect, ImageFillMode, ImagePlacement, ImageResource, ImageTextWrap,
     Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage,
     NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
-    NumberingKind, ObjectPlacement, PageBinding, PageBorderFillLayout, PageLayout, Paragraph,
-    ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, RawSectionRecord, Resource,
-    ResourceId, ResourceStore, ScriptTextStyle, Section, SectionLayout, Shape, ShapeGeometry,
-    ShapeKind, ShapePoint, ShapeShadow, SourceStyleDefinition, SourceStyleKind, Spacing,
-    StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCaption, TableCell,
-    TableCellStyle, TableCellTextDirection, TablePageBreak, TableRow, TableStyle, TableZone,
-    TextBorderFill, TextDecorationStyle, TextRun, TextScript, TextShadow, TextStyle, TextStyleId,
-    UnknownInline, VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    NumberingKind, ObjectCaption, ObjectPlacement, PageBinding, PageBorderFillLayout, PageLayout,
+    Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, RawSectionRecord,
+    Resource, ResourceId, ResourceStore, ScriptTextStyle, Section, SectionLayout, Shape,
+    ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow, SourceStyleDefinition, SourceStyleKind,
+    Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle,
+    TableCellTextDirection, TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill,
+    TextDecorationStyle, TextRun, TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline,
+    VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1487,7 +1487,7 @@ impl<'a> BridgeContext<'a> {
             self.add_warning_once(
                 "rHWP table caption structure and layout were preserved in Document IR; HTML approximates the layout while other semantic exporters preserve caption content and order without page layout.",
             );
-            TableCaption {
+            ObjectCaption {
                 blocks,
                 placement: map_caption_placement(caption.direction),
                 layout: Some(self.map_caption_layout(caption, "table")),
@@ -1905,19 +1905,26 @@ impl<'a> BridgeContext<'a> {
         let description = non_empty_string(&shape.common().description);
         let text_box_text =
             non_empty_string(&crate::util::plain_text::blocks_to_plain_text(&content));
-        let caption_text = match shape.drawing().and_then(|drawing| drawing.caption.as_ref()) {
-            Some(caption) => self.caption_plain_text(Some(&caption.paragraphs)),
-            None => None,
+        let source_caption = match shape {
+            ShapeObject::Group(group) => group.caption.as_ref(),
+            _ => shape.drawing().and_then(|drawing| drawing.caption.as_ref()),
         };
+        let caption = source_caption.map(|caption| {
+            self.add_warning_once(
+                "rHWP shape caption structure and layout were preserved in Document IR; HTML approximates the layout while other semantic exporters preserve caption content and order without page layout.",
+            );
+            ObjectCaption {
+                blocks: self.map_caption_blocks(caption),
+                placement: map_caption_placement(caption.direction),
+                layout: Some(self.map_caption_layout(caption, "shape")),
+            }
+        });
         let mut fallback_parts = Vec::new();
         if let Some(description) = &description {
             fallback_parts.push(description.clone());
         }
         if let Some(text) = &text_box_text {
             fallback_parts.push(text.clone());
-        }
-        if let Some(caption) = caption_text {
-            fallback_parts.push(caption);
         }
         if text_box_text.is_some() {
             self.add_warning_once(
@@ -1959,6 +1966,7 @@ impl<'a> BridgeContext<'a> {
             placement: map_object_placement(common),
             children: Vec::new(),
             content,
+            caption,
         }
     }
 
@@ -1976,28 +1984,7 @@ impl<'a> BridgeContext<'a> {
                 }
                 let mut group_shape = self.map_shape(shape);
                 group_shape.children = children;
-                let mut blocks = vec![Block::Shape(group_shape)];
-
-                let Some(caption) = group.caption.as_ref() else {
-                    return blocks;
-                };
-                let mut caption_blocks = self.map_caption_blocks(caption);
-                if caption_blocks.is_empty() {
-                    return blocks;
-                }
-                self.add_warning_once(
-                    "rhwp exposed grouped shape captions; hwp-convert preserved them as adjacent caption blocks around the structured group.",
-                );
-                match caption.direction {
-                    RhwpCaptionDirection::Left | RhwpCaptionDirection::Top => {
-                        caption_blocks.extend(blocks);
-                        caption_blocks
-                    }
-                    RhwpCaptionDirection::Right | RhwpCaptionDirection::Bottom => {
-                        blocks.extend(caption_blocks);
-                        blocks
-                    }
-                }
+                vec![Block::Shape(group_shape)]
             }
             _ => vec![Block::Shape(self.map_shape(shape))],
         }
@@ -5879,11 +5866,15 @@ mod tests {
             children: vec![rectangle, picture],
             caption: Some(RhwpCaption {
                 direction: RhwpCaptionDirection::Bottom,
+                vert_align: RhwpCaptionVertAlign::Center,
+                width: 3750,
+                spacing: 300,
+                max_width: 7500,
+                include_margin: true,
                 paragraphs: vec![RhwpParagraph {
                     text: "Group caption".to_string(),
                     ..Default::default()
                 }],
-                ..Default::default()
             }),
         });
         let document = RhwpDocument {
@@ -5905,7 +5896,7 @@ mod tests {
         let bridged = BridgeContext::new(&document).into_document();
         let blocks = &bridged.sections[0].blocks;
 
-        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks.len(), 1);
         let Block::Shape(group) = &blocks[0] else {
             panic!("expected structured shape group");
         };
@@ -5928,8 +5919,20 @@ mod tests {
                 if image.resource_id.as_str() == "image-11"
                     && image.alt.as_deref() == Some("group image")
         ));
+        let caption = group.caption.as_ref().expect("group caption");
+        assert_eq!(caption.placement, CaptionPlacement::Bottom);
+        assert_eq!(
+            caption.layout,
+            Some(CaptionLayout {
+                vertical_align: VerticalAlign::Middle,
+                width: Some(LengthPx(50.0)),
+                spacing: Some(LengthPx(4.0)),
+                max_width: Some(LengthPx(100.0)),
+                include_margin: true,
+            })
+        );
         assert!(matches!(
-            &blocks[1],
+            &caption.blocks[0],
             Block::Paragraph(paragraph)
                 if paragraph.role == ParagraphRole::Caption
                     && matches!(
@@ -5943,8 +5946,9 @@ mod tests {
                 .contains("grouped shape children and group transforms")
         }));
         assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("grouped shape captions")
-                && warning.message.contains("structured group")
+            warning
+                .message
+                .contains("shape caption structure and layout")
         }));
     }
 

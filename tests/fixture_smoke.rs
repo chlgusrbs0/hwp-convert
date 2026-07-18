@@ -765,6 +765,9 @@ fn collect_shapes_from_blocks<'a>(blocks: &'a [Block], shapes: &mut Vec<&'a Shap
         match block {
             Block::Shape(shape) => {
                 shapes.push(shape);
+                if let Some(caption) = &shape.caption {
+                    collect_shapes_from_blocks(&caption.blocks, shapes);
+                }
                 collect_shapes_from_blocks(&shape.content, shapes);
                 collect_shapes_from_blocks(&shape.children, shapes);
             }
@@ -1508,6 +1511,9 @@ impl DocumentStats {
             Block::Equation(_) => self.equations += 1,
             Block::Shape(shape) => {
                 self.shapes += 1;
+                if let Some(caption) = &shape.caption {
+                    self.count_blocks(&caption.blocks);
+                }
                 self.count_blocks(&shape.content);
                 self.count_blocks(&shape.children);
             }

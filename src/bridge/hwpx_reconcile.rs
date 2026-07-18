@@ -124,6 +124,13 @@ fn supplement_list_markers(primary: &mut [Block], fallback: &[Block]) -> usize {
                     }
                 }
             }
+            Block::Shape(shape) => {
+                if let Some(caption) = &mut shape.caption {
+                    recovered += supplement_list_markers(&mut caption.blocks, fallback);
+                }
+                recovered += supplement_list_markers(&mut shape.content, fallback);
+                recovered += supplement_list_markers(&mut shape.children, fallback);
+            }
             _ => {}
         }
     }
@@ -157,6 +164,13 @@ fn collect_matching_list_info<'a>(
                         collect_matching_list_info(&cell.blocks, text, kind, level, matches);
                     }
                 }
+            }
+            Block::Shape(shape) => {
+                if let Some(caption) = &shape.caption {
+                    collect_matching_list_info(&caption.blocks, text, kind, level, matches);
+                }
+                collect_matching_list_info(&shape.content, text, kind, level, matches);
+                collect_matching_list_info(&shape.children, text, kind, level, matches);
             }
             _ => {}
         }
@@ -292,6 +306,9 @@ impl SemanticCoverage {
             Block::Equation(_) => self.equations += 1,
             Block::Shape(shape) => {
                 self.shapes += 1;
+                if let Some(caption) = &shape.caption {
+                    self.count_blocks(&caption.blocks);
+                }
                 self.count_blocks(&shape.content);
                 self.count_blocks(&shape.children);
             }
@@ -509,6 +526,22 @@ fn collect_blocks_text(blocks: &[Block], chunks: &mut Vec<String>) {
                 );
             }
             Block::Shape(shape) => {
+                let caption_before = shape.caption.as_ref().is_some_and(|caption| {
+                    matches!(
+                        caption.placement,
+                        crate::ir::CaptionPlacement::Left | crate::ir::CaptionPlacement::Top
+                    )
+                });
+                if caption_before {
+                    collect_blocks_text(
+                        &shape
+                            .caption
+                            .as_ref()
+                            .expect("caption checked above")
+                            .blocks,
+                        chunks,
+                    );
+                }
                 if !shape.content.is_empty() {
                     collect_blocks_text(&shape.content, chunks);
                 } else if shape.children.is_empty() {
@@ -521,6 +554,9 @@ fn collect_blocks_text(blocks: &[Block], chunks: &mut Vec<String>) {
                     );
                 } else {
                     collect_blocks_text(&shape.children, chunks);
+                }
+                if let Some(caption) = shape.caption.as_ref().filter(|_| !caption_before) {
+                    collect_blocks_text(&caption.blocks, chunks);
                 }
             }
             Block::Chart(chart) => {

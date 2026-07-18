@@ -11,11 +11,11 @@ use crate::cli::{CliArgs, OutputFormat};
 use crate::ir::{
     Alignment, Block, Border, BorderStyle, CaptionLayout, CaptionPlacement, Chart, Color, Document,
     Equation, EquationKind, FillStyle, HeaderFooter, HeaderFooterPlacement, Image, ImageFillMode,
-    Inline, Link, ListInfo, ListKind, MasterPage, Note, NoteId, NoteKind, Paragraph, ParagraphRole,
-    ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, ShapeGeometry,
-    ShapeShadow, Table, TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle,
-    TableZone, TextDecorationStyle, TextRun, TextShadow, TextStyle, UnknownBlock, UnknownInline,
-    VerticalAlign,
+    Inline, Link, ListInfo, ListKind, MasterPage, Note, NoteId, NoteKind, ObjectCaption, Paragraph,
+    ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape,
+    ShapeGeometry, ShapeShadow, Table, TableCell, TableCellStyle, TableCellTextDirection, TableRow,
+    TableStyle, TableZone, TextDecorationStyle, TextRun, TextShadow, TextStyle, UnknownBlock,
+    UnknownInline, VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -364,6 +364,9 @@ fn collect_block_unknown_warnings(blocks: &[Block], warnings: &mut Vec<String>) 
                 }
             }
             Block::Shape(shape) => {
+                if let Some(caption) = &shape.caption {
+                    collect_block_unknown_warnings(&caption.blocks, warnings);
+                }
                 collect_block_unknown_warnings(&shape.content, warnings);
                 collect_block_unknown_warnings(&shape.children, warnings);
             }
@@ -1370,6 +1373,21 @@ fn render_html_equation(equation: &Equation) -> String {
 }
 
 fn render_html_shape(shape: &Shape, resources: &ResourceStore, image_asset_prefix: &str) -> String {
+    let shape_html = render_html_shape_element(shape, resources, image_asset_prefix);
+    render_html_object_caption(
+        shape_html,
+        shape.caption.as_ref(),
+        "shape",
+        resources,
+        image_asset_prefix,
+    )
+}
+
+fn render_html_shape_element(
+    shape: &Shape,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     // Shapes carry box geometry, so an inline span would ignore their width and
     // height. Keep the semantic placeholder while making its box CSS effective.
     let mut declarations = vec!["display: inline-block".to_string()];
@@ -2323,6 +2341,38 @@ fn render_html_caption_layout(
     )
 }
 
+fn render_html_object_caption(
+    object_html: String,
+    caption: Option<&ObjectCaption>,
+    object_kind: &str,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
+    let Some(caption) = caption else {
+        return object_html;
+    };
+
+    let (figure_metadata, figure_style, caption_style) =
+        render_html_caption_layout(caption.layout, Some(caption.placement));
+    let caption_html = format!(
+        "<figcaption{caption_style}>{}</figcaption>\n",
+        render_html_blocks(&caption.blocks, resources, image_asset_prefix)
+    );
+    let content = match caption.placement {
+        CaptionPlacement::Left | CaptionPlacement::Top => {
+            format!("{caption_html}{object_html}")
+        }
+        CaptionPlacement::Right | CaptionPlacement::Bottom => {
+            format!("{object_html}{caption_html}")
+        }
+    };
+
+    format!(
+        "<figure data-object-kind=\"{}\"{figure_metadata}{figure_style}>\n{content}</figure>\n",
+        escape_html(object_kind)
+    )
+}
+
 fn render_html_cropped_image(
     image: &Image,
     src: &str,
@@ -2395,27 +2445,12 @@ fn render_css_transform(
 
 fn render_html_table(table: &Table, resources: &ResourceStore, image_asset_prefix: &str) -> String {
     let table_html = render_html_table_element(table, resources, image_asset_prefix);
-    let Some(caption) = &table.caption else {
-        return table_html;
-    };
-
-    let (figure_metadata, figure_style, caption_style) =
-        render_html_caption_layout(caption.layout, Some(caption.placement));
-    let caption_html = format!(
-        "<figcaption{caption_style}>{}</figcaption>\n",
-        render_html_blocks(&caption.blocks, resources, image_asset_prefix)
-    );
-    let content = match caption.placement {
-        CaptionPlacement::Left | CaptionPlacement::Top => {
-            format!("{caption_html}{table_html}")
-        }
-        CaptionPlacement::Right | CaptionPlacement::Bottom => {
-            format!("{table_html}{caption_html}")
-        }
-    };
-
-    format!(
-        "<figure data-object-kind=\"table\"{figure_metadata}{figure_style}>\n{content}</figure>\n"
+    render_html_object_caption(
+        table_html,
+        table.caption.as_ref(),
+        "table",
+        resources,
+        image_asset_prefix,
     )
 }
 
@@ -2716,8 +2751,22 @@ fn render_markdown_table(
     image_asset_prefix: &str,
 ) -> String {
     let table_markdown = render_markdown_table_body(table);
-    let Some(caption) = &table.caption else {
-        return table_markdown;
+    render_markdown_object_caption(
+        table_markdown,
+        table.caption.as_ref(),
+        resources,
+        image_asset_prefix,
+    )
+}
+
+fn render_markdown_object_caption(
+    object_markdown: String,
+    caption: Option<&ObjectCaption>,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
+    let Some(caption) = caption else {
+        return object_markdown;
     };
     let caption_markdown = caption
         .blocks
@@ -2727,15 +2776,15 @@ fn render_markdown_table(
         .collect::<Vec<_>>()
         .join("\n\n");
     if caption_markdown.is_empty() {
-        return table_markdown;
+        return object_markdown;
     }
 
     match caption.placement {
         CaptionPlacement::Left | CaptionPlacement::Top => {
-            format!("{caption_markdown}\n\n{table_markdown}")
+            format!("{caption_markdown}\n\n{object_markdown}")
         }
         CaptionPlacement::Right | CaptionPlacement::Bottom => {
-            format!("{table_markdown}\n\n{caption_markdown}")
+            format!("{object_markdown}\n\n{caption_markdown}")
         }
     }
 }
@@ -2984,16 +3033,23 @@ fn render_markdown_shape(
     } else {
         &shape.children
     };
-    if nested_blocks.is_empty() {
-        return render_markdown_text(&shape_display_text(shape));
-    }
+    let shape_markdown = if nested_blocks.is_empty() {
+        render_markdown_text(&shape_display_text(shape))
+    } else {
+        nested_blocks
+            .iter()
+            .map(|block| render_markdown_block(block, resources, image_asset_prefix))
+            .filter(|block| !block.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    };
 
-    nested_blocks
-        .iter()
-        .map(|block| render_markdown_block(block, resources, image_asset_prefix))
-        .filter(|block| !block.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    render_markdown_object_caption(
+        shape_markdown,
+        shape.caption.as_ref(),
+        resources,
+        image_asset_prefix,
+    )
 }
 
 fn render_markdown_chart(chart: &Chart) -> String {
@@ -3454,8 +3510,8 @@ mod tests {
         Chart, Color, ConversionWarning, Equation, EquationKind, FillStyle, HeaderFooter,
         HeaderFooterPlacement, IR_VERSION, Image, ImageCrop, ImageResource, Indent, LengthPt,
         LengthPx, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId,
-        NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource,
-        ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table,
+        NoteKind, NoteStore, ObjectCaption, Paragraph, ParagraphRole, ParagraphStyle, Percent,
+        Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table,
         TableCaption, TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle,
         TextBorderFill, TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
     };
@@ -5373,6 +5429,19 @@ mod tests {
             content: vec![Block::Paragraph(Paragraph::from_plain_text(
                 "inside shape".to_string(),
             ))],
+            caption: Some(ObjectCaption {
+                blocks: vec![Block::Paragraph(Paragraph::from_plain_text(
+                    "Shape caption".to_string(),
+                ))],
+                placement: CaptionPlacement::Bottom,
+                layout: Some(CaptionLayout {
+                    vertical_align: VerticalAlign::Bottom,
+                    width: Some(LengthPx(50.0)),
+                    spacing: Some(LengthPx(4.0)),
+                    max_width: Some(LengthPx(100.0)),
+                    include_margin: true,
+                }),
+            }),
             ..Default::default()
         })]);
 
@@ -5394,8 +5463,12 @@ mod tests {
         assert!(html.contains("border-radius: 25%"));
         assert!(html.contains("class=\"shape-placeholder shape-content\""));
         assert!(html.contains("inside shape"));
+        assert!(html.contains("<figure data-object-kind=\"shape\""));
+        assert!(html.contains("data-caption-include-margin=\"true\""));
+        assert!(html.contains("Shape caption"));
         assert!(markdown.contains("inside shape"));
-        assert_eq!(text, "inside shape");
+        assert!(markdown.ends_with("Shape caption"));
+        assert_eq!(text, "inside shape\nShape caption");
     }
 
     #[test]

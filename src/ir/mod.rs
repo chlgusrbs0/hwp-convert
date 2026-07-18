@@ -58,7 +58,8 @@ use serde::{Deserialize, Serialize};
 /// v61: added structured table border-fill metadata.
 /// v62: added structured image caption layout metadata.
 /// v63: added structured table caption blocks and layout metadata.
-pub const IR_VERSION: u16 = 63;
+/// v64: added structured shape caption blocks and layout metadata.
+pub const IR_VERSION: u16 = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1313,6 +1314,8 @@ pub struct Shape {
     pub children: Vec<Block>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub content: Vec<Block>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<ObjectCaption>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1391,16 +1394,18 @@ pub struct Table {
     #[serde(default)]
     pub zones: Vec<TableZone>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caption: Option<TableCaption>,
+    pub caption: Option<ObjectCaption>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TableCaption {
+pub struct ObjectCaption {
     pub blocks: Vec<Block>,
     pub placement: CaptionPlacement,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<CaptionLayout>,
 }
+
+pub type TableCaption = ObjectCaption;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct TableRow {

@@ -323,6 +323,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - HWP 표 BorderFill IR 확장: `IR_VERSION` 60 → 61. rHWP 공개 `Table.border_fill_id`의 원본 참조, 단색·그라데이션·이미지 채우기, 4면 테두리와 대각선 정보를 표 스타일에 보존한다. HTML은 채우기와 테두리를 CSS로 출력하고 원본 참조·대각선은 `data-*`로 남긴다.
 - HWP 이미지 캡션 레이아웃 IR 확장: `IR_VERSION` 61 → 62. rHWP 공개 `Caption`의 좌우 캡션 수직정렬, 폭, 개체와의 간격, 최대 폭, 마진 포함 여부를 이미지에 보존한다. HTML은 figure/figcaption flex 배치로 근사하고 원본 boolean을 `data-*`로 남긴다.
 - HWP 표 캡션 구조 IR 확장: `IR_VERSION` 62 → 63. rHWP 공개 `Table.caption`의 문단 블록, 방향, 수직정렬, 폭, 개체와의 간격, 최대 폭, 마진 포함 여부를 표 내부의 `TableCaption`으로 보존한다. HTML은 figure/figcaption으로 근사하고 Markdown/TXT는 원본 앞뒤 순서로 캡션 내용을 선형화한다. 동결된 HWPX 폴백의 기존 인접 캡션 복구는 변경하지 않는다.
+- HWP 도형 캡션 구조 IR 확장: `IR_VERSION` 63 → 64. rHWP 공개 일반 도형과 그룹 도형의 `Caption` 문단 블록·방향·수직정렬·폭·간격·최대 폭·마진 포함 여부를 공통 `ObjectCaption`으로 보존한다. 그룹 캡션도 더 이상 도형 바깥 단락으로 분리하지 않으며 HTML은 figure/figcaption, Markdown/TXT는 원본 앞뒤 순서로 출력한다. 동결된 HWPX 폴백에는 신규 도형 캡션 구조화를 추가하지 않는다.
 - raw HWP record, unknown control bytes, HWPX XML을 직접 해석한 독자 기능 구현을 금지했다.
 - `src/hwpx.rs`는 즉시 삭제하지 않되 legacy 호환성 안전망으로 동결하고, 회귀·보안·기존 silent-drop 수정만 허용하기로 결정했다.
 - 신규 정확도 작업은 rHWP 공개 surface를 `mapped`, `normalized`, `warning/unknown`, `render-only`, `unmapped`, `upstream-needed`로 분류한 뒤 진행한다.

@@ -3194,6 +3194,7 @@ fn extract_hwpx_shape_from_xml(
         placement: None,
         children: Vec::new(),
         content: Vec::new(),
+        caption: None,
     }
 }
 
