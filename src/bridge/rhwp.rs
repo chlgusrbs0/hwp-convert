@@ -4286,7 +4286,8 @@ fn map_object_placement(common: &RhwpCommonObjAttr) -> Option<ObjectPlacement> {
     let has_layout = has_layout
         || common.width_criterion != rhwp::model::shape::SizeCriterion::Absolute
         || common.height_criterion != rhwp::model::shape::SizeCriterion::Absolute
-        || common.attr != 0;
+        || common.attr != 0
+        || !common.raw_extra.is_empty();
     has_layout.then_some(ObjectPlacement {
         source_attributes: Some(common.attr),
         treat_as_character: common.treat_as_char,
@@ -4337,6 +4338,7 @@ fn map_object_placement(common: &RhwpCommonObjAttr) -> Option<ObjectPlacement> {
         height_criterion: Some(map_object_size_criterion(common.height_criterion)),
         source_width_value: Some(common.width),
         source_height_value: Some(common.height),
+        raw_control_extension: common.raw_extra.clone(),
     })
 }
 
@@ -4715,7 +4717,7 @@ mod tests {
         assert_eq!(table.style.cell_spacing, Some(LengthPx(1.0)));
         assert!(table.style.repeat_header);
         assert_eq!(table.style.page_break, Some(TablePageBreak::Row));
-        let placement = table.style.placement.expect("table placement");
+        let placement = table.style.placement.as_ref().expect("table placement");
         assert_eq!(placement.horizontal_offset, LengthPx(500.0 / 75.0));
         assert_eq!(placement.vertical_offset, LengthPx(8.0));
         assert_eq!(placement.z_order, 2);
@@ -5428,7 +5430,10 @@ mod tests {
                 assert_eq!(shape.height, Some(LengthPx(24.0)));
                 assert_eq!(shape.offset_x, Some(LengthPx(4.0)));
                 assert_eq!(shape.offset_y, Some(LengthPx(400.0 / 75.0)));
-                assert_eq!(shape.placement.map(|placement| placement.z_order), Some(7));
+                assert_eq!(
+                    shape.placement.as_ref().map(|placement| placement.z_order),
+                    Some(7)
+                );
                 assert_eq!(
                     shape.geometry,
                     Some(ShapeGeometry::Rectangle {
@@ -5587,6 +5592,25 @@ mod tests {
     }
 
     #[test]
+    fn preserves_common_object_raw_extension_without_other_layout() {
+        let common = RhwpCommonObjAttr {
+            treat_as_char: true,
+            raw_extra: vec![0xde, 0xad, 0xbe, 0xef],
+            ..Default::default()
+        };
+
+        let placement = map_object_placement(&common)
+            .expect("raw common-object extension should retain placement metadata");
+
+        assert_eq!(
+            placement.raw_control_extension,
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
+        let json = serde_json::to_string(&placement).expect("serialize placement");
+        assert!(json.contains(r#""raw_control_extension":"3q2+7w==""#));
+    }
+
+    #[test]
     fn preserves_equation_presentation_metadata() {
         let equation = RhwpEquation {
             common: RhwpCommonObjAttr {
@@ -5599,6 +5623,7 @@ mod tests {
                 z_order: 5,
                 text_wrap: rhwp::model::shape::TextWrap::TopAndBottom,
                 instance_id: 77,
+                raw_extra: vec![5, 6, 7],
                 ..Default::default()
             },
             script: "x over y".to_string(),
@@ -5646,7 +5671,7 @@ mod tests {
         assert_eq!(equation.offset_x, Some(LengthPx(4.0)));
         assert_eq!(equation.offset_y, Some(LengthPx(400.0 / 75.0)));
         assert_eq!(equation.raw_control_data, vec![1, 2, 3, 4]);
-        let placement = equation.placement.expect("equation placement");
+        let placement = equation.placement.as_ref().expect("equation placement");
         assert_eq!(placement.source_attributes, Some(0x1234));
         assert_eq!(placement.z_order, 5);
         assert_eq!(placement.text_wrap, ImageTextWrap::TopAndBottom);
@@ -5657,6 +5682,9 @@ mod tests {
         );
         assert_eq!(placement.source_width_value, Some(7500));
         assert_eq!(placement.source_height_value, Some(1500));
+        assert_eq!(placement.raw_control_extension, vec![5, 6, 7]);
+        let equation_json = serde_json::to_string(equation).expect("serialize equation");
+        assert!(equation_json.contains(r#""raw_control_extension":"BQYH""#));
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("equation object placement")
                 && warning.message.contains("preserved in Equation IR")
@@ -6192,6 +6220,7 @@ mod tests {
                 height_criterion: Some(ObjectSizeCriterion::Page),
                 source_width_value: Some(5000),
                 source_height_value: Some(2500),
+                raw_control_extension: Vec::new(),
             })
         );
         assert_eq!(image.padding_top, Some(LengthPx(30.0 / 75.0)));
@@ -6397,7 +6426,10 @@ mod tests {
         assert_eq!(group.width, Some(LengthPx(100.0)));
         assert_eq!(group.height, Some(LengthPx(50.0)));
         assert_eq!(group.rotation_degrees, Some(15.0));
-        assert_eq!(group.placement.map(|placement| placement.z_order), Some(4));
+        assert_eq!(
+            group.placement.as_ref().map(|placement| placement.z_order),
+            Some(4)
+        );
         assert_eq!(group.children.len(), 3);
         assert!(matches!(
             &group.children[0],

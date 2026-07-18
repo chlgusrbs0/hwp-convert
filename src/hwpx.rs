@@ -3673,6 +3673,7 @@ fn hwpx_picture_placement(
             height_criterion: None,
             source_width_value: None,
             source_height_value: None,
+            raw_control_extension: Vec::new(),
         });
     };
 
@@ -3777,6 +3778,7 @@ fn hwpx_picture_placement(
         height_criterion: None,
         source_width_value: None,
         source_height_value: None,
+        raw_control_extension: Vec::new(),
     };
     let is_default = placement.treat_as_character
         && placement.flow_with_text
@@ -8650,6 +8652,7 @@ mod tests {
                 height_criterion: None,
                 source_width_value: None,
                 source_height_value: None,
+                raw_control_extension: Vec::new(),
             })
         );
         assert_eq!(

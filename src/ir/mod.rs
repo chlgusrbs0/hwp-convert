@@ -80,7 +80,7 @@ use serde::{Deserialize, Serialize};
 /// v83: added object size criteria and raw source dimensions.
 /// v84: added raw source object attributes to placement metadata.
 /// v85: added equation source instance, object placement, and raw control data.
-pub const IR_VERSION: u16 = 85;
+pub const IR_VERSION: u16 = 86;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1308,7 +1308,7 @@ pub enum ImageEffect {
     Pattern8x8,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ObjectPlacement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_attributes: Option<u32>,
@@ -1336,6 +1336,9 @@ pub struct ObjectPlacement {
     pub source_width_value: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_height_value: Option<u32>,
+    /// Opaque bytes that followed the source common-object control payload.
+    #[serde(default, with = "base64_bytes", skip_serializing_if = "Vec::is_empty")]
+    pub raw_control_extension: Vec<u8>,
 }
 
 pub type ImagePlacement = ObjectPlacement;

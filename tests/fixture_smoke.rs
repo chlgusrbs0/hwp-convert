@@ -1038,6 +1038,7 @@ fn assert_equation_fixture(input: &FixtureInput, document: &Document) {
     );
     let placement = equation
         .placement
+        .as_ref()
         .expect("equation fixture should preserve object placement");
     assert_eq!(placement.source_attributes, Some(0x000a0000));
     assert_eq!(

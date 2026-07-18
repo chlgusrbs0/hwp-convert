@@ -2239,6 +2239,7 @@ fn render_html_table_style(
     if matches!(style.page_break, Some(crate::ir::TablePageBreak::Row))
         || style
             .placement
+            .as_ref()
             .is_some_and(|placement| placement.prevent_page_break)
     {
         declarations.push("break-inside: avoid".to_string());
@@ -6222,6 +6223,7 @@ mod tests {
                 height_criterion: Some(ObjectSizeCriterion::Page),
                 source_width_value: Some(5000),
                 source_height_value: Some(2500),
+                raw_control_extension: Vec::new(),
             }),
             padding_top: Some(LengthPx(1.0)),
             padding_right: Some(LengthPx(2.0)),
