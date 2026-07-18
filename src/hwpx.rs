@@ -3361,13 +3361,13 @@ fn extract_hwpx_image_from_pic_xml(
         Some("GRAY_SCALE") => (true, Some(ImageEffect::Grayscale)),
         Some("BLACK_WHITE") => {
             context.add_warning_once(
-                "HWPX picture BLACK_WHITE effect was represented as a grayscale approximation because Image IR does not distinguish threshold black-and-white.",
+                "HWPX picture BLACK_WHITE effect was preserved in Image IR; HTML approximates threshold black-and-white with grayscale and high contrast.",
             );
             (true, Some(ImageEffect::BlackWhite))
         }
         Some("PATTERN8X8" | "PATTERN_8X8") => {
             context.add_warning_once(
-                "HWPX picture Pattern8x8 effect was preserved in Image IR; semantic exporters currently use the unfiltered source bytes.",
+                "HWPX picture Pattern8x8 effect was preserved in Image IR; HTML follows the rHWP SVG grayscale fallback while other semantic exporters use the unfiltered source bytes.",
             );
             (false, Some(ImageEffect::Pattern8x8))
         }
@@ -8320,7 +8320,7 @@ mod tests {
         assert_eq!(image.effect, Some(ImageEffect::BlackWhite));
         assert!(context.warnings.iter().any(|warning| {
             warning.message.contains("BLACK_WHITE effect")
-                && warning.message.contains("grayscale approximation")
+                && warning.message.contains("grayscale and high contrast")
         }));
 
         let pattern_image = extract_hwpx_image_from_pic_xml(

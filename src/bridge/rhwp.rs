@@ -1795,12 +1795,12 @@ impl<'a> BridgeContext<'a> {
 
         if picture.image_attr.effect == RhwpImageEffect::BlackWhite {
             self.add_warning_once(
-                "rhwp picture BlackWhite effect was represented as a grayscale approximation because Image IR does not distinguish threshold black-and-white.",
+                "rhwp picture BlackWhite effect was preserved in Image IR; HTML approximates threshold black-and-white with grayscale and high contrast.",
             );
         }
         if picture.image_attr.effect == RhwpImageEffect::Pattern8x8 {
             self.add_warning_once(
-                "rhwp picture Pattern8x8 effect was preserved in Image IR; semantic exporters currently use the unfiltered source bytes.",
+                "rhwp picture Pattern8x8 effect was preserved in Image IR; HTML follows the rHWP SVG grayscale fallback while other semantic exporters use the unfiltered source bytes.",
             );
         }
 
@@ -1819,8 +1819,8 @@ impl<'a> BridgeContext<'a> {
                 "rhwp picture placement was preserved in Image IR; semantic exporters currently linearize images without floating page placement.",
             );
         }
-        // GrayScale is modeled directly. BlackWhite is retained as a visible
-        // grayscale approximation with the warning above.
+        // Every rHWP image effect is retained in Image IR. HTML approximations
+        // are selected by the exporter from the exact effect variant.
         if picture.image_attr.brightness != 0 || picture.image_attr.contrast != 0 {
             self.add_warning_once(&format!(
                 "rhwp picture brightness/contrast (brightness:{},contrast:{}) was preserved in Image IR; semantic exporters currently use the unadjusted source bytes.",
@@ -5720,7 +5720,7 @@ mod tests {
         ));
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("BlackWhite effect")
-                && warning.message.contains("grayscale approximation")
+                && warning.message.contains("grayscale and high contrast")
         }));
     }
 

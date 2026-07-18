@@ -2521,8 +2521,17 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
     if let Some(border) = &image.border {
         declarations.push(format!("border: {}", render_css_border(border)));
     }
-    if image.grayscale {
-        declarations.push("filter: grayscale(100%)".to_string());
+    match image.effect {
+        Some(crate::ir::ImageEffect::Grayscale | crate::ir::ImageEffect::Pattern8x8) => {
+            declarations.push("filter: grayscale(100%)".to_string());
+        }
+        Some(crate::ir::ImageEffect::BlackWhite) => {
+            declarations.push("filter: grayscale(100%) contrast(1000%)".to_string());
+        }
+        None if image.grayscale => {
+            declarations.push("filter: grayscale(100%)".to_string());
+        }
+        None => {}
     }
     if let Some(opacity) = image
         .opacity
@@ -5873,6 +5882,7 @@ mod tests {
                 opacity_raw: Some(128),
             }),
             grayscale: true,
+            effect: Some(crate::ir::ImageEffect::BlackWhite),
             opacity: Some(0.5),
             rotation_degrees: Some(90.0),
             flip_horizontal: Some(true),
@@ -5909,7 +5919,7 @@ mod tests {
         assert!(html.contains("border: 2px solid #112233"));
         assert!(html.contains("data-border-outline=\"outer\""));
         assert!(html.contains("data-border-opacity-raw=\"128\""));
-        assert!(html.contains("filter: grayscale(100%)"));
+        assert!(html.contains("filter: grayscale(100%) contrast(1000%)"));
         assert!(html.contains("opacity: 0.5"));
         assert!(html.contains("transform: rotate(90deg) scaleX(-1) scaleY(-1)"));
         assert!(html.contains("data-original-width-px=\"400\""));
