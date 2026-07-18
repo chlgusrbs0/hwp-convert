@@ -12,11 +12,11 @@ use crate::ir::{
     Alignment, Block, Border, BorderStyle, CaptionLayout, CaptionPlacement, CharacterOverlap,
     Chart, Color, Document, Equation, EquationKind, FillStyle, HeaderFooter, HeaderFooterPlacement,
     Image, ImageFillMode, Inline, Link, ListInfo, ListKind, MasterPage, Note, NoteId, NoteKind,
-    ObjectCaption, Paragraph, ParagraphBreakKind, ParagraphRole, ParagraphStyle, Resource,
-    ResourceId, ResourceStore, RubyAnnotation, Section, Shape, ShapeGeometry, ShapeShadow,
-    ShapeTransform, Table, TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle,
-    TableZone, TextDecorationStyle, TextRun, TextShadow, TextStyle, UnknownBlock, UnknownInline,
-    VerticalAlign,
+    ObjectBorderMetadata, ObjectCaption, Paragraph, ParagraphBreakKind, ParagraphRole,
+    ParagraphStyle, Resource, ResourceId, ResourceStore, RubyAnnotation, Section, Shape,
+    ShapeGeometry, ShapeShadow, ShapeTransform, Table, TableCell, TableCellStyle,
+    TableCellTextDirection, TableRow, TableStyle, TableZone, TextDecorationStyle, TextRun,
+    TextShadow, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -1621,21 +1621,22 @@ fn render_html_shape_element(
     }
     let transform_metadata = render_html_shape_transform_metadata(shape);
     let line_metadata = render_html_shape_line_metadata(shape);
+    let border_metadata = render_html_object_border_metadata(shape.border_metadata.as_ref());
     let style = render_html_style_attr(&declarations.join("; "));
     if !shape.children.is_empty() {
         let content = render_html_blocks(&shape.children, resources, image_asset_prefix);
         format!(
-            "<div class=\"shape-group\"{transform_metadata}{line_metadata}{style}>\n{content}</div>\n"
+            "<div class=\"shape-group\"{transform_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
         )
     } else if !shape.content.is_empty() {
         let content = render_html_blocks(&shape.content, resources, image_asset_prefix);
         format!(
-            "<div class=\"shape-placeholder shape-content\"{transform_metadata}{line_metadata}{style}>\n{content}</div>\n"
+            "<div class=\"shape-placeholder shape-content\"{transform_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
         )
     } else {
         let content = render_html_fallback_text(&shape_display_text(shape));
         format!(
-            "<p><span class=\"shape-placeholder\"{transform_metadata}{line_metadata}{style}>{content}</span></p>\n"
+            "<p><span class=\"shape-placeholder\"{transform_metadata}{line_metadata}{border_metadata}{style}>{content}</span></p>\n"
         )
     }
 }
@@ -1685,6 +1686,20 @@ fn render_html_object_transform_metadata(transform: Option<&ShapeTransform>) -> 
     } else {
         format!(" {}", attributes.join(" "))
     }
+}
+
+fn render_html_object_border_metadata(metadata: Option<&ObjectBorderMetadata>) -> String {
+    let Some(metadata) = metadata else {
+        return String::new();
+    };
+    let mut attributes = vec![format!(
+        "data-border-outline=\"{}\"",
+        metadata.outline.as_str()
+    )];
+    if let Some(opacity) = metadata.opacity_raw {
+        attributes.push(format!("data-border-opacity-raw=\"{opacity}\""));
+    }
+    format!(" {}", attributes.join(" "))
 }
 
 fn render_html_shape_line_metadata(shape: &Shape) -> String {
@@ -2533,10 +2548,12 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
         declarations.push(format!("transform: {transform}"));
     }
     let transform_metadata = render_html_object_transform_metadata(image.transform.as_ref());
-    let tag = render_html_cropped_image(image, &src, &alt, &declarations, &transform_metadata)
+    let border_metadata = render_html_object_border_metadata(image.border_metadata.as_ref());
+    let object_metadata = format!("{transform_metadata}{border_metadata}");
+    let tag = render_html_cropped_image(image, &src, &alt, &declarations, &object_metadata)
         .unwrap_or_else(|| {
             let style = render_html_style_attr(&declarations.join("; "));
-            format!("<img src=\"{src}\" alt=\"{alt}\"{width}{height}{transform_metadata}{style} />")
+            format!("<img src=\"{src}\" alt=\"{alt}\"{width}{height}{object_metadata}{style} />")
         });
 
     if let Some(caption) = &image.caption_content {
@@ -2665,7 +2682,7 @@ fn render_html_cropped_image(
     src: &str,
     alt: &str,
     declarations: &[String],
-    transform_metadata: &str,
+    object_metadata: &str,
 ) -> Option<String> {
     let crop = image.crop?;
     let display_width = image.width?.0;
@@ -2705,7 +2722,7 @@ fn render_html_cropped_image(
     outer_declarations.push("display: inline-block".to_string());
     let outer_style = render_html_style_attr(&outer_declarations.join("; "));
     Some(format!(
-        "<span{transform_metadata}{outer_style}><span style=\"position: relative; display: inline-block; overflow: hidden; width: {display_width}px; height: {display_height}px\"><img src=\"{src}\" alt=\"{alt}\" style=\"position: absolute; max-width: none; left: {}px; top: {}px; width: {}px; height: {}px\" /></span></span>",
+        "<span{object_metadata}{outer_style}><span style=\"position: relative; display: inline-block; overflow: hidden; width: {display_width}px; height: {display_height}px\"><img src=\"{src}\" alt=\"{alt}\" style=\"position: absolute; max-width: none; left: {}px; top: {}px; width: {}px; height: {}px\" /></span></span>",
         -crop.left.0 * scale_x,
         -crop.top.0 * scale_y,
         source_width * scale_x,
@@ -3852,16 +3869,16 @@ mod tests {
     use super::*;
     use crate::ir::{
         AffineTransform, Alignment, BinaryResource, BinaryResourceKind, Border, BorderFillDiagonal,
-        BorderStyle, CharacterOverlap, Chart, Color, ConversionWarning, DocumentControl, Equation,
-        EquationKind, FillStyle, FormControlKind, HeaderFooter, HeaderFooterPlacement, IR_VERSION,
-        Image, ImageCrop, ImageResource, Indent, LengthPt, LengthPx, LineSpacingMode, Link,
-        ListInfo, ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId, NoteKind,
-        NoteStore, ObjectCaption, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource,
-        ResourceId, ResourceStore, RubyAnnotation, Section, Shape, ShapeConnector,
-        ShapeConnectorKind, ShapeConnectorPoint, ShapeKind, ShapeLineMetadata, ShapePoint,
-        ShapeTransform, Spacing, StyleSheet, Table, TableCaption, TableCell, TableCellStyle,
-        TableCellTextDirection, TableRow, TableStyle, TextBorderFill, TextRun, TextShadow,
-        TextStyle, UnknownInline, WarningCode,
+        BorderOutline, BorderStyle, CharacterOverlap, Chart, Color, ConversionWarning,
+        DocumentControl, Equation, EquationKind, FillStyle, FormControlKind, HeaderFooter,
+        HeaderFooterPlacement, IR_VERSION, Image, ImageCrop, ImageResource, Indent, LengthPt,
+        LengthPx, LineSpacingMode, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage,
+        Metadata, Note, NoteId, NoteKind, NoteStore, ObjectCaption, Paragraph, ParagraphRole,
+        ParagraphStyle, Percent, Resource, ResourceId, ResourceStore, RubyAnnotation, Section,
+        Shape, ShapeConnector, ShapeConnectorKind, ShapeConnectorPoint, ShapeKind,
+        ShapeLineMetadata, ShapePoint, ShapeTransform, Spacing, StyleSheet, Table, TableCaption,
+        TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle, TextBorderFill,
+        TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -5851,6 +5868,10 @@ mod tests {
                     a: 255,
                 }),
             }),
+            border_metadata: Some(ObjectBorderMetadata {
+                outline: BorderOutline::Outer,
+                opacity_raw: Some(128),
+            }),
             grayscale: true,
             opacity: Some(0.5),
             rotation_degrees: Some(90.0),
@@ -5886,6 +5907,8 @@ mod tests {
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
         assert!(html.contains("border: 2px solid #112233"));
+        assert!(html.contains("data-border-outline=\"outer\""));
+        assert!(html.contains("data-border-opacity-raw=\"128\""));
         assert!(html.contains("filter: grayscale(100%)"));
         assert!(html.contains("opacity: 0.5"));
         assert!(html.contains("transform: rotate(90deg) scaleX(-1) scaleY(-1)"));
@@ -5914,6 +5937,10 @@ mod tests {
                     b: 51,
                     a: 255,
                 }),
+            }),
+            border_metadata: Some(ObjectBorderMetadata {
+                outline: BorderOutline::Inner,
+                opacity_raw: None,
             }),
             background_color: Some(Color {
                 r: 68,
@@ -5992,6 +6019,7 @@ mod tests {
 
         assert!(html.contains("background-color: #445566"));
         assert!(html.contains("border: 2px dotted #112233"));
+        assert!(html.contains("data-border-outline=\"inner\""));
         assert!(html.contains("box-shadow: 2px -1px rgba(17, 34, 51,"));
         assert!(html.contains("transform: rotate(90deg) scaleX(-1) scaleY(-1)"));
         assert!(html.contains("display: inline-block"));

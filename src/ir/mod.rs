@@ -73,7 +73,8 @@ use serde::{Deserialize, Serialize};
 /// v76: added shape text-box maximum-width metadata.
 /// v77: added structured paragraph border-fill metadata.
 /// v78: added structured image source-transform metadata.
-pub const IR_VERSION: u16 = 78;
+/// v79: added image and shape border source metadata.
+pub const IR_VERSION: u16 = 79;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1236,6 +1237,8 @@ pub struct Image {
     /// Uniform border around the image, if any.
     #[serde(default)]
     pub border: Option<Border>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_metadata: Option<ObjectBorderMetadata>,
     /// Grayscale/black-and-white rendering effect.
     #[serde(default)]
     pub grayscale: bool,
@@ -1423,6 +1426,8 @@ pub struct Shape {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border: Option<Border>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_metadata: Option<ObjectBorderMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_color: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1868,6 +1873,34 @@ pub struct Border {
     pub width: LengthPx,
     pub style: BorderStyle,
     pub color: Option<Color>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ObjectBorderMetadata {
+    pub outline: BorderOutline,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity_raw: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BorderOutline {
+    #[default]
+    Normal,
+    Outer,
+    Inner,
+    Unknown(u8),
+}
+
+impl BorderOutline {
+    pub fn as_str(self) -> String {
+        match self {
+            Self::Normal => "normal".to_string(),
+            Self::Outer => "outer".to_string(),
+            Self::Inner => "inner".to_string(),
+            Self::Unknown(raw) => format!("unknown_{raw}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]

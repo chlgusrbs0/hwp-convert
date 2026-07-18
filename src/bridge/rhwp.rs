@@ -45,7 +45,7 @@ use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_r
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
     AffineTransform, BinaryResource, BinaryResourceKind, Block, Border, BorderFillDiagonal,
-    BorderStyle, CaptionLayout, CaptionPlacement, CharacterOverlap, Color,
+    BorderOutline, BorderStyle, CaptionLayout, CaptionPlacement, CharacterOverlap, Color,
     ColumnDirection as IrColumnDirection, ColumnLayout, ColumnLayoutKind, ConversionWarning,
     Document, DocumentControl, DocumentField, Equation, EquationKind, FieldKind, FillStyle,
     FontFallback, FormControlKind, GradientColor, HeaderFooter, HeaderFooterPlacement,
@@ -53,16 +53,16 @@ use crate::ir::{
     ImageEffect as IrImageEffect, ImageFillMode, ImagePlacement, ImageResource, ImageTextWrap,
     Inline, LengthPt, LengthPx, LineSpacingMode, Link, ListInfo, ListKind, ListMarkerLayout,
     MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
-    NumberingKind, ObjectCaption, ObjectPlacement, PageBinding, PageBorderFillLayout, PageLayout,
-    Paragraph, ParagraphBreakKind, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent,
-    RawSectionRecord, Resource, ResourceId, ResourceStore, RubyAnnotation, ScriptTextStyle,
-    Section, SectionLayout, Shape, ShapeConnector, ShapeConnectorKind, ShapeConnectorPoint,
-    ShapeGeometry, ShapeKind, ShapeLineMetadata, ShapePoint, ShapeShadow, ShapeTransform,
-    SourceStyleDefinition, SourceStyleKind, Spacing, StyleSheet, TabAlignment, TabDefinition,
-    TabStop, Table, TableCell, TableCellStyle, TableCellTextDirection, TablePageBreak, TableRow,
-    TableStyle, TableZone, TextBorderFill, TextDecorationStyle, TextRun, TextScript, TextShadow,
-    TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
-    VerticalRelativeTo, WarningCode,
+    NumberingKind, ObjectBorderMetadata, ObjectCaption, ObjectPlacement, PageBinding,
+    PageBorderFillLayout, PageLayout, Paragraph, ParagraphBreakKind, ParagraphRole, ParagraphStyle,
+    ParagraphStyleId, Percent, RawSectionRecord, Resource, ResourceId, ResourceStore,
+    RubyAnnotation, ScriptTextStyle, Section, SectionLayout, Shape, ShapeConnector,
+    ShapeConnectorKind, ShapeConnectorPoint, ShapeGeometry, ShapeKind, ShapeLineMetadata,
+    ShapePoint, ShapeShadow, ShapeTransform, SourceStyleDefinition, SourceStyleKind, Spacing,
+    StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle,
+    TableCellTextDirection, TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill,
+    TextDecorationStyle, TextRun, TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline,
+    VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1685,6 +1685,15 @@ impl<'a> BridgeContext<'a> {
     fn map_picture_block(&mut self, picture: &Picture) -> Block {
         self.warn_unsupported_picture_transform(picture);
         let transform = self.map_shape_transform(&picture.shape_attr);
+        let border_metadata = map_object_border_metadata(
+            &picture.border_attr,
+            (picture.border_opacity != 0).then_some(picture.border_opacity),
+        );
+        if border_metadata.is_some() {
+            self.add_warning_once(
+                "rhwp picture border outline and raw opacity were preserved in Image IR and HTML metadata; semantic exporters do not infer unsupported border alignment or opacity semantics.",
+            );
+        }
         if transform.as_ref().is_some_and(|transform| {
             transform.group_offset_x.is_some()
                 || transform.group_offset_y.is_some()
@@ -1730,6 +1739,7 @@ impl<'a> BridgeContext<'a> {
                 current_height: hwp_units_to_px_option(picture.shape_attr.current_height),
                 transform,
                 border: map_image_border(picture),
+                border_metadata,
                 grayscale: matches!(
                     picture.image_attr.effect,
                     RhwpImageEffect::GrayScale | RhwpImageEffect::BlackWhite
@@ -1817,9 +1827,6 @@ impl<'a> BridgeContext<'a> {
                 picture.image_attr.brightness, picture.image_attr.contrast
             ));
         }
-        if picture.border_opacity != 0 {
-            details.push(format!("border_opacity={}", picture.border_opacity));
-        }
         if picture.padding.left < 0
             || picture.padding.right < 0
             || picture.padding.top < 0
@@ -1877,6 +1884,8 @@ impl<'a> BridgeContext<'a> {
         let common = shape.common();
         let drawing = shape.drawing();
         let border = drawing.and_then(|drawing| map_shape_border_line(&drawing.border_line));
+        let border_metadata =
+            drawing.and_then(|drawing| map_object_border_metadata(&drawing.border_line, None));
         let fill = drawing.and_then(|drawing| self.map_fill_style(&drawing.fill, "shape fill"));
         let shadow = drawing.and_then(map_shape_shadow);
         let background_color = match &fill {
@@ -1897,6 +1906,11 @@ impl<'a> BridgeContext<'a> {
         if shadow.is_some() {
             self.add_warning_once(
                 "rhwp shape shadow type, color, offsets, and transparency were preserved in Shape IR; HTML approximates them with CSS box-shadow while nonvisual exporters do not render the effect.",
+            );
+        }
+        if border_metadata.is_some() {
+            self.add_warning_once(
+                "rhwp shape border outline alignment was preserved in Shape IR and HTML metadata; semantic exporters do not apply inside/outside stroke alignment.",
             );
         }
         if line_metadata
@@ -1952,6 +1966,7 @@ impl<'a> BridgeContext<'a> {
             },
             description,
             border,
+            border_metadata,
             background_color,
             fill,
             shadow,
@@ -3690,6 +3705,22 @@ fn map_shape_border_line(line: &RhwpShapeBorderLine) -> Option<Border> {
     })
 }
 
+fn map_object_border_metadata(
+    line: &RhwpShapeBorderLine,
+    opacity_raw: Option<u8>,
+) -> Option<ObjectBorderMetadata> {
+    let outline = match line.outline_style {
+        0 => BorderOutline::Normal,
+        1 => BorderOutline::Outer,
+        2 => BorderOutline::Inner,
+        raw => BorderOutline::Unknown(raw),
+    };
+    (outline != BorderOutline::Normal || opacity_raw.is_some()).then_some(ObjectBorderMetadata {
+        outline,
+        opacity_raw,
+    })
+}
+
 fn shape_unmodeled_presentation_details(
     drawing: &rhwp::model::shape::DrawingObjAttr,
 ) -> Option<String> {
@@ -5177,7 +5208,7 @@ mod tests {
                     color: 0x00332211,
                     width: 150,
                     attr: 3,
-                    ..Default::default()
+                    outline_style: 2,
                 },
                 fill: Fill {
                     fill_type: FillType::Solid,
@@ -5330,6 +5361,13 @@ mod tests {
                     })
                 );
                 assert_eq!(
+                    shape.border_metadata,
+                    Some(ObjectBorderMetadata {
+                        outline: BorderOutline::Inner,
+                        opacity_raw: None,
+                    })
+                );
+                assert_eq!(
                     shape.shadow,
                     Some(ShapeShadow {
                         kind: 4,
@@ -5368,6 +5406,11 @@ mod tests {
             warning
                 .message
                 .contains("affine transform were preserved in ShapeTransform IR")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("shape border outline alignment was preserved")
         }));
     }
 
@@ -5810,6 +5853,10 @@ mod tests {
             border_width: 5,
             border_color: 0x00112233,
             border_opacity: 128,
+            border_attr: RhwpShapeBorderLine {
+                outline_style: 1,
+                ..Default::default()
+            },
             padding: rhwp::model::Padding {
                 left: -10,
                 right: 20,
@@ -5885,6 +5932,13 @@ mod tests {
         assert_eq!(image.original_height, Some(LengthPx(200.0)));
         assert_eq!(image.current_width, Some(LengthPx(300.0)));
         assert_eq!(image.current_height, Some(LengthPx(150.0)));
+        assert_eq!(
+            image.border_metadata,
+            Some(ObjectBorderMetadata {
+                outline: BorderOutline::Outer,
+                opacity_raw: Some(128),
+            })
+        );
         assert_eq!(
             image.transform,
             Some(ShapeTransform {
@@ -5964,8 +6018,13 @@ mod tests {
                 && warning.message.contains("preserved in Image IR")
         }));
         assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("picture border outline and raw opacity")
+                && warning.message.contains("preserved in Image IR")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("picture visual properties")
-                && warning.message.contains("border_opacity=128")
                 && warning.message.contains("negative_padding=-10/20/30/40")
         }));
     }
