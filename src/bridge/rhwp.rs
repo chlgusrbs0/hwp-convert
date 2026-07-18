@@ -1876,8 +1876,10 @@ impl<'a> BridgeContext<'a> {
         let kind = match shape {
             ShapeObject::Line(_) => ShapeKind::Line,
             ShapeObject::Rectangle(_) => ShapeKind::Rectangle,
-            ShapeObject::Ellipse(_) | ShapeObject::Arc(_) => ShapeKind::Ellipse,
-            ShapeObject::Polygon(_) | ShapeObject::Curve(_) => ShapeKind::Polygon,
+            ShapeObject::Ellipse(_) => ShapeKind::Ellipse,
+            ShapeObject::Arc(_) => ShapeKind::Arc,
+            ShapeObject::Polygon(_) => ShapeKind::Polygon,
+            ShapeObject::Curve(_) => ShapeKind::Curve,
             ShapeObject::Group(_) => ShapeKind::Group,
             ShapeObject::Picture(_) => ShapeKind::Unknown,
         };
@@ -4468,10 +4470,11 @@ mod tests {
         Paragraph as RhwpParagraph,
     };
     use rhwp::model::shape::{
-        Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection,
+        ArcShape as RhwpArcShape, Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection,
         CommonObjAttr as RhwpCommonObjAttr, ConnectorControlPoint as RhwpConnectorControlPoint,
-        ConnectorData as RhwpConnectorData, DrawingObjAttr as RhwpDrawingObjAttr,
-        GroupShape as RhwpGroupShape, LineShape as RhwpLineShape, LinkLineType as RhwpLinkLineType,
+        ConnectorData as RhwpConnectorData, CurveShape as RhwpCurveShape,
+        DrawingObjAttr as RhwpDrawingObjAttr, GroupShape as RhwpGroupShape,
+        LineShape as RhwpLineShape, LinkLineType as RhwpLinkLineType,
         RectangleShape as RhwpRectangleShape, ShapeComponentAttr as RhwpShapeComponentAttr,
         TextBox as RhwpTextBox,
     };
@@ -5169,6 +5172,72 @@ mod tests {
                 .message
                 .contains("table caption structure and layout")
         }));
+    }
+
+    #[test]
+    fn preserves_arc_and_curve_as_distinct_shape_kinds() {
+        let document = RhwpDocument::default();
+        let mut context = BridgeContext::new(&document);
+        let arc = ShapeObject::Arc(RhwpArcShape {
+            arc_type: 2,
+            center: rhwp::model::Point { x: 750, y: 1500 },
+            axis1: rhwp::model::Point { x: 2250, y: 1500 },
+            axis2: rhwp::model::Point { x: 750, y: 3000 },
+            ..Default::default()
+        });
+        let curve = ShapeObject::Curve(RhwpCurveShape {
+            points: vec![
+                rhwp::model::Point { x: 0, y: 0 },
+                rhwp::model::Point { x: 750, y: 1500 },
+                rhwp::model::Point { x: 1500, y: 0 },
+            ],
+            segment_types: vec![1, 0],
+            ..Default::default()
+        });
+
+        let mapped_arc = context.map_shape(&arc);
+        let mapped_curve = context.map_shape(&curve);
+
+        assert_eq!(mapped_arc.kind, ShapeKind::Arc);
+        assert_eq!(
+            mapped_arc.geometry,
+            Some(ShapeGeometry::Arc {
+                arc_type: 2,
+                center: ShapePoint {
+                    x: LengthPx(10.0),
+                    y: LengthPx(20.0),
+                },
+                axis1: ShapePoint {
+                    x: LengthPx(30.0),
+                    y: LengthPx(20.0),
+                },
+                axis2: ShapePoint {
+                    x: LengthPx(10.0),
+                    y: LengthPx(40.0),
+                },
+            })
+        );
+        assert_eq!(mapped_curve.kind, ShapeKind::Curve);
+        assert_eq!(
+            mapped_curve.geometry,
+            Some(ShapeGeometry::Curve {
+                points: vec![
+                    ShapePoint {
+                        x: LengthPx(0.0),
+                        y: LengthPx(0.0),
+                    },
+                    ShapePoint {
+                        x: LengthPx(10.0),
+                        y: LengthPx(20.0),
+                    },
+                    ShapePoint {
+                        x: LengthPx(20.0),
+                        y: LengthPx(0.0),
+                    },
+                ],
+                segment_types: vec![1, 0],
+            })
+        );
     }
 
     #[test]

@@ -339,6 +339,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - HWP 문단 BorderFill IR 확장: `IR_VERSION` 76 → 77. rHWP 공개 `ParaShape.border_fill_id`가 참조하는 원본 ID, 단색·gradient·image 채우기와 대각선 정보를 문단 스타일에 보존한다. HTML 문단과 목록 항목은 기존 공용 fill 렌더링 경로와 `data-*` 메타데이터를 사용하며, 기존 단색 `background_color`는 호환성을 위해 유지한다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - HWP 이미지 원본 변환 IR 확장: `IR_VERSION` 77 → 78. rHWP 공개 `Picture.shape_attr`의 원본·현재 크기, 그룹 내부 오프셋, 회전 중심과 합성 affine 행렬을 공용 `ShapeTransform`으로 보존한다. 기존 이미지 크기 필드는 호환성을 위해 유지하고, HTML은 전체 페이지 좌표 변환을 임의 적용하지 않은 채 `data-*` 메타데이터를 출력한다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - HWP 이미지·도형 테두리 원본 메타데이터 IR 확장: `IR_VERSION` 78 → 79. rHWP 공개 `ShapeBorderLine.outline_style`의 normal·outer·inner·미지 값을 공용 `ObjectBorderMetadata`로 보존하고, 이미지의 `border_opacity` 원시값도 같은 구조에 남긴다. rHWP renderer가 투명도 의미를 적용하지 않으므로 HTML은 두 값을 `data-*`로만 출력하며 CSS 의미를 추정하지 않는다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
+- HWP 호·곡선 도형 종류 IR 확장: `IR_VERSION` 79 → 80. rHWP 공개 `ShapeObject::Arc`와 `ShapeObject::Curve`를 각각 `ShapeKind::Arc`, `ShapeKind::Curve`로 보존해 타원·다각형과 구분한다. 기존 구조화 `ShapeGeometry::Arc/Curve`와 일치시키고 HTML이 호를 완전한 타원처럼 표시하지 않게 한다. 동결된 HWPX 폴백의 기존 분류는 변경하지 않는다.
 - raw HWP record, unknown control bytes, HWPX XML을 직접 해석한 독자 기능 구현을 금지했다.
 - `src/hwpx.rs`는 즉시 삭제하지 않되 legacy 호환성 안전망으로 동결하고, 회귀·보안·기존 silent-drop 수정만 허용하기로 결정했다.
 - 신규 정확도 작업은 rHWP 공개 surface를 `mapped`, `normalized`, `warning/unknown`, `render-only`, `unmapped`, `upstream-needed`로 분류한 뒤 진행한다.

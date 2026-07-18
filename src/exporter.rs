@@ -1572,7 +1572,7 @@ fn render_html_shape_element(
                 (*round_rate_percent).min(100)
             ));
         }
-        Some(ShapeGeometry::Ellipse { .. }) => {
+        Some(ShapeGeometry::Ellipse { .. }) if shape.kind == crate::ir::ShapeKind::Ellipse => {
             declarations.push("border-radius: 50%".to_string());
         }
         _ => {}

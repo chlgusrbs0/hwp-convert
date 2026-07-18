@@ -74,7 +74,8 @@ use serde::{Deserialize, Serialize};
 /// v77: added structured paragraph border-fill metadata.
 /// v78: added structured image source-transform metadata.
 /// v79: added image and shape border source metadata.
-pub const IR_VERSION: u16 = 79;
+/// v80: distinguished arc and curve shape kinds.
+pub const IR_VERSION: u16 = 80;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1620,7 +1621,9 @@ pub enum ShapeKind {
     Line,
     Rectangle,
     Ellipse,
+    Arc,
     Polygon,
+    Curve,
     TextBox,
     Group,
     #[default]

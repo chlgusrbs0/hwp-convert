@@ -75,6 +75,8 @@ HWP 이미지와 도형 테두리의 normal·outer·inner 선 정렬을 공용 `
 
 HWP 직선 연결선은 시작 방향, 직선·꺾은선·곡선과 화살표 조합 9종, 시작·끝 연결 대상 ID/인덱스와 제어점을 `ShapeLineMetadata`에 보존한다. HTML은 이 값을 `data-*`로 남기지만 semantic 문서 흐름에서 개체끼리 다시 연결해 배치하지는 않는다.
 
+HWP 호와 곡선은 각각 `ShapeKind::Arc`, `ShapeKind::Curve`로 보존해 타원·다각형과 구분하며, 중심·축·호 종류 또는 제어점·segment 종류는 기존 구조화 geometry에 유지한다.
+
 HWP 도형 텍스트 상자는 세로 정렬, 안쪽 여백, 최대 폭과 문단 구조를 보존한다. HTML은 최대 폭을 CSS로 근사하며 정확한 줄 나눔과 페이지 배치는 renderer 경로의 책임이다.
 
 ### 미지원 control warning 동작
