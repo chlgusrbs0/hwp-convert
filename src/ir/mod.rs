@@ -57,7 +57,8 @@ use serde::{Deserialize, Serialize};
 /// v60: added table cell source list attributes and protection metadata.
 /// v61: added structured table border-fill metadata.
 /// v62: added structured image caption layout metadata.
-pub const IR_VERSION: u16 = 62;
+/// v63: added structured table caption blocks and layout metadata.
+pub const IR_VERSION: u16 = 63;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1389,6 +1390,16 @@ pub struct Table {
     pub style: TableStyle,
     #[serde(default)]
     pub zones: Vec<TableZone>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<TableCaption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TableCaption {
+    pub blocks: Vec<Block>,
+    pub placement: CaptionPlacement,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<CaptionLayout>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -1777,6 +1788,7 @@ mod tests {
         let table: Table = serde_json::from_str(r#"{ "rows": [], "style": {} }"#)
             .expect("older table JSON should deserialize");
         assert!(table.zones.is_empty());
+        assert_eq!(table.caption, None);
     }
 
     #[test]

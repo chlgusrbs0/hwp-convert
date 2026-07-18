@@ -769,6 +769,9 @@ fn collect_shapes_from_blocks<'a>(blocks: &'a [Block], shapes: &mut Vec<&'a Shap
                 collect_shapes_from_blocks(&shape.children, shapes);
             }
             Block::Table(table) => {
+                if let Some(caption) = &table.caption {
+                    collect_shapes_from_blocks(&caption.blocks, shapes);
+                }
                 for row in &table.rows {
                     for cell in &row.cells {
                         collect_shapes_from_blocks(&cell.blocks, shapes);
@@ -1486,6 +1489,10 @@ impl DocumentStats {
             Block::Table(table) => {
                 self.tables += 1;
                 self.table_rows += table.rows.len();
+
+                if let Some(caption) = &table.caption {
+                    self.count_blocks(&caption.blocks);
+                }
 
                 for row in &table.rows {
                     self.table_cells += row.cells.len();

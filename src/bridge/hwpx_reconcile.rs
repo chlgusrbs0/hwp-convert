@@ -115,6 +115,9 @@ fn supplement_list_markers(primary: &mut [Block], fallback: &[Block]) -> usize {
                 }
             }
             Block::Table(table) => {
+                if let Some(caption) = &mut table.caption {
+                    recovered += supplement_list_markers(&mut caption.blocks, fallback);
+                }
                 for row in &mut table.rows {
                     for cell in &mut row.cells {
                         recovered += supplement_list_markers(&mut cell.blocks, fallback);
@@ -146,6 +149,9 @@ fn collect_matching_list_info<'a>(
                 matches.push(paragraph.list.as_ref().expect("list checked above"));
             }
             Block::Table(table) => {
+                if let Some(caption) = &table.caption {
+                    collect_matching_list_info(&caption.blocks, text, kind, level, matches);
+                }
                 for row in &table.rows {
                     for cell in &row.cells {
                         collect_matching_list_info(&cell.blocks, text, kind, level, matches);
@@ -261,6 +267,9 @@ impl SemanticCoverage {
                 self.tables += 1;
                 self.styled_tables += usize::from(table.style != Default::default());
                 self.table_rows += table.rows.len();
+                if let Some(caption) = &table.caption {
+                    self.count_blocks(&caption.blocks);
+                }
                 for row in &table.rows {
                     self.table_cells += row.cells.len();
                     for cell in &row.cells {
@@ -461,10 +470,29 @@ fn collect_blocks_text(blocks: &[Block], chunks: &mut Vec<String>) {
             Block::ColumnLayout(_) => {}
             Block::DocumentControl(control) => push_text(Some(control.fallback_text()), chunks),
             Block::Table(table) => {
+                let caption_before = table.caption.as_ref().is_some_and(|caption| {
+                    matches!(
+                        caption.placement,
+                        crate::ir::CaptionPlacement::Left | crate::ir::CaptionPlacement::Top
+                    )
+                });
+                if caption_before {
+                    collect_blocks_text(
+                        &table
+                            .caption
+                            .as_ref()
+                            .expect("caption checked above")
+                            .blocks,
+                        chunks,
+                    );
+                }
                 for row in &table.rows {
                     for cell in &row.cells {
                         collect_blocks_text(&cell.blocks, chunks);
                     }
+                }
+                if let Some(caption) = table.caption.as_ref().filter(|_| !caption_before) {
+                    collect_blocks_text(&caption.blocks, chunks);
                 }
             }
             Block::Image(image) => {

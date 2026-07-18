@@ -54,10 +54,10 @@ use crate::ir::{
     ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, RawSectionRecord, Resource,
     ResourceId, ResourceStore, ScriptTextStyle, Section, SectionLayout, Shape, ShapeGeometry,
     ShapeKind, ShapePoint, ShapeShadow, SourceStyleDefinition, SourceStyleKind, Spacing,
-    StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle,
-    TableCellTextDirection, TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill,
-    TextDecorationStyle, TextRun, TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline,
-    VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCaption, TableCell,
+    TableCellStyle, TableCellTextDirection, TablePageBreak, TableRow, TableStyle, TableZone,
+    TextBorderFill, TextDecorationStyle, TextRun, TextScript, TextShadow, TextStyle, TextStyleId,
+    UnknownInline, VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1482,6 +1482,17 @@ impl<'a> BridgeContext<'a> {
             }) => *background_color,
             _ => None,
         };
+        let caption = table.caption.as_ref().map(|caption| {
+            let blocks = self.map_caption_blocks(caption);
+            self.add_warning_once(
+                "rHWP table caption structure and layout were preserved in Document IR; HTML approximates the layout while other semantic exporters preserve caption content and order without page layout.",
+            );
+            TableCaption {
+                blocks,
+                placement: map_caption_placement(caption.direction),
+                layout: Some(self.map_caption_layout(caption, "table")),
+            }
+        });
 
         Table {
             rows,
@@ -1510,6 +1521,7 @@ impl<'a> BridgeContext<'a> {
                 placement,
             },
             zones,
+            caption,
         }
     }
 
@@ -1563,31 +1575,7 @@ impl<'a> BridgeContext<'a> {
     }
 
     fn map_table_blocks(&mut self, table: &RhwpTable) -> Vec<Block> {
-        let table_block = Block::Table(self.map_table(table));
-        let Some(caption) = table.caption.as_ref() else {
-            return vec![table_block];
-        };
-
-        let mut caption_blocks = self.map_caption_blocks(caption);
-        if caption_blocks.is_empty() {
-            return vec![table_block];
-        }
-
-        self.add_warning_once(
-            "rhwp exposed table captions; hwp-convert preserved them as adjacent caption blocks because Table IR does not yet model table captions.",
-        );
-
-        match caption.direction {
-            RhwpCaptionDirection::Left | RhwpCaptionDirection::Top => {
-                caption_blocks.push(table_block);
-                caption_blocks
-            }
-            RhwpCaptionDirection::Right | RhwpCaptionDirection::Bottom => {
-                let mut blocks = vec![table_block];
-                blocks.extend(caption_blocks);
-                blocks
-            }
-        }
+        vec![Block::Table(self.map_table(table))]
     }
 
     fn map_caption_blocks(&mut self, caption: &RhwpCaption) -> Vec<Block> {
@@ -1706,31 +1694,11 @@ impl<'a> BridgeContext<'a> {
         let caption_placement = picture
             .caption
             .as_ref()
-            .map(|caption| match caption.direction {
-                RhwpCaptionDirection::Left => CaptionPlacement::Left,
-                RhwpCaptionDirection::Right => CaptionPlacement::Right,
-                RhwpCaptionDirection::Top => CaptionPlacement::Top,
-                RhwpCaptionDirection::Bottom => CaptionPlacement::Bottom,
-            });
-        let caption_layout = picture.caption.as_ref().map(|caption| {
-            if caption.spacing < 0 {
-                self.add_warning_once(&format!(
-                    "rHWP image caption spacing was negative ({} HWPUNIT); hwp-convert preserved the remaining caption layout and omitted the invalid spacing.",
-                    caption.spacing
-                ));
-            }
-            CaptionLayout {
-                vertical_align: match caption.vert_align {
-                    RhwpCaptionVertAlign::Top => VerticalAlign::Top,
-                    RhwpCaptionVertAlign::Center => VerticalAlign::Middle,
-                    RhwpCaptionVertAlign::Bottom => VerticalAlign::Bottom,
-                },
-                width: hwp_units_to_px_option(caption.width),
-                spacing: i16_hwp_units_to_px_option(caption.spacing),
-                max_width: hwp_units_to_px_option(caption.max_width),
-                include_margin: caption.include_margin,
-            }
-        });
+            .map(|caption| map_caption_placement(caption.direction));
+        let caption_layout = picture
+            .caption
+            .as_ref()
+            .map(|caption| self.map_caption_layout(caption, "image"));
         if caption_layout.is_some() {
             self.add_warning_once(
                 "rHWP image caption layout was preserved in Document IR; HTML approximates it while other semantic exporters retain caption text without layout.",
@@ -3049,6 +3017,35 @@ impl<'a> BridgeContext<'a> {
         let text = crate::util::plain_text::blocks_to_plain_text(&blocks);
 
         non_empty_string(&text)
+    }
+
+    fn map_caption_layout(&mut self, caption: &RhwpCaption, object_kind: &str) -> CaptionLayout {
+        if caption.spacing < 0 {
+            self.add_warning_once(&format!(
+                "rHWP {object_kind} caption spacing was negative ({} HWPUNIT); hwp-convert preserved the remaining caption layout and omitted the invalid spacing.",
+                caption.spacing
+            ));
+        }
+        CaptionLayout {
+            vertical_align: match caption.vert_align {
+                RhwpCaptionVertAlign::Top => VerticalAlign::Top,
+                RhwpCaptionVertAlign::Center => VerticalAlign::Middle,
+                RhwpCaptionVertAlign::Bottom => VerticalAlign::Bottom,
+            },
+            width: hwp_units_to_px_option(caption.width),
+            spacing: i16_hwp_units_to_px_option(caption.spacing),
+            max_width: hwp_units_to_px_option(caption.max_width),
+            include_margin: caption.include_margin,
+        }
+    }
+}
+
+fn map_caption_placement(direction: RhwpCaptionDirection) -> CaptionPlacement {
+    match direction {
+        RhwpCaptionDirection::Left => CaptionPlacement::Left,
+        RhwpCaptionDirection::Right => CaptionPlacement::Right,
+        RhwpCaptionDirection::Top => CaptionPlacement::Top,
+        RhwpCaptionDirection::Bottom => CaptionPlacement::Bottom,
     }
 }
 
@@ -4985,7 +4982,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_table_caption_as_adjacent_caption_block() {
+    fn preserves_table_caption_structure_and_layout() {
         let cell = RhwpCell {
             row: 0,
             col: 0,
@@ -5003,11 +5000,15 @@ mod tests {
             cells: vec![cell],
             caption: Some(RhwpCaption {
                 direction: RhwpCaptionDirection::Bottom,
+                vert_align: RhwpCaptionVertAlign::Bottom,
+                width: 3750,
+                spacing: 300,
+                max_width: 7500,
+                include_margin: true,
                 paragraphs: vec![RhwpParagraph {
                     text: "Table caption".to_string(),
                     ..Default::default()
                 }],
-                ..Default::default()
             }),
             ..Default::default()
         };
@@ -5025,23 +5026,36 @@ mod tests {
         let bridged = BridgeContext::new(&document).into_document();
         let blocks = &bridged.sections[0].blocks;
 
-        assert_eq!(blocks.len(), 2);
-        assert!(matches!(&blocks[0], Block::Table(_)));
-        match &blocks[1] {
-            Block::Paragraph(paragraph) => {
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+            Block::Table(table) => {
+                let caption = table.caption.as_ref().expect("table caption");
+                assert_eq!(caption.placement, CaptionPlacement::Bottom);
+                assert_eq!(
+                    caption.layout,
+                    Some(CaptionLayout {
+                        vertical_align: VerticalAlign::Bottom,
+                        width: Some(LengthPx(50.0)),
+                        spacing: Some(LengthPx(4.0)),
+                        max_width: Some(LengthPx(100.0)),
+                        include_margin: true,
+                    })
+                );
+                let Block::Paragraph(paragraph) = &caption.blocks[0] else {
+                    panic!("expected caption paragraph block");
+                };
                 assert_eq!(paragraph.role, ParagraphRole::Caption);
                 assert!(
                     matches!(&paragraph.inlines[0], Inline::Text(run) if run.text == "Table caption")
                 );
             }
-            other => panic!("expected caption paragraph block, got {other:?}"),
+            other => panic!("expected table block, got {other:?}"),
         }
-        assert!(
-            bridged
-                .warnings
-                .iter()
-                .any(|warning| { warning.message.contains("table captions") })
-        );
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("table caption structure and layout")
+        }));
     }
 
     #[test]

@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
 use crate::ir::{
-    Alignment, Block, Border, BorderStyle, CaptionLayout, Chart, Color, Document, Equation,
-    EquationKind, FillStyle, HeaderFooter, HeaderFooterPlacement, Image, ImageFillMode, Inline,
-    Link, ListInfo, ListKind, MasterPage, Note, NoteId, NoteKind, Paragraph, ParagraphRole,
+    Alignment, Block, Border, BorderStyle, CaptionLayout, CaptionPlacement, Chart, Color, Document,
+    Equation, EquationKind, FillStyle, HeaderFooter, HeaderFooterPlacement, Image, ImageFillMode,
+    Inline, Link, ListInfo, ListKind, MasterPage, Note, NoteId, NoteKind, Paragraph, ParagraphRole,
     ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, ShapeGeometry,
     ShapeShadow, Table, TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle,
     TableZone, TextDecorationStyle, TextRun, TextShadow, TextStyle, UnknownBlock, UnknownInline,
@@ -354,6 +354,9 @@ fn collect_block_unknown_warnings(blocks: &[Block], warnings: &mut Vec<String>) 
                 collect_inline_unknown_warnings(&paragraph.inlines, warnings);
             }
             Block::Table(table) => {
+                if let Some(caption) = &table.caption {
+                    collect_block_unknown_warnings(&caption.blocks, warnings);
+                }
                 for row in &table.rows {
                     for cell in &row.cells {
                         collect_block_unknown_warnings(&cell.blocks, warnings);
@@ -2243,7 +2246,7 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
 
     if let Some(caption) = &image.caption {
         let (figure_metadata, figure_style, caption_style) =
-            render_html_image_caption_layout(image.caption_layout, image.caption_placement);
+            render_html_caption_layout(image.caption_layout, image.caption_placement);
         let caption = format!(
             "<figcaption{caption_style}>{}</figcaption>",
             render_html_fallback_text(caption)
@@ -2267,13 +2270,13 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
     format!("{tag}\n")
 }
 
-fn render_html_image_caption_layout(
+fn render_html_caption_layout(
     layout: Option<CaptionLayout>,
-    placement: Option<crate::ir::CaptionPlacement>,
+    placement: Option<CaptionPlacement>,
 ) -> (String, String, String) {
     let Some(layout) = layout else {
         let legacy_style = match placement {
-            Some(crate::ir::CaptionPlacement::Left | crate::ir::CaptionPlacement::Right) => {
+            Some(CaptionPlacement::Left | CaptionPlacement::Right) => {
                 " style=\"display: inline-flex; align-items: center; gap: 0.5em\"".to_string()
             }
             _ => String::new(),
@@ -2284,7 +2287,7 @@ fn render_html_image_caption_layout(
     let metadata = format!(" data-caption-include-margin=\"{}\"", layout.include_margin);
     let mut figure_declarations = Vec::new();
     match placement {
-        Some(crate::ir::CaptionPlacement::Left | crate::ir::CaptionPlacement::Right) => {
+        Some(CaptionPlacement::Left | CaptionPlacement::Right) => {
             figure_declarations.push("display: inline-flex".to_string());
         }
         _ if layout.spacing.is_some() => {
@@ -2391,6 +2394,36 @@ fn render_css_transform(
 }
 
 fn render_html_table(table: &Table, resources: &ResourceStore, image_asset_prefix: &str) -> String {
+    let table_html = render_html_table_element(table, resources, image_asset_prefix);
+    let Some(caption) = &table.caption else {
+        return table_html;
+    };
+
+    let (figure_metadata, figure_style, caption_style) =
+        render_html_caption_layout(caption.layout, Some(caption.placement));
+    let caption_html = format!(
+        "<figcaption{caption_style}>{}</figcaption>\n",
+        render_html_blocks(&caption.blocks, resources, image_asset_prefix)
+    );
+    let content = match caption.placement {
+        CaptionPlacement::Left | CaptionPlacement::Top => {
+            format!("{caption_html}{table_html}")
+        }
+        CaptionPlacement::Right | CaptionPlacement::Bottom => {
+            format!("{table_html}{caption_html}")
+        }
+    };
+
+    format!(
+        "<figure data-object-kind=\"table\"{figure_metadata}{figure_style}>\n{content}</figure>\n"
+    )
+}
+
+fn render_html_table_element(
+    table: &Table,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let border_fill_metadata = render_html_border_fill_metadata(
         table.style.source_border_fill_id,
         table.style.diagonal.as_ref(),
@@ -2621,7 +2654,7 @@ fn render_markdown_block(
         Block::Paragraph(paragraph) => render_markdown_paragraph(paragraph),
         Block::ColumnLayout(_) => String::new(),
         Block::DocumentControl(control) => render_markdown_text(control.fallback_text()),
-        Block::Table(table) => render_markdown_table(table),
+        Block::Table(table) => render_markdown_table(table, resources, image_asset_prefix),
         Block::Image(image) => render_markdown_image(image, resources, image_asset_prefix),
         Block::Equation(equation) => render_markdown_equation(equation),
         Block::Shape(shape) => render_markdown_shape(shape, resources, image_asset_prefix),
@@ -2677,9 +2710,39 @@ fn render_markdown_inlines(inlines: &[Inline]) -> String {
     content
 }
 
-fn render_markdown_table(table: &Table) -> String {
+fn render_markdown_table(
+    table: &Table,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
+    let table_markdown = render_markdown_table_body(table);
+    let Some(caption) = &table.caption else {
+        return table_markdown;
+    };
+    let caption_markdown = caption
+        .blocks
+        .iter()
+        .map(|block| render_markdown_block(block, resources, image_asset_prefix))
+        .filter(|content| !content.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if caption_markdown.is_empty() {
+        return table_markdown;
+    }
+
+    match caption.placement {
+        CaptionPlacement::Left | CaptionPlacement::Top => {
+            format!("{caption_markdown}\n\n{table_markdown}")
+        }
+        CaptionPlacement::Right | CaptionPlacement::Bottom => {
+            format!("{table_markdown}\n\n{caption_markdown}")
+        }
+    }
+}
+
+fn render_markdown_table_body(table: &Table) -> String {
     if !can_render_markdown_table(table) {
-        return render_markdown_text(&plain_text::table_to_plain_text(table));
+        return render_markdown_text(&plain_text::table_body_to_plain_text(table));
     }
 
     let column_count = table.rows.first().map(|row| row.cells.len()).unwrap_or(0);
@@ -3393,8 +3456,8 @@ mod tests {
         LengthPx, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId,
         NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource,
         ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table,
-        TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle, TextBorderFill,
-        TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
+        TableCaption, TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle,
+        TextBorderFill, TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -4735,6 +4798,52 @@ mod tests {
         assert_eq!(
             markdown,
             "|  |  |\n| --- | --- |\n| cell1 | cell2 |\n| cell3 | cell4 |"
+        );
+    }
+
+    #[test]
+    fn renders_structured_table_caption_in_source_order() {
+        let mut table = match simple_table_block() {
+            Block::Table(table) => table,
+            other => panic!("expected table block, got {other:?}"),
+        };
+        table.caption = Some(TableCaption {
+            blocks: vec![Block::Paragraph(Paragraph {
+                role: ParagraphRole::Caption,
+                inlines: vec![Inline::Text(TextRun {
+                    text: "Table caption".to_string(),
+                    style: TextStyle::default(),
+                    style_ref: None,
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: None,
+            })],
+            placement: CaptionPlacement::Left,
+            layout: Some(CaptionLayout {
+                vertical_align: VerticalAlign::Middle,
+                width: Some(LengthPx(50.0)),
+                spacing: Some(LengthPx(4.0)),
+                max_width: Some(LengthPx(100.0)),
+                include_margin: true,
+            }),
+        });
+        let document = document_with_blocks(vec![Block::Table(table)]);
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+        let caption_position = html.find("<figcaption").expect("HTML caption");
+        let table_position = html.find("<table>").expect("HTML table");
+        assert!(html.contains("<figure data-object-kind=\"table\""));
+        assert!(html.contains("data-caption-include-margin=\"true\""));
+        assert!(html.contains("display: inline-flex; gap: 4px"));
+        assert!(html.contains("width: 50px; max-width: 100px; align-self: center"));
+        assert!(caption_position < table_position);
+
+        let markdown = render_markdown_document(&document);
+        assert!(markdown.starts_with("Table caption\n\n|  |  |"));
+        assert_eq!(
+            plain_text::to_plain_text(&document),
+            "Table caption\n[표]\ncell1 | cell2\ncell3 | cell4"
         );
     }
 

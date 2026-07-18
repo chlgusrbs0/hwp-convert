@@ -1,7 +1,7 @@
 use crate::ir::{
-    Block, Chart, Document, Equation, EquationKind, HeaderFooter, Image, Inline, ListInfo,
-    ListKind, MasterPage, Note, NoteKind, Paragraph, Shape, Table, TableCell, UnknownBlock,
-    UnknownInline,
+    Block, CaptionPlacement, Chart, Document, Equation, EquationKind, HeaderFooter, Image, Inline,
+    ListInfo, ListKind, MasterPage, Note, NoteKind, Paragraph, Shape, Table, TableCell,
+    UnknownBlock, UnknownInline,
 };
 
 const TABLE_FALLBACK_LABEL: &str = "[\u{D45C}]";
@@ -88,6 +88,32 @@ pub(crate) fn blocks_to_plain_text(blocks: &[Block]) -> String {
 }
 
 pub(crate) fn table_to_plain_text(table: &Table) -> String {
+    let table_text = table_body_to_plain_text(table);
+    let Some(caption) = &table.caption else {
+        return table_text;
+    };
+    let caption_text = caption
+        .blocks
+        .iter()
+        .map(block_to_plain_text)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if caption_text.is_empty() {
+        return table_text;
+    }
+
+    match caption.placement {
+        CaptionPlacement::Left | CaptionPlacement::Top => {
+            format!("{caption_text}\n{table_text}")
+        }
+        CaptionPlacement::Right | CaptionPlacement::Bottom => {
+            format!("{table_text}\n{caption_text}")
+        }
+    }
+}
+
+pub(crate) fn table_body_to_plain_text(table: &Table) -> String {
     let mut lines = vec![TABLE_FALLBACK_LABEL.to_string()];
 
     for row in &table.rows {
