@@ -1957,6 +1957,8 @@ impl<'a> BridgeContext<'a> {
             flip_vertical: shape.shape_attr().vert_flip.then_some(true),
             text_vertical_align: text_box
                 .and_then(|text_box| map_vertical_align(text_box.vertical_align)),
+            text_box_max_width: text_box
+                .and_then(|text_box| hwp_units_to_px_option(text_box.max_width)),
             padding_top: text_box
                 .and_then(|text_box| i16_hwp_units_to_px_option(text_box.margin_top)),
             padding_right: text_box
@@ -5247,6 +5249,7 @@ mod tests {
                 shadow_alpha: 64,
                 text_box: Some(RhwpTextBox {
                     vertical_align: RhwpVerticalAlign::Center,
+                    max_width: 4500,
                     margin_left: 75,
                     margin_right: 150,
                     margin_top: 225,
@@ -5337,6 +5340,7 @@ mod tests {
                     })
                 );
                 assert_eq!(shape.text_vertical_align, Some(VerticalAlign::Middle));
+                assert_eq!(shape.text_box_max_width, Some(LengthPx(60.0)));
                 assert_eq!(shape.padding_top, Some(LengthPx(3.0)));
                 assert_eq!(shape.padding_right, Some(LengthPx(2.0)));
                 assert_eq!(shape.padding_bottom, Some(LengthPx(4.0)));

@@ -70,7 +70,8 @@ use serde::{Deserialize, Serialize};
 /// v73: preserved distribute and split paragraph alignments.
 /// v74: added structured shape source-transform metadata.
 /// v75: added structured shape line-connector metadata.
-pub const IR_VERSION: u16 = 75;
+/// v76: added shape text-box maximum-width metadata.
+pub const IR_VERSION: u16 = 76;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1426,6 +1427,8 @@ pub struct Shape {
     pub flip_vertical: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_vertical_align: Option<VerticalAlign>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_box_max_width: Option<LengthPx>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub padding_top: Option<LengthPx>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

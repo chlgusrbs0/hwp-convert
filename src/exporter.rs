@@ -1588,6 +1588,9 @@ fn render_html_shape_element(
         };
         declarations.push(format!("justify-content: {justify_content}"));
     }
+    if let Some(max_width) = shape.text_box_max_width {
+        declarations.push(format!("max-width: {}px", max_width.0));
+    }
     if let Some(width) = shape.width {
         declarations.push(format!("width: {}px", width.0));
     }
@@ -5881,6 +5884,7 @@ mod tests {
             flip_horizontal: Some(true),
             flip_vertical: Some(true),
             text_vertical_align: Some(crate::ir::VerticalAlign::Middle),
+            text_box_max_width: Some(LengthPx(40.0)),
             padding_top: Some(LengthPx(1.0)),
             padding_right: Some(LengthPx(2.0)),
             padding_bottom: Some(LengthPx(3.0)),
@@ -5943,6 +5947,7 @@ mod tests {
         assert!(html.contains("padding-bottom: 3px"));
         assert!(html.contains("padding-left: 4px"));
         assert!(html.contains("justify-content: center"));
+        assert!(html.contains("max-width: 40px"));
         assert!(html.contains("border-radius: 25%"));
         assert!(html.contains("data-original-width-px=\"48\""));
         assert!(html.contains("data-group-offset-y-px=\"-2\""));
