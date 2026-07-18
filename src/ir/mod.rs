@@ -78,7 +78,8 @@ use serde::{Deserialize, Serialize};
 /// v81: added source instance identifiers for images and shapes.
 /// v82: added shape text-box direction and generalized its shared enum.
 /// v83: added object size criteria and raw source dimensions.
-pub const IR_VERSION: u16 = 83;
+/// v84: added raw source object attributes to placement metadata.
+pub const IR_VERSION: u16 = 84;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1308,6 +1309,8 @@ pub enum ImageEffect {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ObjectPlacement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_attributes: Option<u32>,
     pub treat_as_character: bool,
     pub flow_with_text: bool,
     pub allow_overlap: bool,

@@ -79,6 +79,8 @@ HWP 도형·이미지는 rHWP 공개 공통 개체 인스턴스 ID와 component 
 
 HWP 표·도형·이미지의 폭·높이 기준과 원본 수치를 `ObjectPlacement`에 보존한다. 절대 기준은 px 표시 크기로 변환하고, 종이·쪽·단·문단 기준의 1/10000 비율 값은 절대 px로 오해하지 않도록 표시 크기에서 제외하며 HTML `data-*`와 warning으로 남긴다.
 
+HWP 표·도형·이미지의 rHWP 공개 공통 개체 원본 속성 비트도 `ObjectPlacement.source_attributes`와 HTML `data-source-object-attributes`에 보존한다. typed 모델이 아직 분해하지 않은 비트 의미는 hwp-convert가 독자 해석하지 않는다.
+
 HWP 호와 곡선은 각각 `ShapeKind::Arc`, `ShapeKind::Curve`로 보존해 타원·다각형과 구분하며, 중심·축·호 종류 또는 제어점·segment 종류는 기존 구조화 geometry에 유지한다.
 
 HWP 도형 텍스트 상자는 세로 정렬, 가로·세로 글자 방향, 안쪽 여백, 최대 폭과 문단 구조를 보존한다. HTML은 세로쓰기 방향과 최대 폭을 CSS로 근사하며 정확한 줄 나눔과 페이지 배치는 renderer 경로의 책임이다.

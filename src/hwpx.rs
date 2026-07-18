@@ -3652,6 +3652,7 @@ fn hwpx_picture_placement(
             || z_order != 0
             || margins.iter().any(|margin| margin.0 != 0.0);
         return has_placement.then_some(ImagePlacement {
+            source_attributes: None,
             treat_as_character: true,
             flow_with_text: true,
             allow_overlap: false,
@@ -3755,6 +3756,7 @@ fn hwpx_picture_placement(
     )?;
 
     let placement = ImagePlacement {
+        source_attributes: None,
         treat_as_character,
         flow_with_text,
         allow_overlap,
@@ -8627,6 +8629,7 @@ mod tests {
         assert_eq!(
             image.placement,
             Some(ImagePlacement {
+                source_attributes: None,
                 treat_as_character: false,
                 flow_with_text: false,
                 allow_overlap: true,

@@ -343,6 +343,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - HWP 개체 원본 인스턴스 ID IR 확장: `IR_VERSION` 80 → 81. rHWP 공개 `CommonObjAttr.instance_id`, 도형 `DrawingObjAttr.inst_id`, 그림 `Picture.instance_id`를 도형·이미지에 보존한다. rHWP가 연결선 `SubjectID`를 도형 component ID와 공통 ID에 대조하므로, 기존 연결선 대상 참조를 실제 대상 개체와 다시 연결할 수 있게 한다. HTML은 이 값을 `data-*` 메타데이터로 남기며 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - HWP 도형 글상자 방향 IR 확장: `IR_VERSION` 81 → 82. rHWP renderer가 공개 `TextBox.list_attr`에서 확정한 가로쓰기·세로쓰기/영문 눕힘·세로쓰기/영문 세움 값을 도형에 보존한다. 표 셀과 같은 의미 체계를 공용 `TextDirection`으로 사용하고 기존 Rust 이름은 별칭으로 유지하며, HTML은 `writing-mode`·`text-orientation`과 원본 `data-text-direction`을 출력한다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - HWP 개체 상대 크기 기준 IR 확장: `IR_VERSION` 82 → 83. rHWP 공개 `CommonObjAttr.width_criterion/height_criterion`과 원본 폭·높이 값을 `ObjectPlacement`에 보존한다. 종이·쪽·단·문단 기준 값은 기준 영역의 1/10000 비율이므로 HWPUNIT px로 잘못 변환하지 않고, 절대 기준일 때만 기존 표시 크기를 만든다. HTML은 기준과 원본 값을 `data-*`로 출력하며 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
+- HWP 개체 원본 속성 비트 IR 확장: `IR_VERSION` 83 → 84. rHWP 공개 `CommonObjAttr.attr`을 `ObjectPlacement.source_attributes`에 그대로 보존한다. 현재 typed 필드로 분해되지 않은 배치 플래그의 의미를 독자 해석하지 않고 원본 값과 warning 추적 근거만 유지하며, HTML은 `data-source-object-attributes`로 출력한다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - raw HWP record, unknown control bytes, HWPX XML을 직접 해석한 독자 기능 구현을 금지했다.
 - `src/hwpx.rs`는 즉시 삭제하지 않되 legacy 호환성 안전망으로 동결하고, 회귀·보안·기존 silent-drop 수정만 허용하기로 결정했다.
 - 신규 정확도 작업은 rHWP 공개 surface를 `mapped`, `normalized`, `warning/unknown`, `render-only`, `unmapped`, `upstream-needed`로 분류한 뒤 진행한다.

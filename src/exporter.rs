@@ -1682,6 +1682,9 @@ fn render_html_object_size_metadata(placement: Option<&crate::ir::ObjectPlacemen
         return String::new();
     };
     let mut attributes = Vec::new();
+    if let Some(value) = placement.source_attributes {
+        attributes.push(format!("data-source-object-attributes=\"{value}\""));
+    }
     if let Some(criterion) = placement.width_criterion {
         attributes.push(format!("data-width-criterion=\"{}\"", criterion.as_str()));
     }
@@ -6047,6 +6050,7 @@ mod tests {
             text_direction: Some(TextDirection::VerticalLatinUpright),
             text_box_max_width: Some(LengthPx(40.0)),
             placement: Some(ObjectPlacement {
+                source_attributes: Some(0x1234_5678),
                 treat_as_character: true,
                 flow_with_text: true,
                 allow_overlap: false,
@@ -6138,6 +6142,7 @@ mod tests {
         assert!(html.contains("data-height-criterion=\"page\""));
         assert!(html.contains("data-source-width-value=\"5000\""));
         assert!(html.contains("data-source-height-value=\"2500\""));
+        assert!(html.contains("data-source-object-attributes=\"305419896\""));
         assert!(html.contains("max-width: 40px"));
         assert!(html.contains("border-radius: 25%"));
         assert!(html.contains("data-original-width-px=\"48\""));

@@ -4272,8 +4272,10 @@ fn map_object_placement(common: &RhwpCommonObjAttr) -> Option<ObjectPlacement> {
         || common.horz_align != rhwp::model::shape::HorzAlign::Left;
     let has_layout = has_layout
         || common.width_criterion != rhwp::model::shape::SizeCriterion::Absolute
-        || common.height_criterion != rhwp::model::shape::SizeCriterion::Absolute;
+        || common.height_criterion != rhwp::model::shape::SizeCriterion::Absolute
+        || common.attr != 0;
     has_layout.then_some(ObjectPlacement {
+        source_attributes: Some(common.attr),
         treat_as_character: common.treat_as_char,
         flow_with_text: true,
         allow_overlap: false,
@@ -6109,6 +6111,7 @@ mod tests {
         assert_eq!(
             image.placement,
             Some(ImagePlacement {
+                source_attributes: Some(0),
                 treat_as_character: false,
                 flow_with_text: true,
                 allow_overlap: false,
