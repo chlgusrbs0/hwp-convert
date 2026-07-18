@@ -328,6 +328,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - HWP 이미지 캡션 내용 IR 확장: `IR_VERSION` 65 → 66. rHWP 공개 이미지 캡션 문단을 `ObjectCaption` 블록으로 보존해 링크·필드·스타일을 평문으로 축약하지 않는다. 기존 `Image.caption` 문자열과 배치·레이아웃 필드는 JSON/Rust 호환성을 위해 함께 유지하며 exporter는 구조화된 내용을 우선한다. 동결된 HWPX 폴백은 기존 평문 캡션 경로를 유지한다.
 - HWP 덧말·글자 겹침 inline IR 확장: `IR_VERSION` 66 → 67. rHWP 공개 `Ruby`의 덧말과 정렬 원시값, `CharOverlap`의 문자·테두리 종류·내부 글자 크기·확장·글자 모양 참조를 문단 안에 구조화한다. rHWP가 덧말의 기준 글자 범위는 공개하지 않으므로 이를 추정하지 않으며, semantic exporter는 덧말을 명시적 fallback으로, 겹친 문자를 읽기 순서대로 선형화한다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - HWP 양식 개체 IR 확장: `IR_VERSION` 67 → 68. rHWP 공개 `FormObject`의 종류·이름·캡션·텍스트·크기·전경/배경색 원시값·선택값·활성 상태·임의 속성을 `DocumentControl::Form`으로 보존한다. HTML은 정적 span과 `data-*` 메타데이터로 출력하고 Markdown/TXT/SVG는 기존 fallback을 유지하며, 입력·선택 같은 상호작용은 재현한다고 주장하지 않는다.
+- HWP 표 셀 필드명 IR 확장: `IR_VERSION` 68 → 69. rHWP 공개 `Cell.field_name`을 `TableCell` 메타데이터로 보존하고 HTML `data-field-name`으로 출력한다. 원문에 없던 `[cell field: ...]` 가시 텍스트를 삽입하던 기존 HWP 경로를 제거한다. 동결된 HWPX 폴백은 기존 UnknownBlock 호환 경로를 유지한다.
 - raw HWP record, unknown control bytes, HWPX XML을 직접 해석한 독자 기능 구현을 금지했다.
 - `src/hwpx.rs`는 즉시 삭제하지 않되 legacy 호환성 안전망으로 동결하고, 회귀·보안·기존 silent-drop 수정만 허용하기로 결정했다.
 - 신규 정확도 작업은 rHWP 공개 surface를 `mapped`, `normalized`, `warning/unknown`, `render-only`, `unmapped`, `upstream-needed`로 분류한 뒤 진행한다.

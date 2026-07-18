@@ -50,6 +50,8 @@ HWP 덧말과 글자 겹침은 문단 내부의 구조화된 inline으로 보존
 
 HWP 양식 개체는 종류·이름·캡션·텍스트·크기·전경/배경색·선택값·활성 상태·임의 속성을 구조화된 `DocumentControl`로 보존한다. HTML은 원본 메타데이터가 있는 정적 표현을 출력하고 다른 semantic exporter는 읽을 수 있는 fallback을 유지한다. 변환 결과에서 입력·선택 동작 자체는 재현하지 않는다.
 
+HWP 표 셀 필드명은 셀의 구조 메타데이터와 HTML `data-field-name`으로 보존한다. 필드 동작은 재현하지 않지만, 원문에 없던 fallback 문구를 셀 내용에 삽입하지 않는다. 동결된 HWPX 폴백은 기존 UnknownBlock 표현을 유지한다.
+
 ### 핵심 관찰
 
 1. 가장 안정적인 경로: `text -> paragraph -> simple table/list/link -> JSON/HTML/Markdown/TXT/SVG`.

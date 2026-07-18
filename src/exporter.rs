@@ -2709,10 +2709,15 @@ fn render_html_table_cell(
     } else {
         ""
     };
+    let field_metadata = cell
+        .field_name
+        .as_deref()
+        .map(|name| format!(" data-field-name=\"{}\"", escape_html(name)))
+        .unwrap_or_default();
     let tag = if cell.is_header { "th" } else { "td" };
 
     format!(
-        "<{tag}{rowspan}{colspan}{border_fill_metadata}{text_direction_metadata}{source_list_metadata}{protection_metadata}{style}>{content}</{tag}>\n"
+        "<{tag}{rowspan}{colspan}{border_fill_metadata}{text_direction_metadata}{source_list_metadata}{protection_metadata}{field_metadata}{style}>{content}</{tag}>\n"
     )
 }
 
@@ -5067,6 +5072,7 @@ mod tests {
         table.source_row_count = Some(2);
         table.source_column_count = Some(2);
         table.source_record_attributes = Some(6);
+        table.rows[0].cells[0].field_name = Some("amount <gross>".to_string());
         table.rows[0].cells[0].style.source_border_fill_id = Some(7);
         table.rows[0].cells[0].style.diagonal = Some(BorderFillDiagonal {
             raw_attributes: 8,
@@ -5089,6 +5095,7 @@ mod tests {
         assert!(html.contains("data-source-record-attributes=\"6\""));
         assert!(html.contains("<tr>"));
         assert!(html.contains("<td data-border-fill-id=\"7\""));
+        assert!(html.contains("data-field-name=\"amount &lt;gross&gt;\""));
         assert!(html.contains("data-diagonal-attributes=\"8\""));
         assert!(html.contains("data-diagonal-type=\"1\""));
         assert!(html.contains("data-diagonal-width-index=\"3\""));

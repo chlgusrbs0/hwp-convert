@@ -2751,6 +2751,7 @@ fn extract_table_cell_from_xml(
         source_list_header_width_ref: None,
         source_row,
         source_column,
+        field_name: None,
         blocks,
         style: TableCellStyle {
             source_border_fill_id: None,

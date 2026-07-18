@@ -1589,22 +1589,11 @@ impl<'a> BridgeContext<'a> {
         cell: &RhwpCell,
         table_padding: &rhwp::model::Padding,
     ) -> TableCell {
-        let mut blocks = self.map_blocks_from_paragraphs(&cell.paragraphs, 0);
-        if let Some(field_name) = cell.field_name.as_deref().and_then(non_empty_string) {
-            blocks.insert(
-                0,
-                Block::Unknown(crate::ir::UnknownBlock {
-                    kind: "table_cell_field".to_string(),
-                    fallback_text: Some(format!("[cell field: {field_name}]")),
-                    message: Some(
-                        "Table cell field name preserved as fallback text because Document IR does not yet model cell fields."
-                            .to_string(),
-                    ),
-                    source: Some("rhwp".to_string()),
-                }),
-            );
+        let blocks = self.map_blocks_from_paragraphs(&cell.paragraphs, 0);
+        let field_name = cell.field_name.as_deref().and_then(non_empty_string);
+        if field_name.is_some() {
             self.add_warning_once(
-                "rhwp exposed table cell field names; hwp-convert preserved them as unknown block fallback text.",
+                "rhwp table cell field names were preserved as structured cell metadata; semantic exporters do not reproduce field behavior.",
             );
         }
 
@@ -1663,6 +1652,7 @@ impl<'a> BridgeContext<'a> {
                 .then_some(cell.list_header_width_ref),
             source_row: Some(u32::from(cell.row)),
             source_column: Some(u32::from(cell.col)),
+            field_name,
             blocks,
             style: TableCellStyle {
                 source_border_fill_id,
@@ -4624,7 +4614,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_table_cell_field_name_as_unknown_block() {
+    fn preserves_table_cell_field_name_as_structured_metadata() {
         let cell = RhwpCell {
             row: 0,
             col: 0,
@@ -4659,10 +4649,8 @@ mod tests {
         match &bridged.sections[0].blocks[0] {
             Block::Table(table) => {
                 let cell = &table.rows[0].cells[0];
-                assert!(
-                    matches!(&cell.blocks[0], Block::Unknown(unknown) if unknown.kind == "table_cell_field" && unknown.fallback_text.as_deref() == Some("[cell field: amount]"))
-                );
-                assert!(matches!(&cell.blocks[1], Block::Paragraph(_)));
+                assert_eq!(cell.field_name.as_deref(), Some("amount"));
+                assert!(matches!(&cell.blocks[0], Block::Paragraph(_)));
             }
             other => panic!("expected table block, got {other:?}"),
         }
@@ -4670,7 +4658,7 @@ mod tests {
             bridged
                 .warnings
                 .iter()
-                .any(|warning| { warning.message.contains("table cell field names") })
+                .any(|warning| { warning.message.contains("structured cell metadata") })
         );
     }
 

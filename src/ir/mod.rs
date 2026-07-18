@@ -63,7 +63,8 @@ use serde::{Deserialize, Serialize};
 /// v66: added structured image caption content while retaining legacy text.
 /// v67: added structured ruby annotation and character-overlap inlines.
 /// v68: added structured form-object controls.
-pub const IR_VERSION: u16 = 68;
+/// v69: added structured table-cell field names.
+pub const IR_VERSION: u16 = 69;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1495,6 +1496,8 @@ pub struct TableCell {
     pub source_row: Option<u32>,
     #[serde(default)]
     pub source_column: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_name: Option<String>,
     pub blocks: Vec<Block>,
     pub style: TableCellStyle,
 }
@@ -1509,6 +1512,7 @@ impl Default for TableCell {
             source_list_header_width_ref: None,
             source_row: None,
             source_column: None,
+            field_name: None,
             blocks: Vec::new(),
             style: TableCellStyle::default(),
         }
@@ -1849,6 +1853,7 @@ mod tests {
         assert!(!cell.is_header);
         assert_eq!(cell.source_row, None);
         assert_eq!(cell.source_column, None);
+        assert_eq!(cell.field_name, None);
         assert_eq!(cell.style.fill, None);
         assert_eq!(cell.style.vertical_align, None);
         assert_eq!(cell.style.width, None);
