@@ -53,10 +53,10 @@ use crate::ir::{
     ImageEffect as IrImageEffect, ImageFillMode, ImagePlacement, ImageResource, ImageTextWrap,
     Inline, LengthPt, LengthPx, LineSpacingMode, Link, ListInfo, ListKind, ListMarkerLayout,
     MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
-    NumberingKind, ObjectBorderMetadata, ObjectCaption, ObjectPlacement, PageBinding,
-    PageBorderFillLayout, PageLayout, Paragraph, ParagraphBreakKind, ParagraphRole, ParagraphStyle,
-    ParagraphStyleId, Percent, RawSectionRecord, Resource, ResourceId, ResourceStore,
-    RubyAnnotation, ScriptTextStyle, Section, SectionLayout, Shape, ShapeConnector,
+    NumberingKind, ObjectBorderMetadata, ObjectCaption, ObjectPlacement, ObjectSizeCriterion,
+    PageBinding, PageBorderFillLayout, PageLayout, Paragraph, ParagraphBreakKind, ParagraphRole,
+    ParagraphStyle, ParagraphStyleId, Percent, RawSectionRecord, Resource, ResourceId,
+    ResourceStore, RubyAnnotation, ScriptTextStyle, Section, SectionLayout, Shape, ShapeConnector,
     ShapeConnectorKind, ShapeConnectorPoint, ShapeGeometry, ShapeKind, ShapeLineMetadata,
     ShapePoint, ShapeShadow, ShapeTransform, SourceStyleDefinition, SourceStyleKind, Spacing,
     StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle,
@@ -1493,6 +1493,7 @@ impl<'a> BridgeContext<'a> {
             }
         });
 
+        let (width, height) = self.map_object_display_size(&table.common, "table");
         Table {
             rows,
             style: TableStyle {
@@ -1504,8 +1505,8 @@ impl<'a> BridgeContext<'a> {
                 border_right,
                 border_bottom,
                 border_left,
-                width: hwp_units_to_px_option(table.common.width),
-                height: hwp_units_to_px_option(table.common.height),
+                width,
+                height,
                 margin_top: i16_hwp_units_to_px_option(table.outer_margin_top),
                 margin_right: i16_hwp_units_to_px_option(table.outer_margin_right),
                 margin_bottom: i16_hwp_units_to_px_option(table.outer_margin_bottom),
@@ -1722,6 +1723,7 @@ impl<'a> BridgeContext<'a> {
             );
         }
 
+        let (width, height) = self.map_object_display_size(&picture.common, "picture");
         match self.ensure_image_resource(picture.image_attr.bin_data_id) {
             Some(resource_id) => Block::Image(Image {
                 resource_id,
@@ -1735,8 +1737,8 @@ impl<'a> BridgeContext<'a> {
                 caption_placement,
                 caption_layout,
                 crop: map_picture_crop(picture),
-                width: hwp_units_to_px_option(picture.common.width),
-                height: hwp_units_to_px_option(picture.common.height),
+                width,
+                height,
                 original_width: hwp_units_to_px_option(picture.shape_attr.original_width),
                 original_height: hwp_units_to_px_option(picture.shape_attr.original_height),
                 current_width: hwp_units_to_px_option(picture.shape_attr.current_width),
@@ -1917,6 +1919,7 @@ impl<'a> BridgeContext<'a> {
             .unwrap_or_default();
         let transform = self.map_shape_transform(shape.shape_attr());
         let line_metadata = map_shape_line_metadata(shape).map(Box::new);
+        let (width, height) = self.map_object_display_size(common, "shape");
         self.add_warning_once(
             "rhwp shape geometry and object placement were preserved in Shape IR; semantic exporters approximate visual layout.",
         );
@@ -2007,8 +2010,8 @@ impl<'a> BridgeContext<'a> {
                 .and_then(|text_box| i16_hwp_units_to_px_option(text_box.margin_bottom)),
             padding_left: text_box
                 .and_then(|text_box| i16_hwp_units_to_px_option(text_box.margin_left)),
-            width: hwp_units_to_px_option(common.width),
-            height: hwp_units_to_px_option(common.height),
+            width,
+            height,
             offset_x: hwp_units_to_px_option(common.horizontal_offset),
             offset_y: hwp_units_to_px_option(common.vertical_offset),
             geometry: map_shape_geometry(shape),
@@ -2078,6 +2081,31 @@ impl<'a> BridgeContext<'a> {
         }
 
         (!transform.is_empty()).then_some(transform)
+    }
+
+    fn map_object_display_size(
+        &mut self,
+        common: &RhwpCommonObjAttr,
+        object_kind: &str,
+    ) -> (Option<LengthPx>, Option<LengthPx>) {
+        let width = matches!(
+            common.width_criterion,
+            rhwp::model::shape::SizeCriterion::Absolute
+        )
+        .then(|| hwp_units_to_px_option(common.width))
+        .flatten();
+        let height = matches!(
+            common.height_criterion,
+            rhwp::model::shape::SizeCriterion::Absolute
+        )
+        .then(|| hwp_units_to_px_option(common.height))
+        .flatten();
+        if width.is_none() && common.width != 0 || height.is_none() && common.height != 0 {
+            self.add_warning_once(&format!(
+                "rHWP {object_kind} used relative size criteria; hwp-convert preserved the criteria and raw values in ObjectPlacement but omitted misleading absolute px dimensions."
+            ));
+        }
+        (width, height)
     }
 
     fn map_shape_blocks(&mut self, shape: &ShapeObject) -> Vec<Block> {
@@ -4242,6 +4270,9 @@ fn map_object_placement(common: &RhwpCommonObjAttr) -> Option<ObjectPlacement> {
         || common.horz_rel_to != rhwp::model::shape::HorzRelTo::Paper
         || common.vert_align != rhwp::model::shape::VertAlign::Top
         || common.horz_align != rhwp::model::shape::HorzAlign::Left;
+    let has_layout = has_layout
+        || common.width_criterion != rhwp::model::shape::SizeCriterion::Absolute
+        || common.height_criterion != rhwp::model::shape::SizeCriterion::Absolute;
     has_layout.then_some(ObjectPlacement {
         treat_as_character: common.treat_as_char,
         flow_with_text: true,
@@ -4287,7 +4318,21 @@ fn map_object_placement(common: &RhwpCommonObjAttr) -> Option<ObjectPlacement> {
         margin_right: LengthPx(f32::from(common.margin.right) / 75.0),
         margin_bottom: LengthPx(f32::from(common.margin.bottom) / 75.0),
         margin_left: LengthPx(f32::from(common.margin.left) / 75.0),
+        width_criterion: Some(map_object_size_criterion(common.width_criterion)),
+        height_criterion: Some(map_object_size_criterion(common.height_criterion)),
+        source_width_value: Some(common.width),
+        source_height_value: Some(common.height),
     })
+}
+
+fn map_object_size_criterion(criterion: rhwp::model::shape::SizeCriterion) -> ObjectSizeCriterion {
+    match criterion {
+        rhwp::model::shape::SizeCriterion::Paper => ObjectSizeCriterion::Paper,
+        rhwp::model::shape::SizeCriterion::Page => ObjectSizeCriterion::Page,
+        rhwp::model::shape::SizeCriterion::Column => ObjectSizeCriterion::Column,
+        rhwp::model::shape::SizeCriterion::Para => ObjectSizeCriterion::Paragraph,
+        rhwp::model::shape::SizeCriterion::Absolute => ObjectSizeCriterion::Absolute,
+    }
 }
 
 fn page_hide_fallback_text(page_hide: &RhwpPageHide) -> String {
@@ -5975,6 +6020,10 @@ mod tests {
                 ..Default::default()
             },
             common: rhwp::model::shape::CommonObjAttr {
+                width: 5000,
+                height: 2500,
+                width_criterion: rhwp::model::shape::SizeCriterion::Paper,
+                height_criterion: rhwp::model::shape::SizeCriterion::Page,
                 text_wrap: rhwp::model::shape::TextWrap::TopAndBottom,
                 vert_rel_to: rhwp::model::shape::VertRelTo::Page,
                 vert_align: rhwp::model::shape::VertAlign::Center,
@@ -6025,6 +6074,8 @@ mod tests {
         assert_eq!(image.original_height, Some(LengthPx(200.0)));
         assert_eq!(image.current_width, Some(LengthPx(300.0)));
         assert_eq!(image.current_height, Some(LengthPx(150.0)));
+        assert_eq!(image.width, None);
+        assert_eq!(image.height, None);
         assert_eq!(
             image.border_metadata,
             Some(ObjectBorderMetadata {
@@ -6074,6 +6125,10 @@ mod tests {
                 margin_right: LengthPx(20.0 / 75.0),
                 margin_bottom: LengthPx(40.0 / 75.0),
                 margin_left: LengthPx(10.0 / 75.0),
+                width_criterion: Some(ObjectSizeCriterion::Paper),
+                height_criterion: Some(ObjectSizeCriterion::Page),
+                source_width_value: Some(5000),
+                source_height_value: Some(2500),
             })
         );
         assert_eq!(image.padding_top, Some(LengthPx(30.0 / 75.0)));
@@ -6098,6 +6153,14 @@ mod tests {
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("brightness:10,contrast:-5")
                 && warning.message.contains("preserved in Image IR")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("picture used relative size criteria")
+                && warning
+                    .message
+                    .contains("omitted misleading absolute px dimensions")
         }));
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("picture placement")

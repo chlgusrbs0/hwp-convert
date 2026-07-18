@@ -1627,6 +1627,7 @@ fn render_html_shape_element(
         shape.source_common_instance_id,
         shape.source_component_instance_id,
     );
+    let size_metadata = render_html_object_size_metadata(shape.placement.as_ref());
     let text_direction_metadata = shape
         .text_direction
         .map(|direction| format!(" data-text-direction=\"{}\"", direction.source_value()))
@@ -1637,17 +1638,17 @@ fn render_html_shape_element(
     if !shape.children.is_empty() {
         let content = render_html_blocks(&shape.children, resources, image_asset_prefix);
         format!(
-            "<div class=\"shape-group\"{source_metadata}{transform_metadata}{text_direction_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
+            "<div class=\"shape-group\"{source_metadata}{size_metadata}{transform_metadata}{text_direction_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
         )
     } else if !shape.content.is_empty() {
         let content = render_html_blocks(&shape.content, resources, image_asset_prefix);
         format!(
-            "<div class=\"shape-placeholder shape-content\"{source_metadata}{transform_metadata}{text_direction_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
+            "<div class=\"shape-placeholder shape-content\"{source_metadata}{size_metadata}{transform_metadata}{text_direction_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
         )
     } else {
         let content = render_html_fallback_text(&shape_display_text(shape));
         format!(
-            "<p><span class=\"shape-placeholder\"{source_metadata}{transform_metadata}{text_direction_metadata}{line_metadata}{border_metadata}{style}>{content}</span></p>\n"
+            "<p><span class=\"shape-placeholder\"{source_metadata}{size_metadata}{transform_metadata}{text_direction_metadata}{line_metadata}{border_metadata}{style}>{content}</span></p>\n"
         )
     }
 }
@@ -1668,6 +1669,30 @@ fn render_html_object_source_metadata(
         attributes.push(format!(
             "data-source-component-instance-id=\"{instance_id}\""
         ));
+    }
+    if attributes.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", attributes.join(" "))
+    }
+}
+
+fn render_html_object_size_metadata(placement: Option<&crate::ir::ObjectPlacement>) -> String {
+    let Some(placement) = placement else {
+        return String::new();
+    };
+    let mut attributes = Vec::new();
+    if let Some(criterion) = placement.width_criterion {
+        attributes.push(format!("data-width-criterion=\"{}\"", criterion.as_str()));
+    }
+    if let Some(criterion) = placement.height_criterion {
+        attributes.push(format!("data-height-criterion=\"{}\"", criterion.as_str()));
+    }
+    if let Some(value) = placement.source_width_value {
+        attributes.push(format!("data-source-width-value=\"{value}\""));
+    }
+    if let Some(value) = placement.source_height_value {
+        attributes.push(format!("data-source-height-value=\"{value}\""));
     }
     if attributes.is_empty() {
         String::new()
@@ -2596,8 +2621,10 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
         image.source_common_instance_id,
         image.source_component_instance_id,
     );
+    let size_metadata = render_html_object_size_metadata(image.placement.as_ref());
     let border_metadata = render_html_object_border_metadata(image.border_metadata.as_ref());
-    let object_metadata = format!("{source_metadata}{transform_metadata}{border_metadata}");
+    let object_metadata =
+        format!("{source_metadata}{size_metadata}{transform_metadata}{border_metadata}");
     let tag = render_html_cropped_image(image, &src, &alt, &declarations, &object_metadata)
         .unwrap_or_else(|| {
             let style = render_html_style_attr(&declarations.join("; "));
@@ -2813,12 +2840,13 @@ fn render_html_table_element(
     image_asset_prefix: &str,
 ) -> String {
     let source_metadata = render_html_table_source_metadata(table);
+    let size_metadata = render_html_object_size_metadata(table.style.placement.as_ref());
     let border_fill_metadata = render_html_border_fill_metadata(
         table.style.source_border_fill_id,
         table.style.diagonal.as_ref(),
     );
     let mut html = format!(
-        "<table{source_metadata}{border_fill_metadata}{}>\n",
+        "<table{source_metadata}{size_metadata}{border_fill_metadata}{}>\n",
         render_html_style_attr(&render_html_table_style(
             &table.style,
             resources,
@@ -3919,14 +3947,16 @@ mod tests {
         AffineTransform, Alignment, BinaryResource, BinaryResourceKind, Border, BorderFillDiagonal,
         BorderOutline, BorderStyle, CharacterOverlap, Chart, Color, ConversionWarning,
         DocumentControl, Equation, EquationKind, FillStyle, FormControlKind, HeaderFooter,
-        HeaderFooterPlacement, IR_VERSION, Image, ImageCrop, ImageResource, Indent, LengthPt,
-        LengthPx, LineSpacingMode, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage,
-        Metadata, Note, NoteId, NoteKind, NoteStore, ObjectCaption, Paragraph, ParagraphRole,
+        HeaderFooterPlacement, HorizontalObjectAlignment, HorizontalRelativeTo, IR_VERSION, Image,
+        ImageCrop, ImageResource, ImageTextWrap, Indent, LengthPt, LengthPx, LineSpacingMode, Link,
+        ListInfo, ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId, NoteKind,
+        NoteStore, ObjectCaption, ObjectPlacement, ObjectSizeCriterion, Paragraph, ParagraphRole,
         ParagraphStyle, Percent, Resource, ResourceId, ResourceStore, RubyAnnotation, Section,
         Shape, ShapeConnector, ShapeConnectorKind, ShapeConnectorPoint, ShapeKind,
         ShapeLineMetadata, ShapePoint, ShapeTransform, Spacing, StyleSheet, Table, TableCaption,
         TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle, TextBorderFill,
-        TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
+        TextRun, TextShadow, TextStyle, UnknownInline, VerticalObjectAlignment, VerticalRelativeTo,
+        WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -6016,6 +6046,28 @@ mod tests {
             text_vertical_align: Some(crate::ir::VerticalAlign::Middle),
             text_direction: Some(TextDirection::VerticalLatinUpright),
             text_box_max_width: Some(LengthPx(40.0)),
+            placement: Some(ObjectPlacement {
+                treat_as_character: true,
+                flow_with_text: true,
+                allow_overlap: false,
+                prevent_page_break: false,
+                z_order: 0,
+                text_wrap: ImageTextWrap::Square,
+                vertical_relative_to: VerticalRelativeTo::Paper,
+                vertical_alignment: VerticalObjectAlignment::Top,
+                vertical_offset: LengthPx(0.0),
+                horizontal_relative_to: HorizontalRelativeTo::Paper,
+                horizontal_alignment: HorizontalObjectAlignment::Left,
+                horizontal_offset: LengthPx(0.0),
+                margin_top: LengthPx(0.0),
+                margin_right: LengthPx(0.0),
+                margin_bottom: LengthPx(0.0),
+                margin_left: LengthPx(0.0),
+                width_criterion: Some(ObjectSizeCriterion::Paper),
+                height_criterion: Some(ObjectSizeCriterion::Page),
+                source_width_value: Some(5000),
+                source_height_value: Some(2500),
+            }),
             padding_top: Some(LengthPx(1.0)),
             padding_right: Some(LengthPx(2.0)),
             padding_bottom: Some(LengthPx(3.0)),
@@ -6082,6 +6134,10 @@ mod tests {
         assert!(html.contains("writing-mode: vertical-rl"));
         assert!(html.contains("text-orientation: upright"));
         assert!(html.contains("data-text-direction=\"2\""));
+        assert!(html.contains("data-width-criterion=\"paper\""));
+        assert!(html.contains("data-height-criterion=\"page\""));
+        assert!(html.contains("data-source-width-value=\"5000\""));
+        assert!(html.contains("data-source-height-value=\"2500\""));
         assert!(html.contains("max-width: 40px"));
         assert!(html.contains("border-radius: 25%"));
         assert!(html.contains("data-original-width-px=\"48\""));

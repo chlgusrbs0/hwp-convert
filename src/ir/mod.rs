@@ -77,7 +77,8 @@ use serde::{Deserialize, Serialize};
 /// v80: distinguished arc and curve shape kinds.
 /// v81: added source instance identifiers for images and shapes.
 /// v82: added shape text-box direction and generalized its shared enum.
-pub const IR_VERSION: u16 = 82;
+/// v83: added object size criteria and raw source dimensions.
+pub const IR_VERSION: u16 = 83;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1323,9 +1324,39 @@ pub struct ObjectPlacement {
     pub margin_right: LengthPx,
     pub margin_bottom: LengthPx,
     pub margin_left: LengthPx,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_criterion: Option<ObjectSizeCriterion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_criterion: Option<ObjectSizeCriterion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_width_value: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_height_value: Option<u32>,
 }
 
 pub type ImagePlacement = ObjectPlacement;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectSizeCriterion {
+    Paper,
+    Page,
+    Column,
+    Paragraph,
+    Absolute,
+}
+
+impl ObjectSizeCriterion {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Paper => "paper",
+            Self::Page => "page",
+            Self::Column => "column",
+            Self::Paragraph => "paragraph",
+            Self::Absolute => "absolute",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

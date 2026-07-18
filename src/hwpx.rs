@@ -3668,6 +3668,10 @@ fn hwpx_picture_placement(
             margin_right: margins[1],
             margin_bottom: margins[2],
             margin_left: margins[3],
+            width_criterion: None,
+            height_criterion: None,
+            source_width_value: None,
+            source_height_value: None,
         });
     };
 
@@ -3767,6 +3771,10 @@ fn hwpx_picture_placement(
         margin_right: margins[1],
         margin_bottom: margins[2],
         margin_left: margins[3],
+        width_criterion: None,
+        height_criterion: None,
+        source_width_value: None,
+        source_height_value: None,
     };
     let is_default = placement.treat_as_character
         && placement.flow_with_text
@@ -8635,6 +8643,10 @@ mod tests {
                 margin_right: LengthPx(20.0 / 75.0),
                 margin_bottom: LengthPx(40.0 / 75.0),
                 margin_left: LengthPx(10.0 / 75.0),
+                width_criterion: None,
+                height_criterion: None,
+                source_width_value: None,
+                source_height_value: None,
             })
         );
         assert_eq!(
