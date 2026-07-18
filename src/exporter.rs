@@ -1515,12 +1515,24 @@ fn render_html_text_style(
         declarations.push("text-shadow: 1px 1px 2px rgba(0,0,0,0.5)".to_string());
     }
 
-    if let Some(font_family) = style
-        .font_family
-        .as_deref()
-        .and_then(sanitize_css_font_family)
+    let mut font_families = Vec::new();
+    let font_fallback = style.font_fallback.as_deref();
+    for family in [
+        style.font_family.as_deref(),
+        font_fallback.and_then(|font| font.alternate_family.as_deref()),
+        font_fallback.and_then(|font| font.default_family.as_deref()),
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(|families| families.split(','))
+    .filter_map(sanitize_css_font_family)
     {
-        declarations.push(format!("font-family: {font_family}"));
+        if !font_families.contains(&family) {
+            font_families.push(family);
+        }
+    }
+    if !font_families.is_empty() {
+        declarations.push(format!("font-family: {}", font_families.join(", ")));
     }
     if let Some(font_size_pt) = style.font_size_pt {
         declarations.push(format!("font-size: {}pt", font_size_pt.0));
@@ -5138,6 +5150,11 @@ mod tests {
                 text: "styled".to_string(),
                 style: TextStyle {
                     font_family: Some("Noto Sans KR, Malgun Gothic; color:red".to_string()),
+                    font_fallback: Some(Box::new(crate::ir::FontFallback {
+                        alternate_type: Some(1),
+                        alternate_family: Some("Arial".to_string()),
+                        default_family: Some("Noto Sans KR".to_string()),
+                    })),
                     font_size_pt: Some(LengthPt(12.5)),
                     color: Some(Color {
                         r: 17,
@@ -5162,7 +5179,7 @@ mod tests {
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
-        assert!(html.contains("font-family: Noto Sans KR, Malgun Gothic colorred"));
+        assert!(html.contains("font-family: Noto Sans KR, Malgun Gothic colorred, Arial"));
         assert!(html.contains("font-size: 12.5pt"));
         assert!(html.contains("color: #112233"));
         assert!(html.contains("background-color: #445566"));

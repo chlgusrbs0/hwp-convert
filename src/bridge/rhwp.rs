@@ -31,8 +31,8 @@ use rhwp::model::shape::{
 use rhwp::model::style::{
     Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, BorderLine as RhwpBorderLine,
     BorderLineType as RhwpBorderLineType, CharShape as RhwpCharShape, FillType as RhwpFillType,
-    HeadType as RhwpHeadType, ImageFillMode as RhwpImageFillMode, Numbering as RhwpNumbering,
-    ParaShape as RhwpParaShape, ShapeBorderLine as RhwpShapeBorderLine,
+    Font as RhwpFont, HeadType as RhwpHeadType, ImageFillMode as RhwpImageFillMode,
+    Numbering as RhwpNumbering, ParaShape as RhwpParaShape, ShapeBorderLine as RhwpShapeBorderLine,
     UnderlineType as RhwpUnderlineType,
 };
 use rhwp::model::table::{
@@ -45,7 +45,7 @@ use crate::ir::{
     BinaryResource, BinaryResourceKind, Block, Border, BorderStyle, CaptionPlacement, Color,
     ColumnDirection as IrColumnDirection, ColumnLayout, ColumnLayoutKind, ConversionWarning,
     Document, DocumentControl, DocumentField, Equation, EquationKind, FieldKind, FillStyle,
-    GradientColor, HeaderFooter, HeaderFooterPlacement, HorizontalObjectAlignment,
+    FontFallback, GradientColor, HeaderFooter, HeaderFooterPlacement, HorizontalObjectAlignment,
     HorizontalRelativeTo, Image, ImageCrop, ImageEffect as IrImageEffect, ImageFillMode,
     ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt, LengthPx, Link, ListInfo,
     ListKind, ListMarkerLayout, MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
@@ -60,6 +60,14 @@ use crate::ir::{
 };
 
 use super::hwpx_reconcile;
+
+#[derive(Debug, Clone)]
+struct FontSelection {
+    family: String,
+    alternate_type: Option<u8>,
+    alternate_family: Option<String>,
+    default_family: Option<String>,
+}
 
 /// Map rhwp cell vertical alignment to the IR. `Top` is rhwp's default, so it is
 /// represented as `None` to keep the IR and JSON output free of redundant data.
@@ -2156,6 +2164,7 @@ impl<'a> BridgeContext<'a> {
                 None => size,
             });
         let border_fill = self.map_text_border_fill(char_shape.border_fill_id, context);
+        let font = self.lookup_font(char_shape, context);
 
         TextStyle {
             bold: char_shape.bold,
@@ -2172,7 +2181,8 @@ impl<'a> BridgeContext<'a> {
             shadow: char_shape.shadow_type != 0,
             shadow_details: map_text_shadow(char_shape),
             border_fill,
-            font_family: self.lookup_font_family(char_shape, context),
+            font_family: font.as_ref().map(|font| font.family.clone()),
+            font_fallback: font.as_ref().and_then(map_font_fallback),
             font_size_pt,
             color: color_ref_to_color_option(char_shape.text_color),
             background_color: color_ref_to_color_option(char_shape.shade_color),
@@ -2535,6 +2545,7 @@ impl<'a> BridgeContext<'a> {
                 None => size,
             });
         let border_fill = self.map_text_border_fill(char_shape.border_fill_id, context);
+        let font = self.lookup_font_for_language(char_shape, language_index, context);
 
         TextStyle {
             bold: char_shape.bold,
@@ -2551,7 +2562,8 @@ impl<'a> BridgeContext<'a> {
             shadow: char_shape.shadow_type != 0,
             shadow_details: map_text_shadow(char_shape),
             border_fill,
-            font_family: self.lookup_font_family_for_language(char_shape, language_index, context),
+            font_family: font.as_ref().map(|font| font.family.clone()),
+            font_fallback: font.as_ref().and_then(map_font_fallback),
             font_size_pt,
             color: color_ref_to_color_option(char_shape.text_color),
             background_color: color_ref_to_color_option(char_shape.shade_color),
@@ -2575,7 +2587,7 @@ impl<'a> BridgeContext<'a> {
         self.source.doc_info.para_shapes.get(para_shape_id as usize)
     }
 
-    fn lookup_font_family(&mut self, char_shape: &RhwpCharShape, context: &str) -> Option<String> {
+    fn lookup_font(&mut self, char_shape: &RhwpCharShape, context: &str) -> Option<FontSelection> {
         let mut selected = None;
 
         for (language_index, font_id) in char_shape.font_ids.iter().enumerate() {
@@ -2587,7 +2599,7 @@ impl<'a> BridgeContext<'a> {
                 }
                 continue;
             };
-            let Some(font) = group.get(*font_id as usize) else {
+            let Some(font) = group.get(*font_id as usize).cloned() else {
                 if *font_id != 0 || !group.is_empty() {
                     self.add_warning_once(&format!(
                         "rhwp {context} referenced missing font id {font_id} in font face group {language_index}; hwp-convert used an available fallback font family or default font style."
@@ -2595,28 +2607,29 @@ impl<'a> BridgeContext<'a> {
                 }
                 continue;
             };
-            if let Some(name) = non_empty_string(&font.name)
+            if let Some(font) = self.map_font_selection(&font, context)
                 && selected.is_none()
             {
-                selected = Some(name);
+                selected = Some(font);
             }
         }
 
         selected
     }
 
-    fn lookup_font_family_for_language(
+    fn lookup_font_for_language(
         &mut self,
         char_shape: &RhwpCharShape,
         language_index: usize,
         context: &str,
-    ) -> Option<String> {
+    ) -> Option<FontSelection> {
         let font_id = char_shape.font_ids[language_index];
         match self.source.doc_info.font_faces.get(language_index) {
             Some(group) => match group.get(font_id as usize) {
                 Some(font) => {
-                    if let Some(name) = non_empty_string(&font.name) {
-                        return Some(name);
+                    let font = font.clone();
+                    if let Some(font) = self.map_font_selection(&font, context) {
+                        return Some(font);
                     }
                 }
                 None if font_id != 0 || !group.is_empty() => {
@@ -2634,18 +2647,39 @@ impl<'a> BridgeContext<'a> {
             None => {}
         }
 
-        char_shape
-            .font_ids
-            .iter()
-            .enumerate()
-            .find_map(|(fallback_index, fallback_id)| {
-                self.source
-                    .doc_info
-                    .font_faces
-                    .get(fallback_index)
-                    .and_then(|group| group.get(*fallback_id as usize))
-                    .and_then(|font| non_empty_string(&font.name))
-            })
+        for (fallback_index, fallback_id) in char_shape.font_ids.iter().enumerate() {
+            let font = self
+                .source
+                .doc_info
+                .font_faces
+                .get(fallback_index)
+                .and_then(|group| group.get(*fallback_id as usize))
+                .cloned();
+            if let Some(font) = font
+                && let Some(font) = self.map_font_selection(&font, context)
+            {
+                return Some(font);
+            }
+        }
+
+        None
+    }
+
+    fn map_font_selection(&mut self, font: &RhwpFont, context: &str) -> Option<FontSelection> {
+        let family = non_empty_string(&font.name)?;
+        if font.alt_type > 2 {
+            self.add_warning_once(&format!(
+                "rhwp {context} used unknown alternate font type {}; hwp-convert preserved the raw type and font names.",
+                font.alt_type
+            ));
+        }
+
+        Some(FontSelection {
+            family,
+            alternate_type: (font.alt_type != 0).then_some(font.alt_type),
+            alternate_family: font.alt_name.as_deref().and_then(non_empty_string),
+            default_family: font.default_name.as_deref().and_then(non_empty_string),
+        })
     }
 
     fn border_fill_background_color(
@@ -4136,6 +4170,21 @@ fn non_empty_string(value: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn map_font_fallback(font: &FontSelection) -> Option<Box<FontFallback>> {
+    if font.alternate_type.is_none()
+        && font.alternate_family.is_none()
+        && font.default_family.is_none()
+    {
+        return None;
+    }
+
+    Some(Box::new(FontFallback {
+        alternate_type: font.alternate_type,
+        alternate_family: font.alternate_family.clone(),
+        default_family: font.default_family.clone(),
+    }))
 }
 
 fn non_empty_url_like_string(value: &str) -> Option<String> {
@@ -5783,6 +5832,9 @@ mod tests {
             doc_info: DocInfo {
                 font_faces: vec![vec![Font {
                     name: "Noto Sans KR".to_string(),
+                    alt_type: 1,
+                    alt_name: Some("Malgun Gothic".to_string()),
+                    default_name: Some("Arial Unicode MS".to_string()),
                     ..Default::default()
                 }]],
                 char_shapes: vec![RhwpCharShape {
@@ -5926,6 +5978,20 @@ mod tests {
                             })
                         );
                         assert_eq!(run.style.font_family.as_deref(), Some("Noto Sans KR"));
+                        let font_fallback = run
+                            .style
+                            .font_fallback
+                            .as_deref()
+                            .expect("font fallback metadata");
+                        assert_eq!(font_fallback.alternate_type, Some(1));
+                        assert_eq!(
+                            font_fallback.alternate_family.as_deref(),
+                            Some("Malgun Gothic")
+                        );
+                        assert_eq!(
+                            font_fallback.default_family.as_deref(),
+                            Some("Arial Unicode MS")
+                        );
                         assert_eq!(run.style.font_size_pt, Some(LengthPt(12.0)));
                         assert_eq!(
                             run.style.color,

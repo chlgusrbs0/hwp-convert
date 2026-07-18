@@ -51,7 +51,8 @@ use serde::{Deserialize, Serialize};
 /// v54: added exact text emphasis mark type metadata.
 /// v55: added structured character border-fill metadata.
 /// v56: added source document style definitions and relationships.
-pub const IR_VERSION: u16 = 56;
+/// v57: added alternate and default font metadata.
+pub const IR_VERSION: u16 = 57;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -510,6 +511,8 @@ pub struct TextStyle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_fill: Option<TextBorderFill>,
     pub font_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_fallback: Option<Box<FontFallback>>,
     /// Typographic size in points (pt).
     #[serde(alias = "font_size")]
     pub font_size_pt: Option<LengthPt>,
@@ -537,6 +540,17 @@ pub struct TextStyle {
     pub vertical_offset_percent: Option<Percent>,
     #[serde(skip_serializing_if = "is_false")]
     pub kerning: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct FontFallback {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alternate_type: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alternate_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_family: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -1997,6 +2011,7 @@ mod tests {
         assert_eq!(style.strike_style, None);
         assert!(!style.underline_above);
         assert_eq!(style.font_family.as_deref(), Some("Noto Sans KR"));
+        assert_eq!(style.font_fallback, None);
         assert_eq!(style.font_size_pt, None);
         assert_eq!(style.color, None);
         assert_eq!(style.background_color, None);
