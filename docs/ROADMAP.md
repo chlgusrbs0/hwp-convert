@@ -315,6 +315,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - HWP 글자 그림자 IR 확장: `IR_VERSION` 52 → 53. rHWP 공개 `CharShape`의 그림자 종류·X/Y 비율 오프셋·색상과 원시 색상 값을 구조화한다. HTML은 공개 비율을 `em`으로 적용하고 원본 값을 `data-*`로 남기며, 공개되지 않은 blur와 종류별 렌더링 규칙은 추정하지 않는다. 양각·음각은 별도 boolean을 유지하고 기존 일반 그림자 근사를 사용한다.
 - HWP 글자 강조점 IR 확장: `IR_VERSION` 53 → 54. rHWP 공개 `CharShape.emphasis_dot`의 원시 종류를 보존하고, rHWP가 문서화한 1~6 값을 HTML의 ●·○·ˇ·˜·･·: 기호로 구분한다. 알 수 없는 값은 원시 타입과 warning을 유지하고 generic dot으로 대체한다.
 - HWP 글자 테두리·배경 IR 확장: `IR_VERSION` 54 → 55. rHWP 공개 `CharShape.border_fill_id`가 참조하는 BorderFill의 원본 ID, 4면 테두리, 단색·그라데이션·이미지 채우기를 구조화한다. HTML은 기존 border/fill CSS 경로로 출력하고 원본 참조 ID를 `data-*`로 남긴다.
+- HWP 원본 스타일 정의 IR 확장: `IR_VERSION` 55 → 56. rHWP 공개 `Style`의 문단/글자 종류, 한글·영문 이름, 다음 스타일 ID, 원본 문단·글자 모양 ID와 변환된 스타일 참조를 `StyleSheet.source_styles`에 보존한다. 기존 text/paragraph style 배열은 호환성을 위해 유지한다.
 - raw HWP record, unknown control bytes, HWPX XML을 직접 해석한 독자 기능 구현을 금지했다.
 - `src/hwpx.rs`는 즉시 삭제하지 않되 legacy 호환성 안전망으로 동결하고, 회귀·보안·기존 silent-drop 수정만 허용하기로 결정했다.
 - 신규 정확도 작업은 rHWP 공개 surface를 `mapped`, `normalized`, `warning/unknown`, `render-only`, `unmapped`, `upstream-needed`로 분류한 뒤 진행한다.

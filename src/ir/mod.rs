@@ -50,7 +50,8 @@ use serde::{Deserialize, Serialize};
 /// v53: added structured text shadow metadata.
 /// v54: added exact text emphasis mark type metadata.
 /// v55: added structured character border-fill metadata.
-pub const IR_VERSION: u16 = 55;
+/// v56: added source document style definitions and relationships.
+pub const IR_VERSION: u16 = 56;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -681,6 +682,8 @@ pub struct StyleSheet {
     pub paragraph_styles: Vec<NamedParagraphStyle>,
     pub table_styles: Vec<NamedTableStyle>,
     pub table_cell_styles: Vec<NamedTableCellStyle>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_styles: Vec<SourceStyleDefinition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -731,6 +734,29 @@ pub struct NamedParagraphStyle {
     pub id: ParagraphStyleId,
     pub name: Option<String>,
     pub style: ParagraphStyle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SourceStyleDefinition {
+    pub source_id: u32,
+    pub kind: SourceStyleKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub english_name: Option<String>,
+    pub next_source_id: u8,
+    pub source_paragraph_shape_id: u16,
+    pub source_character_shape_id: u16,
+    pub paragraph_style_ref: ParagraphStyleId,
+    pub text_style_ref: TextStyleId,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceStyleKind {
+    Paragraph,
+    Character,
+    Unknown(u8),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1546,6 +1572,7 @@ mod tests {
         assert!(document.resources.entries.is_empty());
         assert!(document.styles.text_styles.is_empty());
         assert!(document.styles.paragraph_styles.is_empty());
+        assert!(document.styles.source_styles.is_empty());
         assert!(document.notes.notes.is_empty());
 
         match &document.sections[0].blocks[0] {

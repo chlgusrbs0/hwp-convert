@@ -52,11 +52,11 @@ use crate::ir::{
     NoteKind, NoteLayout, NoteStore, NumberingKind, ObjectPlacement, PageBinding,
     PageBorderFillLayout, PageLayout, Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId,
     Percent, RawSectionRecord, Resource, ResourceId, ResourceStore, ScriptTextStyle, Section,
-    SectionLayout, Shape, ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow, Spacing, StyleSheet,
-    TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle, TablePageBreak,
-    TableRow, TableStyle, TableZone, TextBorderFill, TextDecorationStyle, TextRun, TextScript,
-    TextShadow, TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
-    VerticalRelativeTo, WarningCode,
+    SectionLayout, Shape, ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow, SourceStyleDefinition,
+    SourceStyleKind, Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell,
+    TableCellStyle, TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill,
+    TextDecorationStyle, TextRun, TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline,
+    VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -2097,8 +2097,8 @@ impl<'a> BridgeContext<'a> {
         let mut style_sheet = StyleSheet::default();
 
         for index in 0..self.source.doc_info.styles.len() {
-            let style = &self.source.doc_info.styles[index];
-            let name = style_name(style);
+            let style = self.source.doc_info.styles[index].clone();
+            let name = style_name(&style);
             let char_shape_id = style.char_shape_id as u32;
             let para_shape_id = style.para_shape_id;
 
@@ -2115,6 +2115,28 @@ impl<'a> BridgeContext<'a> {
                 id: ParagraphStyleId(paragraph_style_key(index)),
                 name,
                 style: self.map_paragraph_style_by_id(para_shape_id, "style sheet"),
+            });
+
+            let kind = match style.style_type {
+                0 => SourceStyleKind::Paragraph,
+                1 => SourceStyleKind::Character,
+                value => {
+                    self.add_warning_once(&format!(
+                        "rhwp style {index} used unknown style type {value}; hwp-convert preserved the raw style type in structured IR."
+                    ));
+                    SourceStyleKind::Unknown(value)
+                }
+            };
+            style_sheet.source_styles.push(SourceStyleDefinition {
+                source_id: index as u32,
+                kind,
+                local_name: non_empty_string(&style.local_name),
+                english_name: non_empty_string(&style.english_name),
+                next_source_id: style.next_style_id,
+                source_paragraph_shape_id: style.para_shape_id,
+                source_character_shape_id: style.char_shape_id,
+                paragraph_style_ref: ParagraphStyleId(paragraph_style_key(index)),
+                text_style_ref: TextStyleId(text_style_key(index)),
             });
         }
 
@@ -5831,6 +5853,9 @@ mod tests {
                 }],
                 styles: vec![RhwpStyle {
                     local_name: "body".to_string(),
+                    english_name: "Body".to_string(),
+                    style_type: 0,
+                    next_style_id: 0,
                     para_shape_id: 0,
                     char_shape_id: 0,
                     ..Default::default()
@@ -5984,6 +6009,21 @@ mod tests {
 
         assert_eq!(bridged.styles.text_styles.len(), 1);
         assert_eq!(bridged.styles.paragraph_styles.len(), 1);
+        assert_eq!(bridged.styles.source_styles.len(), 1);
+        assert_eq!(
+            bridged.styles.source_styles[0],
+            SourceStyleDefinition {
+                source_id: 0,
+                kind: SourceStyleKind::Paragraph,
+                local_name: Some("body".to_string()),
+                english_name: Some("Body".to_string()),
+                next_source_id: 0,
+                source_paragraph_shape_id: 0,
+                source_character_shape_id: 0,
+                paragraph_style_ref: ParagraphStyleId("paragraph-style-0".to_string()),
+                text_style_ref: TextStyleId("text-style-0".to_string()),
+            }
+        );
         assert_eq!(
             bridged.styles.text_styles[0]
                 .style
