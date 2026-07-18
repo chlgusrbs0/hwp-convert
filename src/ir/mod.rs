@@ -49,7 +49,8 @@ use serde::{Deserialize, Serialize};
 /// v52: added structured list marker definition and layout metadata.
 /// v53: added structured text shadow metadata.
 /// v54: added exact text emphasis mark type metadata.
-pub const IR_VERSION: u16 = 54;
+/// v55: added structured character border-fill metadata.
+pub const IR_VERSION: u16 = 55;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -505,6 +506,8 @@ pub struct TextStyle {
     pub shadow: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow_details: Option<TextShadow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_fill: Option<TextBorderFill>,
     pub font_family: Option<String>,
     /// Typographic size in points (pt).
     #[serde(alias = "font_size")]
@@ -533,6 +536,22 @@ pub struct TextStyle {
     pub vertical_offset_percent: Option<Percent>,
     #[serde(skip_serializing_if = "is_false")]
     pub kerning: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct TextBorderFill {
+    pub source_border_fill_id: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill: Option<FillStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_top: Option<Border>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_right: Option<Border>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_bottom: Option<Border>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_left: Option<Border>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -1944,6 +1963,7 @@ mod tests {
         assert!(!style.outline);
         assert!(!style.shadow);
         assert_eq!(style.shadow_details, None);
+        assert_eq!(style.border_fill, None);
         assert_eq!(style.underline_color, None);
         assert_eq!(style.strike_color, None);
         assert_eq!(style.underline_style, None);

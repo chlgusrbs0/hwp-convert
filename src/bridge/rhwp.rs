@@ -54,8 +54,8 @@ use crate::ir::{
     Percent, RawSectionRecord, Resource, ResourceId, ResourceStore, ScriptTextStyle, Section,
     SectionLayout, Shape, ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow, Spacing, StyleSheet,
     TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle, TablePageBreak,
-    TableRow, TableStyle, TableZone, TextDecorationStyle, TextRun, TextScript, TextShadow,
-    TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
+    TableRow, TableStyle, TableZone, TextBorderFill, TextDecorationStyle, TextRun, TextScript,
+    TextShadow, TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
     VerticalRelativeTo, WarningCode,
 };
 
@@ -2133,6 +2133,7 @@ impl<'a> BridgeContext<'a> {
                 Some(relative_size) => LengthPt(size.0 * relative_size.0 / 100.0),
                 None => size,
             });
+        let border_fill = self.map_text_border_fill(char_shape.border_fill_id, context);
 
         TextStyle {
             bold: char_shape.bold,
@@ -2148,6 +2149,7 @@ impl<'a> BridgeContext<'a> {
             outline: char_shape.outline_type != 0,
             shadow: char_shape.shadow_type != 0,
             shadow_details: map_text_shadow(char_shape),
+            border_fill,
             font_family: self.lookup_font_family(char_shape, context),
             font_size_pt,
             color: color_ref_to_color_option(char_shape.text_color),
@@ -2510,6 +2512,7 @@ impl<'a> BridgeContext<'a> {
                 Some(relative_size) => LengthPt(size.0 * relative_size.0 / 100.0),
                 None => size,
             });
+        let border_fill = self.map_text_border_fill(char_shape.border_fill_id, context);
 
         TextStyle {
             bold: char_shape.bold,
@@ -2525,6 +2528,7 @@ impl<'a> BridgeContext<'a> {
             outline: char_shape.outline_type != 0,
             shadow: char_shape.shadow_type != 0,
             shadow_details: map_text_shadow(char_shape),
+            border_fill,
             font_family: self.lookup_font_family_for_language(char_shape, language_index, context),
             font_size_pt,
             color: color_ref_to_color_option(char_shape.text_color),
@@ -2653,6 +2657,29 @@ impl<'a> BridgeContext<'a> {
         };
 
         self.map_fill_style(&border_fill.fill, context)
+    }
+
+    fn map_text_border_fill(
+        &mut self,
+        border_fill_id: u16,
+        context: &str,
+    ) -> Option<TextBorderFill> {
+        if border_fill_id == 0 {
+            return None;
+        }
+
+        let [border_left, border_right, border_top, border_bottom] =
+            self.map_borders(border_fill_id, context);
+        let fill = self.border_fill_style(border_fill_id, context);
+
+        Some(TextBorderFill {
+            source_border_fill_id: border_fill_id,
+            fill,
+            border_top,
+            border_right,
+            border_bottom,
+            border_left,
+        })
     }
 
     fn map_fill_style(
@@ -5754,6 +5781,41 @@ mod tests {
                     shade_color: 0x00040506,
                     underline_color: 0x00112233,
                     strike_color: 0x00445566,
+                    border_fill_id: 1,
+                    ..Default::default()
+                }],
+                border_fills: vec![RhwpBorderFill {
+                    // rhwp order: left, right, top, bottom
+                    borders: [
+                        RhwpBorderLine {
+                            line_type: RhwpBorderLineType::Solid,
+                            width: 1,
+                            color: 0x00112233,
+                        },
+                        RhwpBorderLine {
+                            line_type: RhwpBorderLineType::Dash,
+                            width: 1,
+                            color: 0x00445566,
+                        },
+                        RhwpBorderLine {
+                            line_type: RhwpBorderLineType::Dot,
+                            width: 1,
+                            color: 0x00778899,
+                        },
+                        RhwpBorderLine {
+                            line_type: RhwpBorderLineType::Double,
+                            width: 1,
+                            color: 0x00AABBCC,
+                        },
+                    ],
+                    fill: Fill {
+                        fill_type: FillType::Solid,
+                        solid: Some(SolidFill {
+                            background_color: 0x00665544,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }],
                 para_shapes: vec![RhwpParaShape {
@@ -5876,6 +5938,43 @@ mod tests {
                                 a: 255,
                             })
                         );
+                        let border_fill = run
+                            .style
+                            .border_fill
+                            .as_ref()
+                            .expect("character border fill");
+                        assert_eq!(border_fill.source_border_fill_id, 1);
+                        assert_eq!(
+                            border_fill.border_left.as_ref().map(|border| border.style),
+                            Some(BorderStyle::Solid)
+                        );
+                        assert_eq!(
+                            border_fill.border_right.as_ref().map(|border| border.style),
+                            Some(BorderStyle::Dashed)
+                        );
+                        assert_eq!(
+                            border_fill.border_top.as_ref().map(|border| border.style),
+                            Some(BorderStyle::Dotted)
+                        );
+                        assert_eq!(
+                            border_fill
+                                .border_bottom
+                                .as_ref()
+                                .map(|border| border.style),
+                            Some(BorderStyle::Double)
+                        );
+                        assert!(matches!(
+                            border_fill.fill,
+                            Some(FillStyle::Solid {
+                                background_color: Some(Color {
+                                    r: 0x44,
+                                    g: 0x55,
+                                    b: 0x66,
+                                    a: 255,
+                                }),
+                                ..
+                            })
+                        ));
                     }
                     other => panic!("expected text inline, got {other:?}"),
                 }
@@ -5885,6 +5984,14 @@ mod tests {
 
         assert_eq!(bridged.styles.text_styles.len(), 1);
         assert_eq!(bridged.styles.paragraph_styles.len(), 1);
+        assert_eq!(
+            bridged.styles.text_styles[0]
+                .style
+                .border_fill
+                .as_ref()
+                .map(|border_fill| border_fill.source_border_fill_id),
+            Some(1)
+        );
     }
 
     #[test]

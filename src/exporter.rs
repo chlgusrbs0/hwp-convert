@@ -907,7 +907,8 @@ fn render_html_blocks(
             && matches!(paragraph.role, ParagraphRole::Body)
             && let Some(list) = &paragraph.list
         {
-            let (list_html, next_index) = render_html_list(blocks, index, list);
+            let (list_html, next_index) =
+                render_html_list(blocks, index, list, resources, image_asset_prefix);
             html.push_str(&list_html);
             index = next_index;
             continue;
@@ -928,12 +929,16 @@ fn render_html_list(
     blocks: &[Block],
     start_index: usize,
     first_list: &ListInfo,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
 ) -> (String, usize) {
     render_html_list_level(
         blocks,
         start_index,
         html_list_tag_name(&first_list.kind),
         first_list.level,
+        resources,
+        image_asset_prefix,
     )
 }
 
@@ -942,6 +947,8 @@ fn render_html_list_level(
     start_index: usize,
     tag_name: &str,
     level: u8,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
 ) -> (String, usize) {
     let mut html = format!("<{tag_name}>\n");
     let mut index = start_index;
@@ -958,14 +965,25 @@ fn render_html_list_level(
             break;
         }
         if list.level > level {
-            let (nested_html, next_index) =
-                render_html_list_level(blocks, index, current_tag_name, list.level);
+            let (nested_html, next_index) = render_html_list_level(
+                blocks,
+                index,
+                current_tag_name,
+                list.level,
+                resources,
+                image_asset_prefix,
+            );
             html.push_str(&nested_html);
             index = next_index;
             continue;
         }
 
-        html.push_str(&render_html_list_item_open(paragraph, list));
+        html.push_str(&render_html_list_item_open(
+            paragraph,
+            list,
+            resources,
+            image_asset_prefix,
+        ));
         index += 1;
 
         while let Some(Block::Paragraph(next_paragraph)) = blocks.get(index) {
@@ -984,6 +1002,8 @@ fn render_html_list_level(
                 index,
                 html_list_tag_name(&next_list.kind),
                 next_list.level,
+                resources,
+                image_asset_prefix,
             );
             html.push_str(&nested_html);
             index = next_index;
@@ -997,7 +1017,12 @@ fn render_html_list_level(
     (html, index)
 }
 
-fn render_html_list_item_open(paragraph: &Paragraph, list: &ListInfo) -> String {
+fn render_html_list_item_open(
+    paragraph: &Paragraph,
+    list: &ListInfo,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let value = if list.kind == ListKind::Ordered {
         list.number
             .map(|number| format!(" value=\"{number}\""))
@@ -1022,7 +1047,7 @@ fn render_html_list_item_open(paragraph: &Paragraph, list: &ListInfo) -> String 
         .unwrap_or_default();
     let marker_metadata = render_html_list_marker_metadata(list);
     let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
-    let content = render_html_inlines(&paragraph.inlines);
+    let content = render_html_inlines(&paragraph.inlines, resources, image_asset_prefix);
 
     format!("<li{value}{marker_format}{marker}{marker_metadata}{style}>{content}")
 }
@@ -1084,7 +1109,9 @@ fn html_list_tag_name(kind: &ListKind) -> &'static str {
 
 fn render_html_block(block: &Block, resources: &ResourceStore, image_asset_prefix: &str) -> String {
     match block {
-        Block::Paragraph(paragraph) => render_html_paragraph(paragraph),
+        Block::Paragraph(paragraph) => {
+            render_html_paragraph(paragraph, resources, image_asset_prefix)
+        }
         Block::ColumnLayout(_) => String::new(),
         Block::DocumentControl(control) => format!(
             "<p>{}</p>\n",
@@ -1102,12 +1129,20 @@ fn render_html_block(block: &Block, resources: &ResourceStore, image_asset_prefi
     }
 }
 
-fn render_html_paragraph(paragraph: &Paragraph) -> String {
+fn render_html_paragraph(
+    paragraph: &Paragraph,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let mut content = String::new();
     if let Some(list) = &paragraph.list {
         content.push_str(&render_html_fallback_text(&list_prefix(list)));
     }
-    content.push_str(&render_html_inlines(&paragraph.inlines));
+    content.push_str(&render_html_inlines(
+        &paragraph.inlines,
+        resources,
+        image_asset_prefix,
+    ));
     let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
     let class = render_html_paragraph_role_class(&paragraph.role);
 
@@ -1137,15 +1172,23 @@ fn paragraph_role_html_class(role: &ParagraphRole) -> Option<&'static str> {
     }
 }
 
-fn render_html_inlines(inlines: &[Inline]) -> String {
+fn render_html_inlines(
+    inlines: &[Inline],
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let mut content = String::new();
 
     for inline in inlines {
         match inline {
-            Inline::Text(run) => content.push_str(&render_html_text_run(run)),
+            Inline::Text(run) => {
+                content.push_str(&render_html_text_run(run, resources, image_asset_prefix))
+            }
             Inline::LineBreak => content.push_str("<br />"),
             Inline::Tab => content.push_str("<span class=\"tab\">\t</span>"),
-            Inline::Link(link) => content.push_str(&render_html_link(link)),
+            Inline::Link(link) => {
+                content.push_str(&render_html_link(link, resources, image_asset_prefix))
+            }
             Inline::Field(field) => {
                 content.push_str(&render_html_fallback_text(&field.fallback_text));
             }
@@ -1174,20 +1217,45 @@ fn render_html_fallback_text(text: &str) -> String {
     escape_html(text).replace('\n', "<br />")
 }
 
-fn render_html_text_run(run: &TextRun) -> String {
+fn render_html_text_run(
+    run: &TextRun,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let content = render_html_fallback_text(&run.text);
-    let style = render_html_style_attr(&render_html_text_style(&run.style));
+    let style = render_html_style_attr(&render_html_text_style(
+        &run.style,
+        resources,
+        image_asset_prefix,
+    ));
     let shadow_metadata = render_html_text_shadow_metadata(&run.style);
     let emphasis_metadata = run
         .style
         .emphasis_mark_type
         .map(|kind| format!(" data-emphasis-mark-type=\"{kind}\""))
         .unwrap_or_default();
+    let border_fill_metadata = run
+        .style
+        .border_fill
+        .as_ref()
+        .map(|border_fill| {
+            format!(
+                " data-border-fill-id=\"{}\"",
+                border_fill.source_border_fill_id
+            )
+        })
+        .unwrap_or_default();
 
-    if style.is_empty() && shadow_metadata.is_empty() && emphasis_metadata.is_empty() {
+    if style.is_empty()
+        && shadow_metadata.is_empty()
+        && emphasis_metadata.is_empty()
+        && border_fill_metadata.is_empty()
+    {
         content
     } else {
-        format!("<span{shadow_metadata}{emphasis_metadata}{style}>{content}</span>")
+        format!(
+            "<span{shadow_metadata}{emphasis_metadata}{border_fill_metadata}{style}>{content}</span>"
+        )
     }
 }
 
@@ -1202,7 +1270,7 @@ fn render_html_text_shadow_metadata(style: &TextStyle) -> String {
     )
 }
 
-fn render_html_link(link: &Link) -> String {
+fn render_html_link(link: &Link, resources: &ResourceStore, image_asset_prefix: &str) -> String {
     let href = escape_html(&link.url);
     let title = link
         .title
@@ -1210,13 +1278,17 @@ fn render_html_link(link: &Link) -> String {
         .map(escape_html)
         .map(|title| format!(" title=\"{title}\""))
         .unwrap_or_default();
-    let content = render_html_link_label(link);
+    let content = render_html_link_label(link, resources, image_asset_prefix);
 
     format!("<a href=\"{href}\"{title}>{content}</a>")
 }
 
-fn render_html_link_label(link: &Link) -> String {
-    let content = render_html_inlines(&link.inlines);
+fn render_html_link_label(
+    link: &Link,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
+    let content = render_html_inlines(&link.inlines, resources, image_asset_prefix);
     if content.is_empty() {
         escape_html(link.title.as_deref().unwrap_or(&link.url))
     } else {
@@ -1353,7 +1425,11 @@ fn render_html_chart(chart: &Chart) -> String {
     format!("<p><span class=\"chart-placeholder\">{content}</span></p>\n")
 }
 
-fn render_html_text_style(style: &TextStyle) -> String {
+fn render_html_text_style(
+    style: &TextStyle,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let mut declarations = Vec::new();
 
     if style.bold {
@@ -1486,6 +1562,21 @@ fn render_html_text_style(style: &TextStyle) -> String {
             "background-color: {}",
             render_css_color(background_color)
         ));
+    }
+    if let Some(border_fill) = &style.border_fill {
+        if let Some(fill) = &border_fill.fill {
+            declarations.extend(render_html_fill_style(fill, resources, image_asset_prefix));
+        }
+        for (border, property) in [
+            (&border_fill.border_top, "border-top"),
+            (&border_fill.border_right, "border-right"),
+            (&border_fill.border_bottom, "border-bottom"),
+            (&border_fill.border_left, "border-left"),
+        ] {
+            if let Some(border) = border {
+                declarations.push(format!("{property}: {}", render_css_border(border)));
+            }
+        }
     }
 
     declarations.join("; ")
@@ -3132,13 +3223,13 @@ fn starts_with_ordered_list_marker(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::ir::{
-        Alignment, BinaryResource, BinaryResourceKind, Chart, Color, ConversionWarning, Equation,
-        EquationKind, HeaderFooter, HeaderFooterPlacement, IR_VERSION, Image, ImageCrop,
-        ImageResource, Indent, LengthPt, LengthPx, Link, ListInfo, ListKind, ListMarkerLayout,
-        MasterPage, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
-        ParagraphStyle, Percent, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind,
-        Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun,
-        TextShadow, TextStyle, UnknownInline, WarningCode,
+        Alignment, BinaryResource, BinaryResourceKind, Border, BorderStyle, Chart, Color,
+        ConversionWarning, Equation, EquationKind, FillStyle, HeaderFooter, HeaderFooterPlacement,
+        IR_VERSION, Image, ImageCrop, ImageResource, Indent, LengthPt, LengthPx, Link, ListInfo,
+        ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId, NoteKind, NoteStore,
+        Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource, ResourceId, ResourceStore,
+        Section, Shape, ShapeKind, Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow,
+        TableStyle, TextBorderFill, TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -4478,7 +4569,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_html_text_style_decorations() {
+    fn renders_html_text_style_decorations_and_border_fill() {
         let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
             role: ParagraphRole::Body,
             inlines: vec![Inline::Text(TextRun {
@@ -4496,6 +4587,33 @@ mod tests {
                         b: 51,
                         a: 255,
                     }),
+                    border_fill: Some(TextBorderFill {
+                        source_border_fill_id: 3,
+                        fill: Some(FillStyle::Solid {
+                            background_color: Some(Color {
+                                r: 68,
+                                g: 85,
+                                b: 102,
+                                a: 255,
+                            }),
+                            background_color_raw: 0x00665544,
+                            pattern_color: None,
+                            pattern_color_raw: 0,
+                            pattern_type: 0,
+                            alpha: 255,
+                        }),
+                        border_left: Some(Border {
+                            width: LengthPx(1.0),
+                            style: BorderStyle::Dashed,
+                            color: Some(Color {
+                                r: 119,
+                                g: 136,
+                                b: 153,
+                                a: 255,
+                            }),
+                        }),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 },
                 style_ref: None,
@@ -4512,6 +4630,9 @@ mod tests {
         assert!(html.contains("text-decoration: overline line-through"));
         assert!(html.contains("text-decoration-color: #112233"));
         assert!(html.contains("text-decoration-style: wavy"));
+        assert!(html.contains("data-border-fill-id=\"3\""));
+        assert!(html.contains("background-color: #445566"));
+        assert!(html.contains("border-left: 1px dashed #778899"));
     }
 
     #[test]
