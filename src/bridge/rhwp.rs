@@ -22,7 +22,8 @@ use rhwp::model::page::{
     ColumnType as RhwpColumnType,
 };
 use rhwp::model::paragraph::{
-    CharShapeRef, FieldRange, NumberingRestart as RhwpNumberingRestart, Paragraph as RhwpParagraph,
+    CharShapeRef, ColumnBreakType as RhwpColumnBreakType, FieldRange,
+    NumberingRestart as RhwpNumberingRestart, Paragraph as RhwpParagraph,
 };
 use rhwp::model::shape::{
     Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection,
@@ -51,13 +52,14 @@ use crate::ir::{
     ImageTextWrap, Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, ListMarkerLayout,
     MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
     NumberingKind, ObjectCaption, ObjectPlacement, PageBinding, PageBorderFillLayout, PageLayout,
-    Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, RawSectionRecord,
-    Resource, ResourceId, ResourceStore, RubyAnnotation, ScriptTextStyle, Section, SectionLayout,
-    Shape, ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow, SourceStyleDefinition,
-    SourceStyleKind, Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell,
-    TableCellStyle, TableCellTextDirection, TablePageBreak, TableRow, TableStyle, TableZone,
-    TextBorderFill, TextDecorationStyle, TextRun, TextScript, TextShadow, TextStyle, TextStyleId,
-    UnknownInline, VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    Paragraph, ParagraphBreakKind, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent,
+    RawSectionRecord, Resource, ResourceId, ResourceStore, RubyAnnotation, ScriptTextStyle,
+    Section, SectionLayout, Shape, ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow,
+    SourceStyleDefinition, SourceStyleKind, Spacing, StyleSheet, TabAlignment, TabDefinition,
+    TabStop, Table, TableCell, TableCellStyle, TableCellTextDirection, TablePageBreak, TableRow,
+    TableStyle, TableZone, TextBorderFill, TextDecorationStyle, TextRun, TextScript, TextShadow,
+    TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
+    VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -339,10 +341,26 @@ impl<'a> BridgeContext<'a> {
             return None;
         }
 
+        let mut style = self.map_paragraph_style_by_id(paragraph.para_shape_id, "paragraph style");
+        style.break_before = match paragraph.column_type {
+            RhwpColumnBreakType::None => None,
+            RhwpColumnBreakType::Section => Some(ParagraphBreakKind::Section),
+            RhwpColumnBreakType::MultiColumn => Some(ParagraphBreakKind::MultiColumn),
+            RhwpColumnBreakType::Page => Some(ParagraphBreakKind::Page),
+            RhwpColumnBreakType::Column => Some(ParagraphBreakKind::Column),
+        };
+        style.source_break_type = (paragraph.raw_break_type != 0 || style.break_before.is_some())
+            .then_some(paragraph.raw_break_type);
+        if style.break_before.is_some() {
+            self.add_warning_once(
+                "rhwp paragraph section/page/column break metadata was preserved in Document IR; HTML approximates page or column breaks while linear semantic exporters retain paragraph order without pagination.",
+            );
+        }
+
         Some(Paragraph {
             role: self.map_paragraph_role(paragraph),
             inlines,
-            style: self.map_paragraph_style_by_id(paragraph.para_shape_id, "paragraph style"),
+            style,
             style_ref: self.paragraph_style_ref(paragraph),
             list: self.map_list_info(paragraph, outline_numbering_id, list_state),
         })
@@ -7865,6 +7883,51 @@ mod tests {
             warning
                 .message
                 .contains("do not reproduce interactive behavior")
+        }));
+    }
+
+    #[test]
+    fn preserves_paragraph_section_page_and_column_breaks() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: [
+                    ("section", RhwpColumnBreakType::Section, 1),
+                    ("multi", RhwpColumnBreakType::MultiColumn, 2),
+                    ("page", RhwpColumnBreakType::Page, 3),
+                    ("column", RhwpColumnBreakType::Column, 4),
+                ]
+                .into_iter()
+                .map(|(text, column_type, raw_break_type)| RhwpParagraph {
+                    text: text.to_string(),
+                    column_type,
+                    raw_break_type,
+                    ..Default::default()
+                })
+                .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let expected = [
+            ParagraphBreakKind::Section,
+            ParagraphBreakKind::MultiColumn,
+            ParagraphBreakKind::Page,
+            ParagraphBreakKind::Column,
+        ];
+
+        for (index, expected_kind) in expected.into_iter().enumerate() {
+            let Block::Paragraph(paragraph) = &bridged.sections[0].blocks[index] else {
+                panic!("expected paragraph block");
+            };
+            assert_eq!(paragraph.style.break_before, Some(expected_kind));
+            assert_eq!(paragraph.style.source_break_type, Some(index as u8 + 1));
+        }
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("section/page/column break metadata")
         }));
     }
 

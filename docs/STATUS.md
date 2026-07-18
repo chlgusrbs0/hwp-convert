@@ -52,6 +52,8 @@ HWP 양식 개체는 종류·이름·캡션·텍스트·크기·전경/배경색
 
 HWP 표 셀 필드명은 셀의 구조 메타데이터와 HTML `data-field-name`으로 보존한다. 필드 동작은 재현하지 않지만, 원문에 없던 fallback 문구를 셀 내용에 삽입하지 않는다. 동결된 HWPX 폴백은 기존 UnknownBlock 표현을 유지한다.
 
+HWP 문단의 구역·다단·쪽·단 나누기 종류와 원본 break byte를 문단 메타데이터로 보존한다. HTML은 page/column `break-before`로 근사하고 `data-*`로 원본 종류를 남기지만, 선형 exporter는 별도 페이지 구조를 만들어내지 않는다. 목록 번호 재시작 정보는 기존 목록 상태 계산에 반영한다.
+
 ### 핵심 관찰
 
 1. 가장 안정적인 경로: `text -> paragraph -> simple table/list/link -> JSON/HTML/Markdown/TXT/SVG`.

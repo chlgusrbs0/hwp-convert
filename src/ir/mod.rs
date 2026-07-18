@@ -64,7 +64,8 @@ use serde::{Deserialize, Serialize};
 /// v67: added structured ruby annotation and character-overlap inlines.
 /// v68: added structured form-object controls.
 /// v69: added structured table-cell field names.
-pub const IR_VERSION: u16 = 69;
+/// v70: added paragraph section/page/column break metadata.
+pub const IR_VERSION: u16 = 70;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -696,7 +697,31 @@ pub struct ParagraphStyle {
     #[serde(skip_serializing_if = "is_false")]
     pub page_break_before: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub break_before: Option<ParagraphBreakKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_break_type: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tab_definition: Option<TabDefinition>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ParagraphBreakKind {
+    Section,
+    MultiColumn,
+    Page,
+    Column,
+}
+
+impl ParagraphBreakKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Section => "section",
+            Self::MultiColumn => "multi_column",
+            Self::Page => "page",
+            Self::Column => "column",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

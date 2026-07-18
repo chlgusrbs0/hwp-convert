@@ -12,10 +12,11 @@ use crate::ir::{
     Alignment, Block, Border, BorderStyle, CaptionLayout, CaptionPlacement, CharacterOverlap,
     Chart, Color, Document, Equation, EquationKind, FillStyle, HeaderFooter, HeaderFooterPlacement,
     Image, ImageFillMode, Inline, Link, ListInfo, ListKind, MasterPage, Note, NoteId, NoteKind,
-    ObjectCaption, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore,
-    RubyAnnotation, Section, Shape, ShapeGeometry, ShapeShadow, Table, TableCell, TableCellStyle,
-    TableCellTextDirection, TableRow, TableStyle, TableZone, TextDecorationStyle, TextRun,
-    TextShadow, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
+    ObjectCaption, Paragraph, ParagraphBreakKind, ParagraphRole, ParagraphStyle, Resource,
+    ResourceId, ResourceStore, RubyAnnotation, Section, Shape, ShapeGeometry, ShapeShadow, Table,
+    TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle, TableZone,
+    TextDecorationStyle, TextRun, TextShadow, TextStyle, UnknownBlock, UnknownInline,
+    VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -1212,14 +1213,28 @@ fn render_html_paragraph(
     ));
     let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
     let class = render_html_paragraph_role_class(&paragraph.role);
+    let break_metadata = paragraph
+        .style
+        .break_before
+        .map(|kind| format!(" data-break-before=\"{}\"", kind.as_str()))
+        .unwrap_or_default();
+    let source_break_metadata = paragraph
+        .style
+        .source_break_type
+        .map(|raw| format!(" data-source-break-type=\"{raw}\""))
+        .unwrap_or_default();
 
     match &paragraph.role {
-        ParagraphRole::Title => format!("<h1{class}{style}>{content}</h1>\n"),
+        ParagraphRole::Title => {
+            format!("<h1{class}{break_metadata}{source_break_metadata}{style}>{content}</h1>\n")
+        }
         ParagraphRole::Heading { level } => {
             let level = (*level).clamp(1, 6);
-            format!("<h{level}{class}{style}>{content}</h{level}>\n")
+            format!(
+                "<h{level}{class}{break_metadata}{source_break_metadata}{style}>{content}</h{level}>\n"
+            )
         }
-        _ => format!("<p{class}{style}>{content}</p>\n"),
+        _ => format!("<p{class}{break_metadata}{source_break_metadata}{style}>{content}</p>\n"),
     }
 }
 
@@ -1830,8 +1845,15 @@ fn render_html_paragraph_style(style: &ParagraphStyle) -> String {
     if style.keep_lines {
         declarations.push("break-inside: avoid".to_string());
     }
-    if style.page_break_before {
-        declarations.push("break-before: page".to_string());
+    match style.break_before {
+        Some(ParagraphBreakKind::Section | ParagraphBreakKind::Page) => {
+            declarations.push("break-before: page".to_string());
+        }
+        Some(ParagraphBreakKind::MultiColumn | ParagraphBreakKind::Column) => {
+            declarations.push("break-before: column".to_string());
+        }
+        None if style.page_break_before => declarations.push("break-before: page".to_string()),
+        None => {}
     }
 
     declarations.join("; ")
@@ -5866,6 +5888,8 @@ mod tests {
             })],
             style: ParagraphStyle {
                 alignment: Some(Alignment::Center),
+                break_before: Some(ParagraphBreakKind::MultiColumn),
+                source_break_type: Some(2),
                 spacing: Spacing {
                     before_pt: Some(LengthPt(6.0)),
                     after_pt: Some(LengthPt(8.0)),
@@ -5892,6 +5916,9 @@ mod tests {
         assert!(html.contains("text-indent: 18pt"));
         assert!(html.contains("margin-left: 10pt"));
         assert!(html.contains("margin-right: 12pt"));
+        assert!(html.contains("data-break-before=\"multi_column\""));
+        assert!(html.contains("data-source-break-type=\"2\""));
+        assert!(html.contains("break-before: column"));
     }
 
     #[test]
