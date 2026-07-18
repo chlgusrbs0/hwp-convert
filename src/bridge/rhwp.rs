@@ -1507,11 +1507,11 @@ impl<'a> BridgeContext<'a> {
                 border_left,
                 width,
                 height,
-                margin_top: i16_hwp_units_to_px_option(table.outer_margin_top),
-                margin_right: i16_hwp_units_to_px_option(table.outer_margin_right),
-                margin_bottom: i16_hwp_units_to_px_option(table.outer_margin_bottom),
-                margin_left: i16_hwp_units_to_px_option(table.outer_margin_left),
-                cell_spacing: i16_hwp_units_to_px_option(table.cell_spacing),
+                margin_top: signed_i16_hwp_units_to_px_option(table.outer_margin_top),
+                margin_right: signed_i16_hwp_units_to_px_option(table.outer_margin_right),
+                margin_bottom: signed_i16_hwp_units_to_px_option(table.outer_margin_bottom),
+                margin_left: signed_i16_hwp_units_to_px_option(table.outer_margin_left),
+                cell_spacing: signed_i16_hwp_units_to_px_option(table.cell_spacing),
                 repeat_header: table.repeat_header,
                 page_break: match table.page_break {
                     rhwp::model::table::TablePageBreak::None => None,
@@ -1554,26 +1554,12 @@ impl<'a> BridgeContext<'a> {
         if table.cell_spacing < 0 {
             details.push(format!("negative_cell_spacing={}", table.cell_spacing));
         }
-        if table.outer_margin_left < 0
-            || table.outer_margin_right < 0
-            || table.outer_margin_top < 0
-            || table.outer_margin_bottom < 0
-        {
-            details.push(format!(
-                "negative_outer_margins={}/{}/{}/{}",
-                table.outer_margin_left,
-                table.outer_margin_right,
-                table.outer_margin_top,
-                table.outer_margin_bottom
-            ));
-        }
-
         if details.is_empty() {
             return;
         }
 
         self.add_warning_once(&format!(
-            "rhwp exposed table layout properties that Table IR does not model; hwp-convert preserved table structure but omitted {}.",
+            "rhwp exposed table layout properties that Document IR preserves but semantic HTML cannot reproduce exactly; {} is retained in structured output and omitted from invalid CSS.",
             details.join(", ")
         ));
     }
@@ -1671,10 +1657,10 @@ impl<'a> BridgeContext<'a> {
                 text_direction,
                 width: hwp_units_to_px_option(cell.width),
                 height: hwp_units_to_px_option(cell.height),
-                padding_top: i16_hwp_units_to_px_option(padding.top),
-                padding_right: i16_hwp_units_to_px_option(padding.right),
-                padding_bottom: i16_hwp_units_to_px_option(padding.bottom),
-                padding_left: i16_hwp_units_to_px_option(padding.left),
+                padding_top: signed_i16_hwp_units_to_px_option(padding.top),
+                padding_right: signed_i16_hwp_units_to_px_option(padding.right),
+                padding_bottom: signed_i16_hwp_units_to_px_option(padding.bottom),
+                padding_left: signed_i16_hwp_units_to_px_option(padding.left),
                 border_top,
                 border_right,
                 border_bottom,
@@ -3040,7 +3026,7 @@ impl<'a> BridgeContext<'a> {
         }
 
         self.add_warning_once(&format!(
-            "rhwp table cell {source} padding contained negative HWPUNIT values left={}, right={}, top={}, bottom={}; hwp-convert omitted the negative sides.",
+            "rhwp table cell {source} padding contained negative HWPUNIT values left={}, right={}, top={}, bottom={}; Document IR preserves the values, but semantic HTML omits negative CSS padding.",
             padding.left, padding.right, padding.top, padding.bottom
         ));
     }
@@ -3682,6 +3668,10 @@ fn i16_hwp_units_to_px_option(value: i16) -> Option<LengthPx> {
     } else {
         hwp_units_to_px_option(value as u32)
     }
+}
+
+fn signed_i16_hwp_units_to_px_option(value: i16) -> Option<LengthPx> {
+    (value != 0).then_some(LengthPx(value as f32 / 75.0))
 }
 
 /// Map a single rhwp border line to an IR cell border. `None` line type means
@@ -4933,13 +4923,15 @@ mod tests {
     }
 
     #[test]
-    fn warns_and_omits_negative_table_padding_sides() {
+    fn preserves_negative_table_padding_with_html_limitation_warning() {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
                     controls: vec![Control::Table(Box::new(RhwpTable {
                         row_count: 1,
                         col_count: 1,
+                        cell_spacing: -150,
+                        outer_margin_left: -75,
                         padding: rhwp::model::Padding {
                             left: -75,
                             right: 150,
@@ -4968,10 +4960,12 @@ mod tests {
 
         match &bridged.sections[0].blocks[0] {
             Block::Table(table) => {
+                assert_eq!(table.style.cell_spacing, Some(LengthPx(-2.0)));
+                assert_eq!(table.style.margin_left, Some(LengthPx(-1.0)));
                 let style = &table.rows[0].cells[0].style;
-                assert_eq!(style.padding_left, None);
+                assert_eq!(style.padding_left, Some(LengthPx(-1.0)));
                 assert_eq!(style.padding_right, Some(LengthPx(2.0)));
-                assert_eq!(style.padding_top, None);
+                assert_eq!(style.padding_top, Some(LengthPx(-1.0 / 75.0)));
                 assert_eq!(style.padding_bottom, Some(LengthPx(3.0)));
             }
             other => panic!("expected table block, got {other:?}"),
@@ -4979,6 +4973,11 @@ mod tests {
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("table-default padding")
                 && warning.message.contains("negative HWPUNIT")
+                && warning.message.contains("Document IR preserves")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("negative_cell_spacing=-150")
+                && warning.message.contains("retained in structured output")
         }));
     }
 

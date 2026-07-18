@@ -2124,7 +2124,7 @@ fn render_html_table_style(
     if let Some(height) = style.height {
         declarations.push(format!("height: {}px", height.0));
     }
-    if let Some(cell_spacing) = style.cell_spacing {
+    if let Some(cell_spacing) = style.cell_spacing.filter(|value| value.0 >= 0.0) {
         declarations.push("border-collapse: separate".to_string());
         declarations.push(format!("border-spacing: {}px", cell_spacing.0));
     }
@@ -2187,7 +2187,7 @@ fn render_html_table_cell_style(
         (style.padding_bottom, "padding-bottom"),
         (style.padding_left, "padding-left"),
     ] {
-        if let Some(value) = value {
+        if let Some(value) = value.filter(|value| value.0 >= 0.0) {
             declarations.push(format!("{property}: {}px", value.0));
         }
     }
@@ -5773,6 +5773,37 @@ mod tests {
         assert!(html.contains("border-collapse: separate"));
         assert!(html.contains("border-spacing: 3px"));
         assert!(!html.contains("<td"));
+    }
+
+    #[test]
+    fn omits_invalid_negative_table_spacing_and_padding_css() {
+        let document = document_with_blocks(vec![Block::Table(Table {
+            rows: vec![TableRow {
+                cells: vec![TableCell {
+                    blocks: vec![Block::Paragraph(Paragraph::from_plain_text(
+                        "cell".to_string(),
+                    ))],
+                    style: TableCellStyle {
+                        padding_left: Some(LengthPx(-2.0)),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            style: TableStyle {
+                cell_spacing: Some(LengthPx(-3.0)),
+                margin_left: Some(LengthPx(-4.0)),
+                ..Default::default()
+            },
+            ..Default::default()
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+
+        assert!(html.contains("margin-left: -4px"));
+        assert!(!html.contains("border-spacing: -3px"));
+        assert!(!html.contains("padding-left: -2px"));
     }
 
     #[test]
