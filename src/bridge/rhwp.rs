@@ -2485,8 +2485,17 @@ impl<'a> BridgeContext<'a> {
         };
 
         if para_shape.border_fill_id != 0 {
-            style.background_color = self
-                .border_fill_background_color(para_shape.border_fill_id, "paragraph background");
+            style.source_border_fill_id = Some(para_shape.border_fill_id);
+            let fill = self.border_fill_style(para_shape.border_fill_id, "paragraph background");
+            style.background_color = match &fill {
+                Some(FillStyle::Solid {
+                    background_color, ..
+                }) => *background_color,
+                _ => None,
+            };
+            style.fill = fill.map(Box::new);
+            style.diagonal =
+                self.map_border_fill_diagonal(para_shape.border_fill_id, "paragraph diagonal");
             let [border_left, border_right, border_top, border_bottom] =
                 self.map_borders(para_shape.border_fill_id, "paragraph borders");
             style.border_top = border_top;
@@ -2789,25 +2798,6 @@ impl<'a> BridgeContext<'a> {
         })
     }
 
-    fn border_fill_background_color(
-        &mut self,
-        border_fill_id: u16,
-        context: &str,
-    ) -> Option<Color> {
-        match self.lookup_border_fill(border_fill_id).cloned() {
-            Some(border_fill) => {
-                self.warn_unmodeled_border_fill(&border_fill, context);
-                border_fill_background_color(&border_fill)
-            }
-            None => {
-                if border_fill_id != 0 {
-                    self.warn_missing_border_fill(border_fill_id, context);
-                }
-                None
-            }
-        }
-    }
-
     fn border_fill_style(&mut self, border_fill_id: u16, context: &str) -> Option<FillStyle> {
         let border_fill = match self.lookup_border_fill(border_fill_id).cloned() {
             Some(border_fill) => border_fill,
@@ -2974,43 +2964,6 @@ impl<'a> BridgeContext<'a> {
         self.add_warning_once(
             "rhwp gradient and image fills were preserved in structured IR; HTML approximates their visual appearance while other semantic exporters retain them only in JSON.",
         );
-    }
-
-    fn warn_unmodeled_border_fill(&mut self, border_fill: &RhwpBorderFill, context: &str) {
-        match border_fill.fill.fill_type {
-            RhwpFillType::None => {}
-            RhwpFillType::Solid => match border_fill.fill.solid.as_ref() {
-                Some(solid) if solid.pattern_type > 0 => {
-                    self.add_warning_once(&format!(
-                        "rhwp {context} used solid fill pattern type {}; hwp-convert approximated it with the pattern background color.",
-                        solid.pattern_type
-                    ));
-                }
-                Some(_) => {}
-                None => {
-                    self.add_warning_once(&format!(
-                        "rhwp {context} declared a solid fill without solid fill data; hwp-convert omitted the background fill."
-                    ));
-                }
-            },
-            RhwpFillType::Gradient => {
-                self.add_warning_once(&format!(
-                    "rhwp {context} used a gradient fill that semantic IR does not model; hwp-convert omitted the background fill."
-                ));
-            }
-            RhwpFillType::Image => {
-                self.add_warning_once(&format!(
-                    "rhwp {context} used an image fill that semantic IR does not model; hwp-convert omitted the background fill."
-                ));
-            }
-        }
-
-        if !matches!(border_fill.fill.alpha, 0 | 255) {
-            self.add_warning_once(&format!(
-                "rhwp {context} used fill opacity {}; hwp-convert did not apply that opacity.",
-                border_fill.fill.alpha
-            ));
-        }
     }
 
     fn warn_negative_table_padding(&mut self, padding: &rhwp::model::Padding, source: &str) {
@@ -3874,18 +3827,6 @@ fn map_image_fill_mode(mode: RhwpImageFillMode) -> ImageFillMode {
         RhwpImageFillMode::RightBottom => ImageFillMode::RightBottom,
         RhwpImageFillMode::None => ImageFillMode::None,
     }
-}
-
-fn border_fill_background_color(border_fill: &RhwpBorderFill) -> Option<Color> {
-    if border_fill.fill.fill_type != RhwpFillType::Solid {
-        return None;
-    }
-
-    border_fill
-        .fill
-        .solid
-        .as_ref()
-        .and_then(|solid| color_ref_to_color_option(solid.background_color))
 }
 
 fn map_alignment(alignment: RhwpAlignment) -> Option<crate::ir::Alignment> {
@@ -7222,6 +7163,111 @@ mod tests {
         assert!(!bridged.warnings.iter().any(|warning| {
             warning.message.contains("paragraph borders")
                 || warning.message.contains("paragraph background")
+        }));
+    }
+
+    #[test]
+    fn preserves_paragraph_gradient_fill_and_diagonal_metadata() {
+        let document = RhwpDocument {
+            doc_info: DocInfo {
+                para_shapes: vec![RhwpParaShape {
+                    border_fill_id: 1,
+                    ..Default::default()
+                }],
+                border_fills: vec![RhwpBorderFill {
+                    attr: 8,
+                    diagonal: RhwpDiagonalLine {
+                        diagonal_type: 1,
+                        width: 2,
+                        color: 0x00665544,
+                    },
+                    fill: Fill {
+                        fill_type: FillType::Gradient,
+                        gradient: Some(GradientFill {
+                            gradient_type: 1,
+                            angle: 45,
+                            center_x: 20,
+                            center_y: 80,
+                            blur: 3,
+                            colors: vec![0x000000FF, 0x00FF0000],
+                            positions: vec![0, 100],
+                        }),
+                        alpha: 192,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "gradient paragraph".to_string(),
+                    para_shape_id: 0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let style = match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => &paragraph.style,
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+
+        assert_eq!(style.source_border_fill_id, Some(1));
+        assert_eq!(style.background_color, None);
+        assert_eq!(
+            style.fill,
+            Some(Box::new(FillStyle::Gradient {
+                gradient_type: 1,
+                angle: 45,
+                center_x: 20,
+                center_y: 80,
+                blur: 3,
+                colors: vec![
+                    GradientColor {
+                        color: Some(Color {
+                            r: 255,
+                            g: 0,
+                            b: 0,
+                            a: 255,
+                        }),
+                        raw: 0x000000FF,
+                    },
+                    GradientColor {
+                        color: Some(Color {
+                            r: 0,
+                            g: 0,
+                            b: 255,
+                            a: 255,
+                        }),
+                        raw: 0x00FF0000,
+                    },
+                ],
+                positions: vec![0, 100],
+                alpha: 192,
+            }))
+        );
+        assert_eq!(
+            style.diagonal,
+            Some(BorderFillDiagonal {
+                raw_attributes: 8,
+                diagonal_type: 1,
+                width_index: 2,
+                color: Some(Color {
+                    r: 0x44,
+                    g: 0x55,
+                    b: 0x66,
+                    a: 255,
+                }),
+                raw_color: 0x00665544,
+            })
+        );
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("gradient and image fills")
+                && warning.message.contains("structured IR")
         }));
     }
 

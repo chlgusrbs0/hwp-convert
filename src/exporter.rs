@@ -1064,11 +1064,19 @@ fn render_html_list_item_open(
     let marker_metadata = render_html_list_marker_metadata(list);
     let line_spacing_metadata = render_html_line_spacing_metadata(&paragraph.style);
     let alignment_metadata = render_html_alignment_metadata(&paragraph.style);
-    let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
+    let style = render_html_style_attr(&render_html_paragraph_style(
+        &paragraph.style,
+        resources,
+        image_asset_prefix,
+    ));
+    let border_fill_metadata = render_html_border_fill_metadata(
+        paragraph.style.source_border_fill_id,
+        paragraph.style.diagonal.as_ref(),
+    );
     let content = render_html_inlines(&paragraph.inlines, resources, image_asset_prefix);
 
     format!(
-        "<li{value}{marker_format}{marker}{marker_metadata}{line_spacing_metadata}{alignment_metadata}{style}>{content}"
+        "<li{value}{marker_format}{marker}{marker_metadata}{line_spacing_metadata}{alignment_metadata}{border_fill_metadata}{style}>{content}"
     )
 }
 
@@ -1224,7 +1232,11 @@ fn render_html_paragraph(
         resources,
         image_asset_prefix,
     ));
-    let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
+    let style = render_html_style_attr(&render_html_paragraph_style(
+        &paragraph.style,
+        resources,
+        image_asset_prefix,
+    ));
     let class = render_html_paragraph_role_class(&paragraph.role);
     let break_metadata = paragraph
         .style
@@ -1238,21 +1250,25 @@ fn render_html_paragraph(
         .unwrap_or_default();
     let line_spacing_metadata = render_html_line_spacing_metadata(&paragraph.style);
     let alignment_metadata = render_html_alignment_metadata(&paragraph.style);
+    let border_fill_metadata = render_html_border_fill_metadata(
+        paragraph.style.source_border_fill_id,
+        paragraph.style.diagonal.as_ref(),
+    );
 
     match &paragraph.role {
         ParagraphRole::Title => {
             format!(
-                "<h1{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{alignment_metadata}{style}>{content}</h1>\n"
+                "<h1{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{alignment_metadata}{border_fill_metadata}{style}>{content}</h1>\n"
             )
         }
         ParagraphRole::Heading { level } => {
             let level = (*level).clamp(1, 6);
             format!(
-                "<h{level}{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{alignment_metadata}{style}>{content}</h{level}>\n"
+                "<h{level}{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{alignment_metadata}{border_fill_metadata}{style}>{content}</h{level}>\n"
             )
         }
         _ => format!(
-            "<p{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{alignment_metadata}{style}>{content}</p>\n"
+            "<p{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{alignment_metadata}{border_fill_metadata}{style}>{content}</p>\n"
         ),
     }
 }
@@ -1921,7 +1937,11 @@ fn text_decoration_style_to_css(style: &TextDecorationStyle) -> &'static str {
     }
 }
 
-fn render_html_paragraph_style(style: &ParagraphStyle) -> String {
+fn render_html_paragraph_style(
+    style: &ParagraphStyle,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let mut declarations = Vec::new();
 
     if let Some(alignment) = &style.alignment {
@@ -1947,7 +1967,9 @@ fn render_html_paragraph_style(style: &ParagraphStyle) -> String {
     if let Some(right_pt) = style.indent.right_pt {
         declarations.push(format!("margin-right: {}pt", right_pt.0));
     }
-    if let Some(background_color) = style.background_color {
+    if let Some(fill) = &style.fill {
+        declarations.extend(render_html_fill_style(fill, resources, image_asset_prefix));
+    } else if let Some(background_color) = style.background_color {
         declarations.push(format!(
             "background-color: {}",
             render_css_color(background_color)
@@ -6178,6 +6200,32 @@ mod tests {
                     b: 51,
                     a: 255,
                 }),
+                source_border_fill_id: Some(3),
+                diagonal: Some(BorderFillDiagonal {
+                    raw_attributes: 8,
+                    diagonal_type: 1,
+                    width_index: 2,
+                    color: Some(Color {
+                        r: 68,
+                        g: 85,
+                        b: 102,
+                        a: 255,
+                    }),
+                    raw_color: 0x00665544,
+                }),
+                fill: Some(Box::new(FillStyle::Solid {
+                    background_color: Some(Color {
+                        r: 17,
+                        g: 34,
+                        b: 51,
+                        a: 255,
+                    }),
+                    background_color_raw: 0x00332211,
+                    pattern_color: None,
+                    pattern_color_raw: 0xFFFFFFFF,
+                    pattern_type: 0,
+                    alpha: 255,
+                })),
                 padding_top_pt: Some(LengthPt(1.0)),
                 padding_right_pt: Some(LengthPt(2.0)),
                 padding_bottom_pt: Some(LengthPt(3.0)),
@@ -6205,6 +6253,9 @@ mod tests {
         let html = render_html_document(Path::new("sample.hwp"), &document);
 
         assert!(html.contains("background-color: #112233"));
+        assert!(html.contains("data-border-fill-id=\"3\""));
+        assert!(html.contains("data-diagonal-attributes=\"8\""));
+        assert!(html.contains("data-diagonal-color-raw=\"6706500\""));
         assert!(html.contains("padding-top: 1pt"));
         assert!(html.contains("padding-right: 2pt"));
         assert!(html.contains("padding-bottom: 3pt"));

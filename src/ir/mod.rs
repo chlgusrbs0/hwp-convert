@@ -71,7 +71,8 @@ use serde::{Deserialize, Serialize};
 /// v74: added structured shape source-transform metadata.
 /// v75: added structured shape line-connector metadata.
 /// v76: added shape text-box maximum-width metadata.
-pub const IR_VERSION: u16 = 76;
+/// v77: added structured paragraph border-fill metadata.
+pub const IR_VERSION: u16 = 77;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -684,6 +685,12 @@ pub struct ParagraphStyle {
     pub indent: Indent,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_border_fill_id: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagonal: Option<BorderFillDiagonal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill: Option<Box<FillStyle>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub padding_top_pt: Option<LengthPt>,
     #[serde(skip_serializing_if = "Option::is_none")]

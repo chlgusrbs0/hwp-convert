@@ -63,7 +63,7 @@ HWP 문단의 구역·다단·쪽·단 나누기 종류와 원본 break byte를 
 
 HWP 문단 줄 간격은 rHWP가 공개하는 `percent`, `fixed`, `space_only`, `minimum` 모드를 수치와 함께 IR에 보존한다. HTML은 모드를 `data-line-spacing-mode`로 남기며, CSS에서 같은 의미로 표현할 수 없는 `space_only`와 `minimum`은 고정 line-height로 근사하고 warning을 기록한다.
 
-HWP 문단의 배분 정렬(`distribute`)과 나눔 정렬(`split`)은 일반 양쪽 정렬과 구분해 IR에 보존한다. HTML은 원본 종류를 `data-alignment`로 남기고 CSS `justify`로 근사한다.
+HWP 문단의 배분 정렬(`distribute`)과 나눔 정렬(`split`)은 일반 양쪽 정렬과 구분해 IR에 보존한다. HTML은 원본 종류를 `data-alignment`로 남기고 CSS `justify`로 근사한다. 문단 BorderFill의 원본 ID, 단색·gradient·image 채우기와 대각선 정보도 구조화하며 HTML 문단과 목록 항목에 반영한다.
 
 HWP 도형은 rHWP가 공개하는 원본·현재 크기, 그룹 내부 오프셋, 회전 중심과 합성 affine 행렬을 `ShapeTransform`에 보존한다. HTML은 이 값을 `data-*`로 남기지만 전체 그룹 좌표 변환은 적용하지 않으며, 정확한 시각 배치는 renderer 경로의 책임이다.
 
