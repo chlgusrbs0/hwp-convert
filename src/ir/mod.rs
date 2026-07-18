@@ -85,7 +85,8 @@ use serde::{Deserialize, Serialize};
 /// v88: added raw table control and table-record extension bytes.
 /// v89: added raw table-cell LIST_HEADER extension bytes.
 /// v90: added source paragraph line-segment and extended-tab layout metadata.
-pub const IR_VERSION: u16 = 90;
+/// v91: added source paragraph record and range metadata.
+pub const IR_VERSION: u16 = 91;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -740,10 +741,30 @@ pub struct ParagraphStyle {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ParagraphSourceLayout {
+    pub source_character_count: u32,
+    pub source_control_mask: u32,
+    pub source_character_count_msb: bool,
+    pub source_has_text_record: bool,
+    #[serde(default, with = "base64_bytes", skip_serializing_if = "Vec::is_empty")]
+    pub raw_header_extension: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub character_offsets: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub character_shape_references: Vec<ParagraphCharacterShapeReference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub line_segments: Vec<ParagraphLineSegment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extended_tabs: Vec<[u16; 7]>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub range_tags: Vec<ParagraphRangeTag>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub control_data: Vec<ParagraphControlData>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParagraphCharacterShapeReference {
+    pub start_position: u32,
+    pub source_character_shape_id: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -757,6 +778,20 @@ pub struct ParagraphLineSegment {
     pub column_start: i32,
     pub segment_width: i32,
     pub raw_tag: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParagraphRangeTag {
+    pub start: u32,
+    pub end: u32,
+    pub raw_tag: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParagraphControlData {
+    pub control_index: u32,
+    #[serde(with = "base64_bytes")]
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

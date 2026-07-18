@@ -55,7 +55,8 @@ use crate::ir::{
     MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
     NumberingKind, ObjectBorderMetadata, ObjectCaption, ObjectPlacement, ObjectSizeCriterion,
     PageBinding, PageBorderFillLayout, PageLayout, Paragraph, ParagraphBreakKind,
-    ParagraphLineSegment, ParagraphRole, ParagraphSourceLayout, ParagraphStyle, ParagraphStyleId,
+    ParagraphCharacterShapeReference, ParagraphControlData, ParagraphLineSegment,
+    ParagraphRangeTag, ParagraphRole, ParagraphSourceLayout, ParagraphStyle, ParagraphStyleId,
     Percent, RawSectionRecord, Resource, ResourceId, ResourceStore, RubyAnnotation,
     ScriptTextStyle, Section, SectionLayout, Shape, ShapeConnector, ShapeConnectorKind,
     ShapeConnectorPoint, ShapeGeometry, ShapeKind, ShapeLineMetadata, ShapePoint, ShapeShadow,
@@ -3149,11 +3150,47 @@ fn map_caption_placement(direction: RhwpCaptionDirection) -> CaptionPlacement {
 }
 
 fn map_paragraph_source_layout(paragraph: &RhwpParagraph) -> Option<ParagraphSourceLayout> {
-    if paragraph.line_segs.is_empty() && paragraph.tab_extended.is_empty() {
+    let control_data = paragraph
+        .ctrl_data_records
+        .iter()
+        .enumerate()
+        .filter_map(|(index, data)| {
+            data.as_ref().map(|data| ParagraphControlData {
+                control_index: index as u32,
+                data: data.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if paragraph.char_count == 0
+        && paragraph.control_mask == 0
+        && !paragraph.char_count_msb
+        && !paragraph.has_para_text
+        && paragraph.raw_header_extra.is_empty()
+        && paragraph.char_offsets.is_empty()
+        && paragraph.char_shapes.is_empty()
+        && paragraph.line_segs.is_empty()
+        && paragraph.tab_extended.is_empty()
+        && paragraph.range_tags.is_empty()
+        && control_data.is_empty()
+    {
         return None;
     }
 
     Some(ParagraphSourceLayout {
+        source_character_count: paragraph.char_count,
+        source_control_mask: paragraph.control_mask,
+        source_character_count_msb: paragraph.char_count_msb,
+        source_has_text_record: paragraph.has_para_text,
+        raw_header_extension: paragraph.raw_header_extra.clone(),
+        character_offsets: paragraph.char_offsets.clone(),
+        character_shape_references: paragraph
+            .char_shapes
+            .iter()
+            .map(|reference| ParagraphCharacterShapeReference {
+                start_position: reference.start_pos,
+                source_character_shape_id: reference.char_shape_id,
+            })
+            .collect(),
         line_segments: paragraph
             .line_segs
             .iter()
@@ -3170,6 +3207,16 @@ fn map_paragraph_source_layout(paragraph: &RhwpParagraph) -> Option<ParagraphSou
             })
             .collect(),
         extended_tabs: paragraph.tab_extended.clone(),
+        range_tags: paragraph
+            .range_tags
+            .iter()
+            .map(|range| ParagraphRangeTag {
+                start: range.start,
+                end: range.end,
+                raw_tag: range.tag,
+            })
+            .collect(),
+        control_data,
     })
 }
 
@@ -4585,7 +4632,7 @@ mod tests {
     };
     use rhwp::model::paragraph::{
         CharShapeRef, FieldRange, LineSeg as RhwpLineSeg, NumberingRestart as RhwpNumberingRestart,
-        Paragraph as RhwpParagraph,
+        Paragraph as RhwpParagraph, RangeTag as RhwpRangeTag,
     };
     use rhwp::model::shape::{
         ArcShape as RhwpArcShape, Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection,
@@ -4612,7 +4659,17 @@ mod tests {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
+                    char_count: 4,
+                    control_mask: 0x4000_0001,
+                    char_count_msb: true,
+                    has_para_text: true,
+                    raw_header_extra: vec![8, 9, 10],
                     text: "a\tb".to_string(),
+                    char_offsets: vec![0, 1, 2],
+                    char_shapes: vec![CharShapeRef {
+                        start_pos: 1,
+                        char_shape_id: 7,
+                    }],
                     line_segs: vec![RhwpLineSeg {
                         text_start: 2,
                         vertical_pos: -300,
@@ -4625,6 +4682,12 @@ mod tests {
                         tag: 0x8000_0003,
                     }],
                     tab_extended: vec![[1, 2, 3, 4, 5, 6, 7]],
+                    range_tags: vec![RhwpRangeTag {
+                        start: 1,
+                        end: 2,
+                        tag: 0x0100_0003,
+                    }],
+                    ctrl_data_records: vec![None, Some(vec![11, 12, 13])],
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -4643,6 +4706,19 @@ mod tests {
             .expect("source paragraph layout");
 
         assert_eq!(layout.extended_tabs, vec![[1, 2, 3, 4, 5, 6, 7]]);
+        assert_eq!(layout.source_character_count, 4);
+        assert_eq!(layout.source_control_mask, 0x4000_0001);
+        assert!(layout.source_character_count_msb);
+        assert!(layout.source_has_text_record);
+        assert_eq!(layout.raw_header_extension, vec![8, 9, 10]);
+        assert_eq!(layout.character_offsets, vec![0, 1, 2]);
+        assert_eq!(
+            layout.character_shape_references,
+            vec![ParagraphCharacterShapeReference {
+                start_position: 1,
+                source_character_shape_id: 7,
+            }]
+        );
         assert_eq!(
             layout.line_segments,
             vec![ParagraphLineSegment {
@@ -4657,9 +4733,26 @@ mod tests {
                 raw_tag: 0x8000_0003,
             }]
         );
+        assert_eq!(
+            layout.range_tags,
+            vec![ParagraphRangeTag {
+                start: 1,
+                end: 2,
+                raw_tag: 0x0100_0003,
+            }]
+        );
+        assert_eq!(
+            layout.control_data,
+            vec![ParagraphControlData {
+                control_index: 1,
+                data: vec![11, 12, 13],
+            }]
+        );
         let json = serde_json::to_string(layout).expect("serialize paragraph source layout");
         assert!(json.contains(r#""vertical_position":-300"#));
         assert!(json.contains(r#""extended_tabs":[[1,2,3,4,5,6,7]]"#));
+        assert!(json.contains(r#""raw_header_extension":"CAkK""#));
+        assert!(json.contains(r#""data":"CwwN""#));
     }
 
     #[test]
