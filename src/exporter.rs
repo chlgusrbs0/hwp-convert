@@ -2784,12 +2784,8 @@ fn render_html_cropped_image(
         || display_height <= 0.0
         || source_width <= 0.0
         || source_height <= 0.0
-        || crop.left.0 < 0.0
-        || crop.top.0 < 0.0
         || crop_width <= 0.0
         || crop_height <= 0.0
-        || crop.right.0 > source_width
-        || crop.bottom.0 > source_height
     {
         return None;
     }
@@ -5162,10 +5158,10 @@ mod tests {
             image.width = Some(LengthPx(200.0));
             image.height = Some(LengthPx(100.0));
             image.crop = Some(ImageCrop {
-                left: LengthPx(10.0),
-                top: LengthPx(20.0),
+                left: LengthPx(-10.0),
+                top: LengthPx(-20.0),
                 right: LengthPx(90.0),
-                bottom: LengthPx(70.0),
+                bottom: LengthPx(60.0),
                 source_width: Some(LengthPx(100.0)),
                 source_height: Some(LengthPx(80.0)),
             });
@@ -5175,7 +5171,7 @@ mod tests {
 
         assert!(html.contains("<img src=\"sample_assets/images/image-1.png\" alt=\"로고\""));
         assert!(html.contains("overflow: hidden; width: 200px; height: 100px"));
-        assert!(html.contains("left: -25px; top: -40px; width: 250px; height: 160px"));
+        assert!(html.contains("left: 20px; top: 25px; width: 200px; height: 100px"));
     }
 
     #[test]

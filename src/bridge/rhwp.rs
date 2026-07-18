@@ -4243,16 +4243,14 @@ fn picture_crop_is_empty(picture: &Picture) -> bool {
 
 fn map_picture_crop(picture: &Picture) -> Option<ImageCrop> {
     let crop = picture.crop;
-    (crop.left >= 0 && crop.top >= 0 && crop.right > crop.left && crop.bottom > crop.top).then_some(
-        ImageCrop {
-            left: LengthPx(crop.left as f32 / 75.0),
-            top: LengthPx(crop.top as f32 / 75.0),
-            right: LengthPx(crop.right as f32 / 75.0),
-            bottom: LengthPx(crop.bottom as f32 / 75.0),
-            source_width: hwp_units_to_px_option(picture.shape_attr.original_width),
-            source_height: hwp_units_to_px_option(picture.shape_attr.original_height),
-        },
-    )
+    (crop.right > crop.left && crop.bottom > crop.top).then_some(ImageCrop {
+        left: LengthPx(crop.left as f32 / 75.0),
+        top: LengthPx(crop.top as f32 / 75.0),
+        right: LengthPx(crop.right as f32 / 75.0),
+        bottom: LengthPx(crop.bottom as f32 / 75.0),
+        source_width: hwp_units_to_px_option(picture.shape_attr.original_width),
+        source_height: hwp_units_to_px_option(picture.shape_attr.original_height),
+    })
 }
 
 fn map_picture_placement(picture: &Picture) -> Option<ImagePlacement> {
@@ -6008,8 +6006,8 @@ mod tests {
                 effect: RhwpImageEffect::GrayScale,
             },
             crop: RhwpCropInfo {
-                left: 1,
-                top: 2,
+                left: -1,
+                top: -2,
                 right: 3,
                 bottom: 4,
             },
@@ -6164,8 +6162,8 @@ mod tests {
         assert_eq!(
             image.crop,
             Some(ImageCrop {
-                left: LengthPx(1.0 / 75.0),
-                top: LengthPx(2.0 / 75.0),
+                left: LengthPx(-1.0 / 75.0),
+                top: LengthPx(-2.0 / 75.0),
                 right: LengthPx(3.0 / 75.0),
                 bottom: LengthPx(4.0 / 75.0),
                 source_width: Some(LengthPx(400.0)),
