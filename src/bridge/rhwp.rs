@@ -2070,6 +2070,13 @@ impl<'a> BridgeContext<'a> {
         };
 
         let transform = ShapeTransform {
+            source_control_id: (source.ctrl_id != 0).then_some(source.ctrl_id),
+            source_control_id_repeated: source.is_two_ctrl_id,
+            source_group_level: (source.group_level != 0).then_some(source.group_level),
+            source_local_file_version: (source.local_file_version != 0)
+                .then_some(source.local_file_version),
+            source_flip_flags: (source.flip != 0).then_some(source.flip),
+            raw_rendering_data: source.raw_rendering.clone(),
             original_width: hwp_units_to_px_option(source.original_width),
             original_height: hwp_units_to_px_option(source.original_height),
             current_width: hwp_units_to_px_option(source.current_width),
@@ -5351,8 +5358,12 @@ mod tests {
             },
             drawing: RhwpDrawingObjAttr {
                 shape_attr: RhwpShapeComponentAttr {
+                    ctrl_id: 0x6c69_6e24,
+                    is_two_ctrl_id: true,
                     offset_x: 75,
                     offset_y: -150,
+                    group_level: 2,
+                    local_file_version: 5032,
                     original_width: 3600,
                     original_height: 1800,
                     current_width: 7200,
@@ -5361,13 +5372,14 @@ mod tests {
                     rotation_center: rhwp::model::Point { x: 1800, y: 900 },
                     horz_flip: true,
                     vert_flip: true,
+                    flip: 0x8000_0003,
+                    raw_rendering: vec![1, 2, 3, 4],
                     render_tx: 300.0,
                     render_ty: 375.0,
                     render_sx: 2.0,
                     render_sy: 0.5,
                     render_b: 0.25,
                     render_c: -0.125,
-                    ..Default::default()
                 },
                 border_line: RhwpShapeBorderLine {
                     color: 0x00332211,
@@ -5434,6 +5446,16 @@ mod tests {
                     shape.placement.as_ref().map(|placement| placement.z_order),
                     Some(7)
                 );
+                let transform = shape.transform.as_ref().expect("shape transform");
+                assert_eq!(transform.source_control_id, Some(0x6c69_6e24));
+                assert!(transform.source_control_id_repeated);
+                assert_eq!(transform.source_group_level, Some(2));
+                assert_eq!(transform.source_local_file_version, Some(5032));
+                assert_eq!(transform.source_flip_flags, Some(0x8000_0003));
+                assert_eq!(transform.raw_rendering_data, vec![1, 2, 3, 4]);
+                let transform_json =
+                    serde_json::to_string(transform).expect("serialize shape transform");
+                assert!(transform_json.contains(r#""raw_rendering_data":"AQIDBA==""#));
                 assert_eq!(
                     shape.geometry,
                     Some(ShapeGeometry::Rectangle {
@@ -5464,6 +5486,12 @@ mod tests {
                 assert_eq!(
                     shape.transform,
                     Some(ShapeTransform {
+                        source_control_id: Some(0x6c69_6e24),
+                        source_control_id_repeated: true,
+                        source_group_level: Some(2),
+                        source_local_file_version: Some(5032),
+                        source_flip_flags: Some(0x8000_0003),
+                        raw_rendering_data: vec![1, 2, 3, 4],
                         original_width: Some(LengthPx(48.0)),
                         original_height: Some(LengthPx(24.0)),
                         current_width: Some(LengthPx(96.0)),
@@ -6194,6 +6222,7 @@ mod tests {
                     scale_y: 0.5,
                     translate_y: LengthPx(5.0),
                 }),
+                ..Default::default()
             })
         );
         assert_eq!(

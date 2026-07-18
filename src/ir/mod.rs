@@ -80,7 +80,9 @@ use serde::{Deserialize, Serialize};
 /// v83: added object size criteria and raw source dimensions.
 /// v84: added raw source object attributes to placement metadata.
 /// v85: added equation source instance, object placement, and raw control data.
-pub const IR_VERSION: u16 = 86;
+/// v86: added opaque common-object control extension bytes.
+/// v87: added source shape-component metadata and raw rendering bytes.
+pub const IR_VERSION: u16 = 87;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1588,6 +1590,18 @@ pub struct ShapeConnectorPoint {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ShapeTransform {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_control_id: Option<u32>,
+    #[serde(default)]
+    pub source_control_id_repeated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_group_level: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_local_file_version: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_flip_flags: Option<u32>,
+    #[serde(default, with = "base64_bytes", skip_serializing_if = "Vec::is_empty")]
+    pub raw_rendering_data: Vec<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_width: Option<LengthPx>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

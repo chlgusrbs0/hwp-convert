@@ -1808,6 +1808,25 @@ fn render_html_object_transform_metadata(transform: Option<&ShapeTransform>) -> 
     };
     let mut attributes = Vec::new();
     for (name, value) in [
+        ("data-source-shape-control-id", transform.source_control_id),
+        (
+            "data-source-shape-group-level",
+            transform.source_group_level.map(u32::from),
+        ),
+        (
+            "data-source-shape-local-file-version",
+            transform.source_local_file_version.map(u32::from),
+        ),
+        ("data-source-shape-flip-flags", transform.source_flip_flags),
+    ] {
+        if let Some(value) = value {
+            attributes.push(format!("{name}=\"{value}\""));
+        }
+    }
+    if transform.source_control_id_repeated {
+        attributes.push("data-source-shape-control-id-repeated=\"true\"".to_string());
+    }
+    for (name, value) in [
         ("data-original-width-px", transform.original_width),
         ("data-original-height-px", transform.original_height),
         ("data-current-width-px", transform.current_width),
@@ -6130,6 +6149,7 @@ mod tests {
                     scale_y: 0.5,
                     translate_y: LengthPx(5.0),
                 }),
+                ..Default::default()
             }),
             padding_top: Some(LengthPx(1.0)),
             padding_right: Some(LengthPx(2.0)),
@@ -6234,6 +6254,12 @@ mod tests {
                 round_rate_percent: 25,
             }),
             transform: Some(ShapeTransform {
+                source_control_id: Some(0x6c69_6e24),
+                source_control_id_repeated: true,
+                source_group_level: Some(2),
+                source_local_file_version: Some(5032),
+                source_flip_flags: Some(0x8000_0003),
+                raw_rendering_data: vec![1, 2, 3, 4],
                 original_width: Some(LengthPx(48.0)),
                 original_height: Some(LengthPx(24.0)),
                 current_width: Some(LengthPx(96.0)),
@@ -6296,6 +6322,11 @@ mod tests {
         assert!(html.contains("data-source-width-value=\"5000\""));
         assert!(html.contains("data-source-height-value=\"2500\""));
         assert!(html.contains("data-source-object-attributes=\"305419896\""));
+        assert!(html.contains("data-source-shape-control-id=\"1818848804\""));
+        assert!(html.contains("data-source-shape-control-id-repeated=\"true\""));
+        assert!(html.contains("data-source-shape-group-level=\"2\""));
+        assert!(html.contains("data-source-shape-local-file-version=\"5032\""));
+        assert!(html.contains("data-source-shape-flip-flags=\"2147483651\""));
         assert!(html.contains("data-treat-as-character=\"false\""));
         assert!(html.contains("data-flow-with-text=\"false\""));
         assert!(html.contains("data-allow-overlap=\"true\""));
