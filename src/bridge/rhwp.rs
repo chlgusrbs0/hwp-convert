@@ -1752,10 +1752,10 @@ impl<'a> BridgeContext<'a> {
                     .then_some(picture.shape_attr.rotation_angle as f32),
                 flip_horizontal: picture.shape_attr.horz_flip.then_some(true),
                 flip_vertical: picture.shape_attr.vert_flip.then_some(true),
-                padding_top: i16_hwp_units_to_px_option(picture.padding.top),
-                padding_right: i16_hwp_units_to_px_option(picture.padding.right),
-                padding_bottom: i16_hwp_units_to_px_option(picture.padding.bottom),
-                padding_left: i16_hwp_units_to_px_option(picture.padding.left),
+                padding_top: signed_i16_hwp_units_to_px_option(picture.padding.top),
+                padding_right: signed_i16_hwp_units_to_px_option(picture.padding.right),
+                padding_bottom: signed_i16_hwp_units_to_px_option(picture.padding.bottom),
+                padding_left: signed_i16_hwp_units_to_px_option(picture.padding.left),
             }),
             None => {
                 self.add_warning_once(&format!(
@@ -1824,8 +1824,8 @@ impl<'a> BridgeContext<'a> {
             || picture.padding.top < 0
             || picture.padding.bottom < 0
         {
-            details.push(format!(
-                "negative_padding={}/{}/{}/{}",
+            self.add_warning_once(&format!(
+                "rhwp picture padding contained negative HWPUNIT values left={}, right={}, top={}, bottom={}; Image IR preserves the values, but semantic HTML omits negative CSS padding.",
                 picture.padding.left,
                 picture.padding.right,
                 picture.padding.top,
@@ -1889,6 +1889,20 @@ impl<'a> BridgeContext<'a> {
             _ => None,
         };
         let text_box = drawing.and_then(|drawing| drawing.text_box.as_ref());
+        if let Some(text_box) = text_box
+            && (text_box.margin_left < 0
+                || text_box.margin_right < 0
+                || text_box.margin_top < 0
+                || text_box.margin_bottom < 0)
+        {
+            self.add_warning_once(&format!(
+                "rhwp shape text-box padding contained negative HWPUNIT values left={}, right={}, top={}, bottom={}; Shape IR preserves the values, but semantic HTML omits negative CSS padding.",
+                text_box.margin_left,
+                text_box.margin_right,
+                text_box.margin_top,
+                text_box.margin_bottom
+            ));
+        }
         let text_direction = match text_box.map(|text_box| (text_box.list_attr & 0x07) as u8) {
             None | Some(0) => None,
             Some(1) => Some(TextDirection::VerticalLatinRotated),
@@ -1989,13 +2003,13 @@ impl<'a> BridgeContext<'a> {
             text_box_max_width: text_box
                 .and_then(|text_box| hwp_units_to_px_option(text_box.max_width)),
             padding_top: text_box
-                .and_then(|text_box| i16_hwp_units_to_px_option(text_box.margin_top)),
+                .and_then(|text_box| signed_i16_hwp_units_to_px_option(text_box.margin_top)),
             padding_right: text_box
-                .and_then(|text_box| i16_hwp_units_to_px_option(text_box.margin_right)),
+                .and_then(|text_box| signed_i16_hwp_units_to_px_option(text_box.margin_right)),
             padding_bottom: text_box
-                .and_then(|text_box| i16_hwp_units_to_px_option(text_box.margin_bottom)),
+                .and_then(|text_box| signed_i16_hwp_units_to_px_option(text_box.margin_bottom)),
             padding_left: text_box
-                .and_then(|text_box| i16_hwp_units_to_px_option(text_box.margin_left)),
+                .and_then(|text_box| signed_i16_hwp_units_to_px_option(text_box.margin_left)),
             width,
             height,
             offset_x: hwp_units_to_px_option(common.horizontal_offset),
@@ -3084,7 +3098,7 @@ impl<'a> BridgeContext<'a> {
     fn map_caption_layout(&mut self, caption: &RhwpCaption, object_kind: &str) -> CaptionLayout {
         if caption.spacing < 0 {
             self.add_warning_once(&format!(
-                "rHWP {object_kind} caption spacing was negative ({} HWPUNIT); hwp-convert preserved the remaining caption layout and omitted the invalid spacing.",
+                "rHWP {object_kind} caption spacing was negative ({} HWPUNIT); Document IR preserves the value, but semantic HTML omits negative CSS gap.",
                 caption.spacing
             ));
         }
@@ -3095,7 +3109,7 @@ impl<'a> BridgeContext<'a> {
                 RhwpCaptionVertAlign::Bottom => VerticalAlign::Bottom,
             },
             width: hwp_units_to_px_option(caption.width),
-            spacing: i16_hwp_units_to_px_option(caption.spacing),
+            spacing: signed_i16_hwp_units_to_px_option(caption.spacing),
             max_width: hwp_units_to_px_option(caption.max_width),
             include_margin: caption.include_margin,
         }
@@ -5183,7 +5197,7 @@ mod tests {
                 direction: RhwpCaptionDirection::Bottom,
                 vert_align: RhwpCaptionVertAlign::Bottom,
                 width: 3750,
-                spacing: 300,
+                spacing: -300,
                 max_width: 7500,
                 include_margin: true,
                 paragraphs: vec![RhwpParagraph {
@@ -5217,7 +5231,7 @@ mod tests {
                     Some(CaptionLayout {
                         vertical_align: VerticalAlign::Bottom,
                         width: Some(LengthPx(50.0)),
-                        spacing: Some(LengthPx(4.0)),
+                        spacing: Some(LengthPx(-4.0)),
                         max_width: Some(LengthPx(100.0)),
                         include_margin: true,
                     })
@@ -5236,6 +5250,12 @@ mod tests {
             warning
                 .message
                 .contains("table caption structure and layout")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("table caption spacing was negative")
+                && warning.message.contains("Document IR preserves")
         }));
     }
 
@@ -5361,7 +5381,7 @@ mod tests {
                     list_attr: 2,
                     vertical_align: RhwpVerticalAlign::Center,
                     max_width: 4500,
-                    margin_left: 75,
+                    margin_left: -75,
                     margin_right: 150,
                     margin_top: 225,
                     margin_bottom: 300,
@@ -5459,7 +5479,7 @@ mod tests {
                 assert_eq!(shape.padding_top, Some(LengthPx(3.0)));
                 assert_eq!(shape.padding_right, Some(LengthPx(2.0)));
                 assert_eq!(shape.padding_bottom, Some(LengthPx(4.0)));
-                assert_eq!(shape.padding_left, Some(LengthPx(1.0)));
+                assert_eq!(shape.padding_left, Some(LengthPx(-1.0)));
                 assert_eq!(
                     crate::util::plain_text::blocks_to_plain_text(&shape.content),
                     "shape text"
@@ -5531,6 +5551,10 @@ mod tests {
                 .iter()
                 .any(|warning| { warning.message.contains("shape text box paragraphs") })
         );
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning.message.contains("shape text-box padding")
+                && warning.message.contains("Shape IR preserves")
+        }));
         assert!(bridged.warnings.iter().any(|warning| {
             warning
                 .message
@@ -6136,7 +6160,7 @@ mod tests {
         assert_eq!(image.padding_top, Some(LengthPx(30.0 / 75.0)));
         assert_eq!(image.padding_right, Some(LengthPx(20.0 / 75.0)));
         assert_eq!(image.padding_bottom, Some(LengthPx(40.0 / 75.0)));
-        assert_eq!(image.padding_left, None);
+        assert_eq!(image.padding_left, Some(LengthPx(-10.0 / 75.0)));
         assert_eq!(
             image.crop,
             Some(ImageCrop {
@@ -6182,8 +6206,11 @@ mod tests {
                 && warning.message.contains("preserved in Image IR")
         }));
         assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("picture visual properties")
-                && warning.message.contains("negative_padding=-10/20/30/40")
+            warning.message.contains("picture padding")
+                && warning
+                    .message
+                    .contains("left=-10, right=20, top=30, bottom=40")
+                && warning.message.contains("Image IR preserves")
         }));
     }
 

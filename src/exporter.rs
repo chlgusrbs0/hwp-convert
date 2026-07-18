@@ -1590,7 +1590,7 @@ fn render_html_shape_element(
         (shape.padding_bottom, "padding-bottom"),
         (shape.padding_left, "padding-left"),
     ] {
-        if let Some(padding) = padding {
+        if let Some(padding) = padding.filter(|value| value.0 >= 0.0) {
             declarations.push(format!("{property}: {}px", padding.0));
         }
     }
@@ -2608,7 +2608,7 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
         (image.padding_bottom, "padding-bottom"),
         (image.padding_left, "padding-left"),
     ] {
-        if let Some(padding) = padding {
+        if let Some(padding) = padding.filter(|value| value.0 >= 0.0) {
             declarations.push(format!("{property}: {}px", padding.0));
         }
     }
@@ -2696,7 +2696,7 @@ fn render_html_caption_layout(
         }
         _ => {}
     }
-    if let Some(spacing) = layout.spacing {
+    if let Some(spacing) = layout.spacing.filter(|value| value.0 >= 0.0) {
         figure_declarations.push(format!("gap: {}px", spacing.0));
     }
 
@@ -5204,6 +5204,32 @@ mod tests {
             html.find("<figcaption ").expect("caption should render")
                 < html.find("<img ").expect("image should render")
         );
+    }
+
+    #[test]
+    fn omits_negative_object_padding_and_caption_gap_css() {
+        let mut document = document_with_image_block("image-1", Some("logo"), Some("png"));
+        if let Block::Image(image) = &mut document.sections[0].blocks[0] {
+            image.padding_left = Some(LengthPx(-2.0));
+            image.caption = Some("caption".to_string());
+            image.caption_layout = Some(CaptionLayout {
+                vertical_align: VerticalAlign::Top,
+                width: None,
+                spacing: Some(LengthPx(-3.0)),
+                max_width: None,
+                include_margin: false,
+            });
+        }
+        document.sections[0].blocks.push(Block::Shape(Shape {
+            padding_right: Some(LengthPx(-4.0)),
+            ..Default::default()
+        }));
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+
+        assert!(!html.contains("padding-left: -2px"));
+        assert!(!html.contains("gap: -3px"));
+        assert!(!html.contains("padding-right: -4px"));
     }
 
     #[test]
