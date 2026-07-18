@@ -1,3 +1,8 @@
+//! Reconciliation for the frozen legacy HWPX recovery path.
+//!
+//! Keep existing recovery stable, but do not use reconciliation to introduce
+//! semantics that the pinned rHWP public model does not expose.
+
 use crate::ir::{
     Block, ConversionWarning, Document, Inline, Paragraph, ParagraphRole, TextStyle, WarningCode,
 };
@@ -200,6 +205,7 @@ struct SemanticCoverage {
     unknown_inlines: usize,
     headers: usize,
     footers: usize,
+    master_pages: usize,
     notes: usize,
     resources: usize,
     named_styles: usize,
@@ -221,6 +227,10 @@ impl SemanticCoverage {
         for section in &document.sections {
             coverage.headers += section.headers.len();
             coverage.footers += section.footers.len();
+            coverage.master_pages += section.master_pages.len();
+            for master_page in &section.master_pages {
+                coverage.count_blocks(&master_page.blocks);
+            }
             for header in &section.headers {
                 coverage.count_blocks(&header.blocks);
             }
@@ -330,6 +340,7 @@ impl SemanticCoverage {
             && self.unknown_inlines == 0
             && self.headers == 0
             && self.footers == 0
+            && self.master_pages == 0
             && self.notes == 0
             && self.resources == 0
             && self.named_styles == 0
@@ -343,7 +354,7 @@ impl SemanticCoverage {
     }
 
     fn additional_labels(&self, other: &Self) -> Vec<&'static str> {
-        const LABELS: [Option<&str>; 28] = [
+        const LABELS: [Option<&str>; 29] = [
             Some("sections"),
             Some("paragraphs"),
             Some("styled paragraphs"),
@@ -369,6 +380,7 @@ impl SemanticCoverage {
             None,
             Some("headers"),
             Some("footers"),
+            Some("master pages"),
             Some("notes"),
             Some("resources"),
             Some("named styles"),
@@ -382,7 +394,7 @@ impl SemanticCoverage {
             .collect()
     }
 
-    fn values(&self) -> [usize; 28] {
+    fn values(&self) -> [usize; 29] {
         [
             self.sections,
             self.paragraphs,
@@ -409,6 +421,7 @@ impl SemanticCoverage {
             self.unknown_inlines,
             self.headers,
             self.footers,
+            self.master_pages,
             self.notes,
             self.resources,
             self.named_styles,
@@ -419,6 +432,9 @@ impl SemanticCoverage {
 fn canonical_document_text(document: &Document) -> String {
     let mut chunks = Vec::new();
     for section in &document.sections {
+        for master_page in &section.master_pages {
+            collect_blocks_text(&master_page.blocks, &mut chunks);
+        }
         for header in &section.headers {
             collect_blocks_text(&header.blocks, &mut chunks);
         }
@@ -518,7 +534,7 @@ fn push_text(text: Option<&str>, chunks: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{ListInfo, ListKind, Section, Table, TableCell, TableRow};
+    use crate::ir::{ListInfo, ListKind, MasterPage, Section, Table, TableCell, TableRow};
 
     #[test]
     fn supplements_missing_list_marker_when_paragraphs_match() {
@@ -619,6 +635,29 @@ mod tests {
                 .message
                 .contains("could not be selected")
         );
+    }
+
+    #[test]
+    fn keeps_primary_master_page_when_fallback_has_more_body_structure() {
+        let primary = Document {
+            sections: vec![Section {
+                master_pages: vec![MasterPage {
+                    blocks: vec![paragraph("master")],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let fallback = document_with_blocks(vec![table(&["master"])]);
+
+        let reconciled = reconcile(primary, fallback);
+
+        assert_eq!(reconciled.sections[0].master_pages.len(), 1);
+        assert!(reconciled.sections[0].blocks.is_empty());
+        assert!(reconciled.warnings.iter().any(|warning| {
+            warning.message.contains("could not be selected") && warning.message.contains("tables")
+        }));
     }
 
     #[test]

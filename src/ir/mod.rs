@@ -44,7 +44,12 @@ use serde::{Deserialize, Serialize};
 /// v47: added structured shape fill styles.
 /// v48: added structured shape groups and nested child blocks.
 /// v49: added structured shape text-box content blocks.
-pub const IR_VERSION: u16 = 49;
+/// v50: added structured shape shadow metadata.
+/// v51: added structured section master-page content and metadata.
+/// v52: added structured list marker definition and layout metadata.
+/// v53: added structured text shadow metadata.
+/// v54: added exact text emphasis mark type metadata.
+pub const IR_VERSION: u16 = 54;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -158,6 +163,8 @@ pub struct Section {
     pub headers: Vec<HeaderFooter>,
     #[serde(default)]
     pub footers: Vec<HeaderFooter>,
+    #[serde(default)]
+    pub master_pages: Vec<MasterPage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<SectionLayout>,
 }
@@ -490,10 +497,14 @@ pub struct TextStyle {
     pub subscript: bool,
     /// Korean emphasis dots rendered above/below glyphs (한글 강조점).
     pub emphasis_dot: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emphasis_mark_type: Option<u8>,
     pub emboss: bool,
     pub engrave: bool,
     pub outline: bool,
     pub shadow: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadow_details: Option<TextShadow>,
     pub font_family: Option<String>,
     /// Typographic size in points (pt).
     #[serde(alias = "font_size")]
@@ -522,6 +533,16 @@ pub struct TextStyle {
     pub vertical_offset_percent: Option<Percent>,
     #[serde(skip_serializing_if = "is_false")]
     pub kerning: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct TextShadow {
+    pub kind: u8,
+    pub offset_x_percent: i8,
+    pub offset_y_percent: i8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+    pub raw_color: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -772,6 +793,21 @@ pub struct HeaderFooter {
     pub blocks: Vec<Block>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct MasterPage {
+    pub placement: HeaderFooterPlacement,
+    pub is_extension: bool,
+    pub overlap: bool,
+    pub raw_extension_flags: u16,
+    pub text_width: LengthPx,
+    pub text_height: LengthPx,
+    pub text_reference_mask: u8,
+    pub number_reference_mask: u8,
+    #[serde(default, with = "base64_bytes", skip_serializing_if = "Vec::is_empty")]
+    pub raw_list_header: Vec<u8>,
+    pub blocks: Vec<Block>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HeaderFooterPlacement {
@@ -799,6 +835,24 @@ pub struct ListInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub marker_format: Option<String>,
     pub number: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_definition_id: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_layout: Option<ListMarkerLayout>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ListMarkerLayout {
+    pub raw_attributes: u32,
+    pub raw_width_adjust: i16,
+    pub raw_text_distance: i16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_char_shape_id: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_bullet_id: Option<i32>,
+    pub image_data: [u8; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_marker: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -1145,6 +1199,8 @@ pub struct Shape {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<FillStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<ShapeShadow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_degrees: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_horizontal: Option<bool>,
@@ -1176,6 +1232,18 @@ pub struct Shape {
     pub children: Vec<Block>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub content: Vec<Block>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ShapeShadow {
+    pub kind: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+    pub raw_color: u32,
+    pub offset_x: LengthPx,
+    pub offset_y: LengthPx,
+    /// HWP transparency in the inclusive range 0..=255; zero is opaque.
+    pub transparency: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1743,6 +1811,19 @@ mod tests {
                 b: 102,
                 a: 255,
             }),
+            shadow: Some(ShapeShadow {
+                kind: 4,
+                color: Some(Color {
+                    r: 17,
+                    g: 34,
+                    b: 51,
+                    a: 255,
+                }),
+                raw_color: 0x00332211,
+                offset_x: LengthPx(2.0),
+                offset_y: LengthPx(-1.0),
+                transparency: 64,
+            }),
             rotation_degrees: Some(90.0),
             flip_horizontal: Some(true),
             flip_vertical: Some(true),
@@ -1857,10 +1938,12 @@ mod tests {
         assert!(!style.superscript);
         assert!(!style.subscript);
         assert!(!style.emphasis_dot);
+        assert_eq!(style.emphasis_mark_type, None);
         assert!(!style.emboss);
         assert!(!style.engrave);
         assert!(!style.outline);
         assert!(!style.shadow);
+        assert_eq!(style.shadow_details, None);
         assert_eq!(style.underline_color, None);
         assert_eq!(style.strike_color, None);
         assert_eq!(style.underline_style, None);
@@ -2036,6 +2119,7 @@ mod tests {
 
         assert!(section.headers.is_empty());
         assert!(section.footers.is_empty());
+        assert!(section.master_pages.is_empty());
     }
 
     #[test]

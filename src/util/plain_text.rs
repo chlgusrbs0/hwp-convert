@@ -1,9 +1,11 @@
 use crate::ir::{
     Block, Chart, Document, Equation, EquationKind, HeaderFooter, Image, Inline, ListInfo,
-    ListKind, Note, NoteKind, Paragraph, Shape, Table, TableCell, UnknownBlock, UnknownInline,
+    ListKind, MasterPage, Note, NoteKind, Paragraph, Shape, Table, TableCell, UnknownBlock,
+    UnknownInline,
 };
 
 const TABLE_FALLBACK_LABEL: &str = "[\u{D45C}]";
+const MASTER_PAGE_FALLBACK_LABEL: &str = "[\u{BC14}\u{D0D5}\u{CABD}]";
 const HEADER_FALLBACK_LABEL: &str = "[\u{BA38}\u{B9AC}\u{B9D0}]";
 const FOOTER_FALLBACK_LABEL: &str = "[\u{AF2C}\u{B9AC}\u{B9D0}]";
 const FOOTNOTE_REF_LABEL: &str = "[\u{AC01}\u{C8FC}";
@@ -28,6 +30,7 @@ pub fn collect_block_texts(document: &Document) -> Vec<String> {
     let mut blocks = Vec::new();
 
     for section in &document.sections {
+        blocks.extend(section.master_pages.iter().map(master_page_to_plain_text));
         blocks.extend(
             section
                 .headers
@@ -267,6 +270,22 @@ fn list_prefix_to_plain_text(list: &ListInfo) -> String {
     format!("{indent}{marker}")
 }
 
+pub(crate) fn master_page_to_plain_text(master_page: &MasterPage) -> String {
+    let content = master_page
+        .blocks
+        .iter()
+        .map(block_to_plain_text)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if content.is_empty() {
+        MASTER_PAGE_FALLBACK_LABEL.to_string()
+    } else {
+        format!("{MASTER_PAGE_FALLBACK_LABEL}\n{content}")
+    }
+}
+
 fn plain_text_marker_with_space(marker: &str) -> String {
     if marker.chars().last().is_some_and(char::is_whitespace) {
         marker.to_string()
@@ -328,9 +347,9 @@ pub fn sanitize_anchor_id(name: &str) -> String {
 mod tests {
     use crate::ir::{
         Block, Chart, Document, Equation, EquationKind, HeaderFooter, Image, Inline, ListInfo,
-        ListKind, Note, NoteId, NoteKind, Paragraph, ParagraphRole, ParagraphStyle, ResourceId,
-        Shape, ShapeKind, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun,
-        TextStyle,
+        ListKind, MasterPage, Note, NoteId, NoteKind, Paragraph, ParagraphRole, ParagraphStyle,
+        ResourceId, Shape, ShapeKind, Table, TableCell, TableCellStyle, TableRow, TableStyle,
+        TextRun, TextStyle,
     };
 
     use super::to_plain_text;
@@ -444,6 +463,7 @@ mod tests {
                         marker: None,
                         marker_format: None,
                         number: Some(3),
+                        ..Default::default()
                     }),
                 })],
                 ..Default::default()
@@ -499,6 +519,21 @@ mod tests {
     fn renders_headers_footers_and_notes_in_plain_text() {
         let document = Document {
             sections: vec![crate::ir::Section {
+                master_pages: vec![MasterPage {
+                    placement: crate::ir::HeaderFooterPlacement::OddPage,
+                    blocks: vec![Block::Paragraph(Paragraph {
+                        role: ParagraphRole::Body,
+                        inlines: vec![Inline::Text(TextRun {
+                            text: "master".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        })],
+                        style: ParagraphStyle::default(),
+                        style_ref: None,
+                        list: None,
+                    })],
+                    ..Default::default()
+                }],
                 headers: vec![HeaderFooter {
                     placement: crate::ir::HeaderFooterPlacement::Default,
                     blocks: vec![Block::Paragraph(Paragraph {
@@ -562,7 +597,7 @@ mod tests {
 
         assert_eq!(
             to_plain_text(&document),
-            "[\u{BA38}\u{B9AC}\u{B9D0}]\nheader\nbody\n[\u{AF2C}\u{B9AC}\u{B9D0}]\nfooter\n[\u{AC01}\u{C8FC}: fn-1]\nnote body"
+            "[\u{BC14}\u{D0D5}\u{CABD}]\nmaster\n[\u{BA38}\u{B9AC}\u{B9D0}]\nheader\nbody\n[\u{AF2C}\u{B9AC}\u{B9D0}]\nfooter\n[\u{AC01}\u{C8FC}: fn-1]\nnote body"
         );
     }
 

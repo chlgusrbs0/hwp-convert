@@ -16,15 +16,29 @@ The project now has two separate output paths:
 - Parser role: read document structure, text, styles, controls, and embedded resources.
 - Renderer role: expose page and layout-oriented query results for visual inspection.
 - Boundary: `rhwp` types stay behind `bridge` and `render`. Exporters must not depend on `rhwp` types directly.
+- Eligibility boundary: only typed values exposed by the pinned revision's public model, `DocumentCore`, or renderer query API may start a new conversion feature.
+- A tag constant, unknown-control payload, raw record, or private parser/renderer field is not a supported semantic API.
 
 ### 2. `bridge`
 
 `src/bridge` converts parsed document data into the semantic `Document` IR.
 
 - Responsibility: semantic mapping only.
-- It maps paragraphs, tables, images, notes, headers, footers, links, lists, equations, shapes, charts, and unknown elements into stable IR nodes.
+- It maps model-visible paragraphs, tables, images, notes, headers, footers, master pages, links, lists, equations, shapes, and unknown elements into stable IR nodes. Chart IR may only be produced after the pinned rHWP revision exposes a public typed chart path.
 - It may improve element coverage and mapping quality without changing exporter contracts.
 - Bridge-only changes do not require an `IR_VERSION` bump.
+- It must not parse HWP records, unknown-control bytes, or HWPX XML to create semantics absent from the public `rhwp` model.
+
+### 2a. Legacy HWPX compatibility fallback
+
+`src/hwpx.rs` predates the strict rHWP capability boundary. It can recover data when rHWP rejects an HWPX file, maps an empty document, or omits information during the current reconciliation path.
+
+- It is a transitional compatibility and silent-loss safety net, not a second source of truth.
+- It must not receive new element, control, attribute-alias, style, or layout coverage.
+- Allowed changes are limited to security, malformed-input handling, regressions in already-tested behavior, and silent loss of data it already recovered.
+- Its output alone cannot establish feature support.
+- When a newer pinned rHWP revision exposes equivalent data, mapping moves to `bridge` and the corresponding fallback path should be removed.
+- Immediate removal is also avoided because deleting established recovery without replacement would create known data loss.
 
 ### 3. Semantic `Document` IR
 
@@ -60,6 +74,7 @@ Asset output policy today is intentionally narrow: HTML and Markdown exports wri
 
 - The semantic `Document` IR is in a first-complete phase for the current roadmap.
 - `RenderSnapshot` is an experimental visual path kept separate from the semantic IR.
+- `src/hwpx.rs` is a frozen legacy compatibility path and is not eligible for new feature work.
 - The existing SVG exporter is still the semantic/plain-text-oriented exporter path.
 - PDF output is not implemented yet.
 - Local `sample.hwp` and `sample.hwpx` files are for developer verification only and must not be committed.
@@ -149,8 +164,9 @@ Asset output policy today is intentionally narrow: HTML and Markdown exports wri
 3. `RenderSnapshot` must not inject coordinates into the semantic `Document` IR.
 4. Visual output is handled in the `RenderSnapshot` layer, not by mutating the semantic IR.
 5. Unknown elements are preserved through `Unknown` nodes or `ConversionWarning` records whenever possible.
-6. Public `rhwp` APIs are preferred. Private renderer internals are out of scope.
-7. Renderer experiments must not change the existing CLI contract or replace the semantic exporter path by accident.
+6. Public `rhwp` typed APIs are required for new feature work. Private internals and raw format parsing are out of scope.
+7. Existing legacy HWPX fallback behavior may be maintained but not expanded.
+8. Renderer experiments must not change the existing CLI contract or replace the semantic exporter path by accident.
 
 ## Limits and TODO
 
@@ -166,4 +182,6 @@ Asset output policy today is intentionally narrow: HTML and Markdown exports wri
 - Use `src/bridge` when semantic mapping quality needs improvement.
 - Use `src/exporter.rs` when output formatting of the semantic IR needs improvement.
 - Use `src/render` when renderer-first inspection, page diagnostics, or visual placeholder output needs improvement.
+- Do not use `src/hwpx.rs` to implement a new conversion feature.
+- If the pinned rHWP public API does not expose the required information, classify the gap as upstream-needed instead of bypassing the boundary.
 - Do not grow the semantic IR further unless a new semantic gap is clearly identified.

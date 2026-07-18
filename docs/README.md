@@ -10,7 +10,7 @@
 
 | 문서 | 내용 | 언제 보나 |
 | --- | --- | --- |
-| `ROADMAP.md` | 장기 방향, 마일스톤, 완료 기준, rHWP revision 정책, 전략적 결정 사항 | 무엇을/왜 할지 정할 때 |
+| `ROADMAP.md` | 장기 방향, 마일스톤, 완료 기준, rHWP revision 정책, 확정된 기능 경계 | 무엇을/왜 할지 정할 때 |
 | `ARCHITECTURE.md` | rHWP, bridge, Document IR, exporter, RenderSnapshot 레이어 경계 + IR 로드맵 마일스톤(v0-v7.4) | 어디를 고칠지 정할 때 |
 | `STATUS.md` | 현재 bridge/exporter 지원 행렬, HWPX fixture 현황, 지속가능성 리스크 | "지원한다"고 말하기 전, 코드 바꾼 후 |
 | `FIXTURES.md` | fixture 계획, 관리 규칙, 검증 방법, bridge stats | fixture를 추가/변경할 때 |

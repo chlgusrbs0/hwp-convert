@@ -23,6 +23,8 @@
 ## 비목표
 
 - rHWP를 대체하지 않는다.
+- rHWP 공개 API에 없는 HWP/HWPX 기능을 자체 파싱하거나 역공학하지 않는다.
+- raw HWP record, unknown control bytes, HWPX XML 속성에서 신규 semantic 의미를 만들지 않는다.
 - HWP/HWPX 편집기를 만들지 않는다.
 - 모든 출력 형식에서 원본 HWP의 시각적 배치를 동일하게 재현한다고 주장하지 않는다.
 - 기본 `--to svg`는 semantic/plain-text 기반 SVG exporter다. `src/render`의 RenderSnapshot visual path는 별도 진단 경로이며 기본 SVG exporter와 섞지 않는다.
@@ -37,7 +39,7 @@
 HWP/HWPX file -> rHWP parser -> src/bridge/rhwp.rs -> Document IR -> src/exporter.rs -> txt/json/markdown/html/svg
 ```
 
-HWPX 폴백 경로(rHWP가 실패하거나 빈 결과일 때):
+Legacy HWPX 폴백 경로(rHWP가 실패하거나 빈 결과일 때의 호환성 안전망):
 
 ```text
 HWPX file -> src/hwpx.rs (Contents/section*.xml 또는 Preview/PrvText.txt) -> Document IR -> exporters
@@ -49,7 +51,7 @@ HWPX file -> src/hwpx.rs (Contents/section*.xml 또는 Preview/PrvText.txt) -> D
 HWP/HWPX file -> rHWP DocumentCore / renderer query API -> src/render/mod.rs -> RenderSnapshot / 진단 SVG
 ```
 
-경계 규칙: exporter는 rHWP 타입에 직접 의존하지 않는다. rHWP 타입은 `src/bridge`와 `src/render` 뒤에 둔다. semantic IR에 페이지 좌표를 섞지 않는다. bridge-only 개선은 보통 `IR_VERSION`을 올리지 않고, serialized JSON shape가 바뀌면 bump를 검토한다.
+경계 규칙: exporter는 rHWP 타입에 직접 의존하지 않는다. rHWP 타입은 `src/bridge`와 `src/render` 뒤에 둔다. semantic IR에 페이지 좌표를 섞지 않는다. bridge-only 개선은 보통 `IR_VERSION`을 올리지 않고, serialized JSON shape가 바뀌면 bump를 검토한다. 신규 지원은 현재 pin의 rHWP 공개 typed model/query가 제공하는 정보로만 시작한다. `src/hwpx.rs`는 신규 기능 경로가 아니다.
 
 ## 쓸만함의 정의
 
@@ -61,6 +63,8 @@ HWP/HWPX file -> rHWP DocumentCore / renderer query API -> src/render/mod.rs -> 
 4. 표현할 수 없는 정보는 조용히 버리지 않고 fallback text, placeholder, `Unknown`, `ConversionWarning` 중 하나로 남긴다.
 5. 실제 HWP/HWPX fixture로 parse, bridge, export 결과를 검증한다.
 6. rHWP pin을 올릴 때 회귀를 감지할 수 있다.
+
+여기서 "rHWP가 읽어낸다"는 tag 이름이나 raw bytes가 존재한다는 뜻이 아니다. 현재 고정 revision의 공개 typed model 또는 renderer query에서 의미가 확인되는 경우만 해당한다. `Unknown`/warning 또는 legacy HWPX 폴백으로 발견되는 정보는 지원 완료에 포함하지 않는다.
 
 형식별 기대치:
 
@@ -86,19 +90,36 @@ HWP/HWPX file -> rHWP DocumentCore / renderer query API -> src/render/mod.rs -> 
 
 현재 주력 단계는 2-7이다. 8은 `src/render` 기반으로 별도 진행한다.
 
-## 전략적 결정 사항
+## 확정된 기능 경계
 
 ### `src/hwpx.rs` 자작 HWPX 파서의 방향
 
 현재 `src/hwpx.rs`는 rHWP의 HWPX 약점을 보완하는 폴백 파서지만 점점 커져 `src` 전체의 약 1/3에 이르고, 정규 XML 파서가 아닌 자작 문자열 스캐너다 (`docs/STATUS.md`의 "지속가능성 리스크" 참고). "rHWP를 다시 만들지 않는다"는 비목표와 긴장 관계다.
 
-선택지:
+2026-07-18 결정: **폴백을 동결하고 rHWP upstream 개선에 따라 축소한다.** 이전 선택지 중 (c)를 채택했으며, `quick-xml` 기반 재작성이나 현행 스캐너의 기능 확장은 하지 않는다.
 
-- (a) 현행 유지하며 계속 확장한다. 단기적으로 HWPX 복구 능력은 늘지만 스캐너 엣지케이스 유지보수 부담이 누적된다.
-- (b) `quick-xml` 같은 검증된 XML 크레이트 기반으로 리팩터링한다. 최근 `fix(hwpx):` 류 버그의 상당수가 사라질 종류다. IR/exporter 경계는 그대로 두고 파서 내부만 교체한다.
-- (c) rHWP upstream의 HWPX 지원 개선을 기다리며 폴백을 동결하고, revision update 시 재평가한다.
+동결의 정확한 의미:
 
-권장: 폴백이 더 커지기 전에 (b)를 검토한다. 단, 실문서 fixture로 회귀를 먼저 고정한 뒤 리팩터링하는 것이 안전하다.
+- 현재 사용자에게 발생할 수 있는 데이터 손실을 피하기 위해 기존 코드를 즉시 삭제하지 않는다.
+- 기존 fixture가 보장하는 동작의 회귀, 보안 문제, panic/손상 입력, 기존 복구 데이터의 silent drop만 수정할 수 있다.
+- 새 element/control/attribute alias, 새 style/layout 정보, 새 semantic node 복구는 추가하지 않는다.
+- rHWP가 같은 정보를 공개 API로 제공하면 먼저 bridge로 옮기고 대응하는 폴백 코드를 줄인다.
+- 폴백 결과는 기능 지원의 근거가 아니며 `docs/STATUS.md`에서 별도 관찰로만 기록한다.
+
+### rHWP 공개 surface 소진
+
+신규 정확도 작업은 현재 pin의 공개 surface를 다음 상태 중 하나로 분류하는 것에서 시작한다.
+
+| 상태 | 의미 | 지원 완료 계산 |
+| --- | --- | --- |
+| `mapped` | bridge/render가 typed 값을 받아 IR/query 결과에 보존 | exporter와 fixture까지 갖추면 포함 |
+| `normalized` | 명시적이고 검증 가능한 규칙으로 정규화하여 보존 | 정규화 근거가 문서화되면 포함 |
+| `warning/unknown` | 존재만 추적하고 의미 구조는 보존하지 못함 | 미포함 |
+| `render-only` | semantic IR 대상이 아니며 공개 renderer query로만 사용 | visual 경로에서 별도 계산 |
+| `unmapped` | rHWP가 공개하지만 현재 bridge/render가 받지 않음 | 최우선 후보 |
+| `upstream-needed` | 현재 공개 API가 값을 제공하지 않음 | hwp-convert에서 구현 금지 |
+
+완성도 수치는 이 분류표와 실제 fixture 결과 없이 감으로 제시하지 않는다. field 수가 같아도 텍스트 본문과 희귀 플래그의 영향도가 다르므로, 단순 field 개수와 사용자 체감 정확도도 별도로 보고한다.
 
 ## 마일스톤
 
@@ -124,7 +145,7 @@ P0: `basic_text`, `style`, `table`, `merged_table`, `image`.
 
 ### M2: P0 bridge mapping 강화
 
-목표: P0 fixture에서 드러난 손실을 bridge에서 줄인다. IR이 부족하면 먼저 호환성 정책을 검토한 뒤 확장한다.
+목표: P0 fixture와 rHWP 공개 surface 점검에서 드러난 손실을 bridge에서 줄인다. IR이 부족하면 먼저 호환성 정책을 검토한 뒤 확장한다. rHWP 공개 API에 없는 값은 이 마일스톤의 구현 대상이 아니다.
 
 작업: text(줄바꿈/탭/공백/혼합), paragraph(빈 문단 정책 확정), style(`TextStyle`/`ParagraphStyle`/style ref), table(span/nested/배경색), image(resource id/extension/media type/bytes/alt/caption/dimensions), exporter(asset 출력 정책 고정).
 
@@ -152,7 +173,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 
 목표: rHWP upstream 발전을 활용하되 변환기 안정성을 잃지 않는다.
 
-정책: rHWP는 git revision 고정. fixture coverage가 충분해지기 전엔 자주 올리지 않는다. 완성본에 가까워질수록 의도적으로 올린다. 절차는 `AGENTS.md`의 "rHWP dependency 정책"을 따른다. revision update 시 `src/hwpx.rs` 폴백의 필요성도 재평가한다(위 전략적 결정 참고).
+정책: rHWP는 git revision 고정. fixture coverage가 충분해지기 전엔 자주 올리지 않는다. 완성본에 가까워질수록 의도적으로 올린다. 절차는 `AGENTS.md`의 "rHWP dependency 정책"을 따른다. revision update 시 `src/hwpx.rs`에서 대체 가능한 폴백 범위를 찾아 축소한다(위 "확정된 기능 경계" 참고).
 
 ### M6: exporter fidelity 강화
 
@@ -189,12 +210,12 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 | shape | P2 | geometry, border/fill, text box, group/caption 보존 수준 결정 |
 | chart | P2 | rHWP model에서 bridge-visible chart path 확인 |
 | unknown | P2 | known-but-unmapped control의 silent drop 방지 |
-| HWPX 폴백 | 전략 결정 | `src/hwpx.rs` 방향 결정 (위 "전략적 결정 사항") |
+| HWPX 폴백 | 동결 | 기존 회귀·보안·silent-drop 수정만 허용하고 rHWP 지원 확대에 따라 축소 |
 | visual layout | Future | RenderSnapshot 또는 rHWP native renderer 연동 |
 
 ## 회귀 지표
 
-작업 중 추적할 숫자: official fixture count, fixture input pair count, parse success count, format별 export success count, code별 warning count, unknown block/inline count, silent drop 의심 count, image asset output count, golden comparison count, rHWP revision update regression count.
+작업 중 추적할 숫자: rHWP 공개 surface 분류 수(`mapped`/`normalized`/`warning/unknown`/`render-only`/`unmapped`/`upstream-needed`), official fixture count, fixture input pair count, parse success count, format별 export success count, code별 warning count, unknown block/inline count, silent drop 의심 count, image asset output count, golden comparison count, rHWP revision update regression count.
 
 최소 목표: P0 완료 시 HWP/HWPX pair 5개 이상. Useful converter 단계에서 실제 문서 fixture 30-50개. unsupported element는 적어도 warning/unknown/docs 중 하나에 남는다.
 
@@ -223,11 +244,13 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 
 ## 다음 작업 순서
 
-1. 나머지 P0 fixture(`table`, `merged_table`, `style`, `image`)의 실제 입력 파일을 확정한다.
-2. `cargo test --test fixture_smoke`가 실제 파일에서 통과하는지 확인한다.
-3. 실패하면 rHWP parse 문제인지 bridge mapping 문제인지 분리한다.
-4. P0가 모두 통과하면 rHWP revision update rehearsal을 한 번 한다.
-5. P1(`link_list`, `note_header_footer`)로 넘어간다.
+1. 현재 pin의 rHWP 공개 model/query field를 위 여섯 상태로 전수 분류한다.
+2. `unmapped` 중 데이터 손실 영향이 큰 항목을 골라 `bridge -> IR -> exporter` 수직 단위로 구현한다.
+3. 해당 값을 가진 HWP fixture 또는 unit test로 회귀를 고정한다.
+4. 나머지 P0 fixture(`table`, `merged_table`, `style`, `image`)의 실제 HWP/HWPX 입력을 확정하되, HWPX 폴백 확장으로 통과시키지 않는다.
+5. 실패를 rHWP parse, bridge mapping, exporter 표현 문제로 분리한다. `upstream-needed`는 로컬 parser 구현 대신 기록한다.
+6. 공개 surface 분류와 P0가 안정되면 rHWP revision update rehearsal을 한 번 한다.
+7. P1(`link_list`, `note_header_footer`)로 넘어간다.
 
 각 단계의 commit은 작게 나눈다 (`AGENTS.md`의 Git 규칙 참고).
 
@@ -243,7 +266,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 2026-06-16:
 
 - 문서를 통합 정리했다: `COMPATIBILITY.md` → `STATUS.md`, `RHWP_CONVERSION_ROADMAP.md` → `ROADMAP.md`, `HWPX_FIXTURE_FINDINGS.md`는 `STATUS.md`에 병합. addendum 패턴 제거, stale 사실(HEAD 해시, 테스트 수)은 `AGENTS.md` 단일 출처로 이동.
-- `src/hwpx.rs` 자작 파서의 비대화를 명시적 전략 결정 사항으로 등록했다 (위 "전략적 결정 사항").
+- `src/hwpx.rs` 자작 파서의 비대화를 당시 전략 검토 항목으로 등록했다.
 - 글꼴 fidelity 1차 확장: rhwp `CharShape`가 주는데 버려지던 위/아래첨자, 강조점, 양각/음각, 외곽선, 그림자를 `TextStyle`로 끌어왔다. bridge 매핑 + HTML(CSS) + Markdown(sup/sub) + 테스트 포함, `IR_VERSION` 7 → 8. 남은 글꼴 항목(밑줄 색/모양, 취소선 색, 장평/자간/커닝)은 후속.
 - 표 셀 fidelity 1차 확장: rhwp `Cell`의 `is_header`(→ HTML `<th>`)와 vertical align(→ `TableCellStyle.vertical_align`, CSS `vertical-align`)을 끌어왔다. HWPX 폴백은 `header` 속성으로 헤더 여부를 복구한다. `IR_VERSION` 8 → 9. 남은 표 항목(셀 폭/높이, padding, 경계선, 열 폭)은 후속.
 - 밑줄/취소선 색 + 표 셀 폭/높이: `TextStyle.{underline_color, strike_color}`(→ CSS `text-decoration-color`)와 `TableCellStyle.{width, height}`(→ CSS, 기존 hwp-units→px 변환 재사용)를 끌어왔다. `IR_VERSION` 9 → 10. 남은 항목(밑줄 모양, 장평/자간, 셀 padding/경계선)은 후속.
@@ -282,6 +305,19 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - resource bytes JSON 압축 개선: `IR_VERSION` 35 → 36. 이미지·첨부 바이트를 숫자 배열 대신 Base64 문자열로 직렬화하고, 구형 배열 표현도 계속 역직렬화한다. JSON exporter는 전체 결과 문자열을 메모리에 만들지 않고 스트리밍한다.
 - 표 객체 배치 IR 확장: `IR_VERSION` 36 → 37. 이미지 전용이던 배치 구조를 `ObjectPlacement`로 일반화하고 HWP 표의 글자처럼 취급, 감싸기, 기준·정렬·오프셋, Z-order, 여백, 쪽 나눔 방지를 보존한다. semantic exporter의 페이지 좌표 선형화는 문서당 한 번 경고한다.
 - 문단 탭 정의 IR 확장: `IR_VERSION` 37 → 38. HWP 문단이 참조하는 사용자 정의 탭의 위치·정렬·리더 원시 값과 자동 좌우 탭 플래그를 보존한다. HTML은 탭 문자를 전용 span으로 출력하되 사용자 정의 탭 위치는 근사 경고를 유지한다.
+
+2026-07-18:
+
+- 신규 기능 범위를 현재 pin의 rHWP 공개 typed model/query가 제공하는 정보로 확정했다.
+- HWP 도형 그림자 IR 확장: `IR_VERSION` 49 → 50. rHWP 공개 `DrawingObjAttr`의 그림자 종류·원시 색상·X/Y 오프셋·투명도를 구조화하고 HTML은 공개된 색상과 오프셋으로 CSS `box-shadow`를 근사한다. rHWP가 제공하지 않는 blur 값이나 방향 규칙은 추정하지 않는다.
+- HWP 바탕쪽 IR 확장: `IR_VERSION` 50 → 51. rHWP 공개 `MasterPage`의 적용 대상·확장/겹침 플래그·텍스트 영역·참조 마스크·원시 list header와 내부 문단 블록을 구역에 보존한다. HTML/Markdown/TXT는 내용을 명시적으로 선형화하고 반복 페이지 배경 배치는 재현하지 않는다고 warning으로 남긴다. 실제 바탕쪽 fixture 검증은 후속이다.
+- HWP 목록 표식 메타데이터 IR 확장: `IR_VERSION` 51 → 52. rHWP 공개 bullet/numbering 정의 ID, 속성 비트, 너비 보정·본문 거리 원시 값, 번호 표식 글자 모양 참조, 이미지 글머리표 ID/메타데이터와 체크 표식을 구조화한다. HTML은 `data-*`로 보존하고, 공개 API에서 실제 이미지 resource 연결을 확인할 수 없는 이미지 글머리표와 정확한 표식 배치·단위는 추정하지 않는다.
+- HWP 글자 그림자 IR 확장: `IR_VERSION` 52 → 53. rHWP 공개 `CharShape`의 그림자 종류·X/Y 비율 오프셋·색상과 원시 색상 값을 구조화한다. HTML은 공개 비율을 `em`으로 적용하고 원본 값을 `data-*`로 남기며, 공개되지 않은 blur와 종류별 렌더링 규칙은 추정하지 않는다. 양각·음각은 별도 boolean을 유지하고 기존 일반 그림자 근사를 사용한다.
+- HWP 글자 강조점 IR 확장: `IR_VERSION` 53 → 54. rHWP 공개 `CharShape.emphasis_dot`의 원시 종류를 보존하고, rHWP가 문서화한 1~6 값을 HTML의 ●·○·ˇ·˜·･·: 기호로 구분한다. 알 수 없는 값은 원시 타입과 warning을 유지하고 generic dot으로 대체한다.
+- raw HWP record, unknown control bytes, HWPX XML을 직접 해석한 독자 기능 구현을 금지했다.
+- `src/hwpx.rs`는 즉시 삭제하지 않되 legacy 호환성 안전망으로 동결하고, 회귀·보안·기존 silent-drop 수정만 허용하기로 결정했다.
+- 신규 정확도 작업은 rHWP 공개 surface를 `mapped`, `normalized`, `warning/unknown`, `render-only`, `unmapped`, `upstream-needed`로 분류한 뒤 진행한다.
+- 근거표와 fixture 없이 직관적인 완성도 퍼센트를 확정값처럼 제시하지 않기로 했다.
 
 ## 완료 선언 기준
 

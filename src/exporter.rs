@@ -11,10 +11,10 @@ use crate::cli::{CliArgs, OutputFormat};
 use crate::ir::{
     Alignment, Block, Border, BorderStyle, Chart, Color, Document, Equation, EquationKind,
     FillStyle, HeaderFooter, HeaderFooterPlacement, Image, ImageFillMode, Inline, Link, ListInfo,
-    ListKind, Note, NoteId, NoteKind, Paragraph, ParagraphRole, ParagraphStyle, Resource,
-    ResourceId, ResourceStore, Section, Shape, ShapeGeometry, Table, TableCell, TableCellStyle,
-    TableRow, TableStyle, TableZone, TextDecorationStyle, TextRun, TextStyle, UnknownBlock,
-    UnknownInline, VerticalAlign,
+    ListKind, MasterPage, Note, NoteId, NoteKind, Paragraph, ParagraphRole, ParagraphStyle,
+    Resource, ResourceId, ResourceStore, Section, Shape, ShapeGeometry, ShapeShadow, Table,
+    TableCell, TableCellStyle, TableRow, TableStyle, TableZone, TextDecorationStyle, TextRun,
+    TextShadow, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -334,6 +334,10 @@ fn collect_ir_unknown_warnings(document: &Document, warnings: &mut Vec<String>) 
 
         for footer in &section.footers {
             collect_block_unknown_warnings(&footer.blocks, warnings);
+        }
+
+        for master_page in &section.master_pages {
+            collect_block_unknown_warnings(&master_page.blocks, warnings);
         }
     }
 
@@ -802,6 +806,13 @@ fn render_html_section(
 ) -> String {
     let mut nodes = String::new();
 
+    for master_page in &section.master_pages {
+        nodes.push_str(&render_html_master_page(
+            master_page,
+            resources,
+            image_asset_prefix,
+        ));
+    }
     for header in &section.headers {
         nodes.push_str(&render_html_header_footer(
             "header",
@@ -825,6 +836,26 @@ fn render_html_section(
     }
 
     nodes
+}
+
+fn render_html_master_page(
+    master_page: &MasterPage,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
+    let content = render_html_blocks(&master_page.blocks, resources, image_asset_prefix);
+    let placement = escape_html(header_footer_placement_name(&master_page.placement));
+
+    format!(
+        "<section class=\"master-page\" data-placement=\"{placement}\" data-extension=\"{}\" data-overlap=\"{}\" data-extension-flags=\"{}\" data-text-width-px=\"{}\" data-text-height-px=\"{}\" data-text-reference-mask=\"{}\" data-number-reference-mask=\"{}\">{content}</section>\n",
+        master_page.is_extension,
+        master_page.overlap,
+        master_page.raw_extension_flags,
+        master_page.text_width.0,
+        master_page.text_height.0,
+        master_page.text_reference_mask,
+        master_page.number_reference_mask,
+    )
 }
 
 fn render_html_header_footer(
@@ -989,10 +1020,59 @@ fn render_html_list_item_open(paragraph: &Paragraph, list: &ListInfo) -> String 
         .filter(|marker| !marker.is_empty())
         .map(|marker| format!(" data-marker=\"{}\"", escape_html(marker)))
         .unwrap_or_default();
+    let marker_metadata = render_html_list_marker_metadata(list);
     let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
     let content = render_html_inlines(&paragraph.inlines);
 
-    format!("<li{value}{marker_format}{marker}{style}>{content}")
+    format!("<li{value}{marker_format}{marker}{marker_metadata}{style}>{content}")
+}
+
+fn render_html_list_marker_metadata(list: &ListInfo) -> String {
+    let mut attributes = Vec::new();
+    if let Some(definition_id) = list.source_definition_id {
+        attributes.push(format!("data-source-definition-id=\"{definition_id}\""));
+    }
+    if let Some(layout) = &list.marker_layout {
+        attributes.push(format!(
+            "data-marker-attributes=\"{}\"",
+            layout.raw_attributes
+        ));
+        attributes.push(format!(
+            "data-marker-width-adjust=\"{}\"",
+            layout.raw_width_adjust
+        ));
+        attributes.push(format!(
+            "data-marker-text-distance=\"{}\"",
+            layout.raw_text_distance
+        ));
+        if let Some(char_shape_id) = layout.source_char_shape_id {
+            attributes.push(format!("data-marker-char-shape-id=\"{char_shape_id}\""));
+        }
+        if let Some(image_bullet_id) = layout.image_bullet_id {
+            attributes.push(format!("data-image-bullet-id=\"{image_bullet_id}\""));
+        }
+        if layout.image_data != [0; 4] {
+            attributes.push(format!(
+                "data-image-bullet-metadata=\"{},{},{},{}\"",
+                layout.image_data[0],
+                layout.image_data[1],
+                layout.image_data[2],
+                layout.image_data[3]
+            ));
+        }
+        if let Some(check_marker) = layout.check_marker.as_deref() {
+            attributes.push(format!(
+                "data-check-marker=\"{}\"",
+                escape_html(check_marker)
+            ));
+        }
+    }
+
+    if attributes.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", attributes.join(" "))
+    }
 }
 
 fn html_list_tag_name(kind: &ListKind) -> &'static str {
@@ -1097,12 +1177,29 @@ fn render_html_fallback_text(text: &str) -> String {
 fn render_html_text_run(run: &TextRun) -> String {
     let content = render_html_fallback_text(&run.text);
     let style = render_html_style_attr(&render_html_text_style(&run.style));
+    let shadow_metadata = render_html_text_shadow_metadata(&run.style);
+    let emphasis_metadata = run
+        .style
+        .emphasis_mark_type
+        .map(|kind| format!(" data-emphasis-mark-type=\"{kind}\""))
+        .unwrap_or_default();
 
-    if style.is_empty() {
+    if style.is_empty() && shadow_metadata.is_empty() && emphasis_metadata.is_empty() {
         content
     } else {
-        format!("<span{style}>{content}</span>")
+        format!("<span{shadow_metadata}{emphasis_metadata}{style}>{content}</span>")
     }
+}
+
+fn render_html_text_shadow_metadata(style: &TextStyle) -> String {
+    let Some(shadow) = style.shadow_details else {
+        return String::new();
+    };
+
+    format!(
+        " data-shadow-kind=\"{}\" data-shadow-offset-x-percent=\"{}\" data-shadow-offset-y-percent=\"{}\" data-shadow-color-raw=\"{}\"",
+        shadow.kind, shadow.offset_x_percent, shadow.offset_y_percent, shadow.raw_color
+    )
 }
 
 fn render_html_link(link: &Link) -> String {
@@ -1179,6 +1276,11 @@ fn render_html_shape(shape: &Shape, resources: &ResourceStore, image_asset_prefi
     }
     if let Some(border) = &shape.border {
         declarations.push(format!("border: {}", render_css_border(border)));
+    }
+    if let Some(shadow) = &shape.shadow
+        && let Some(shadow) = render_css_shape_shadow(shadow)
+    {
+        declarations.push(format!("box-shadow: {shadow}"));
     }
     match &shape.geometry {
         Some(ShapeGeometry::Rectangle {
@@ -1307,14 +1409,16 @@ fn render_html_text_style(style: &TextStyle) -> String {
         declarations.push("vertical-align: sub".to_string());
         declarations.push("font-size: smaller".to_string());
     }
-    if style.emphasis_dot {
+    if let Some(marker) = style.emphasis_mark_type.and_then(text_emphasis_marker) {
+        declarations.push(format!("text-emphasis: \"{marker}\""));
+    } else if style.emphasis_dot {
         declarations.push("text-emphasis: dot".to_string());
     }
     if style.outline {
         declarations.push("-webkit-text-stroke: 1px currentColor".to_string());
     }
-    // emboss/engrave/shadow are all approximated with text-shadow, so emit at
-    // most one to avoid conflicting declarations.
+    // Emboss and engrave remain generic approximations. A structured HWP text
+    // shadow is applied only when those mutually competing effects are absent.
     if style.emboss {
         declarations.push(
             "text-shadow: -1px -1px 0 rgba(255,255,255,0.7), 1px 1px 1px rgba(0,0,0,0.4)"
@@ -1325,7 +1429,13 @@ fn render_html_text_style(style: &TextStyle) -> String {
             "text-shadow: 1px 1px 0 rgba(255,255,255,0.7), -1px -1px 1px rgba(0,0,0,0.4)"
                 .to_string(),
         );
-    } else if style.shadow {
+    } else if let Some(shadow) = style
+        .shadow_details
+        .as_ref()
+        .and_then(render_css_text_shadow)
+    {
+        declarations.push(format!("text-shadow: {shadow}"));
+    } else if style.shadow && style.shadow_details.is_none() {
         declarations.push("text-shadow: 1px 1px 2px rgba(0,0,0,0.5)".to_string());
     }
 
@@ -1379,6 +1489,28 @@ fn render_html_text_style(style: &TextStyle) -> String {
     }
 
     declarations.join("; ")
+}
+
+fn render_css_text_shadow(shadow: &TextShadow) -> Option<String> {
+    let color = shadow.color?;
+    Some(format!(
+        "{}em {}em 0 {}",
+        f32::from(shadow.offset_x_percent) / 100.0,
+        f32::from(shadow.offset_y_percent) / 100.0,
+        render_css_color(color)
+    ))
+}
+
+fn text_emphasis_marker(kind: u8) -> Option<&'static str> {
+    match kind {
+        1 => Some("●"),
+        2 => Some("○"),
+        3 => Some("ˇ"),
+        4 => Some("˜"),
+        5 => Some("･"),
+        6 => Some(":"),
+        _ => None,
+    }
 }
 
 fn text_decoration_style_to_css(style: &TextDecorationStyle) -> &'static str {
@@ -1860,6 +1992,18 @@ fn render_css_color(color: Color) -> String {
     )
 }
 
+fn render_css_shape_shadow(shadow: &ShapeShadow) -> Option<String> {
+    let mut color = shadow.color?;
+    let opacity = 255u16.saturating_sub(u16::from(shadow.transparency));
+    color.a = ((u16::from(color.a) * opacity) / 255) as u8;
+    Some(format!(
+        "{}px {}px {}",
+        shadow.offset_x.0,
+        shadow.offset_y.0,
+        render_css_color(color)
+    ))
+}
+
 fn sanitize_css_font_family(font_family: &str) -> Option<String> {
     let sanitized = font_family
         .split(',')
@@ -2148,6 +2292,13 @@ fn render_markdown_document_with_asset_prefix(
     let mut blocks = Vec::new();
 
     for section in &document.sections {
+        for master_page in &section.master_pages {
+            blocks.push(render_markdown_master_page(
+                master_page,
+                &document.resources,
+                image_asset_prefix,
+            ));
+        }
         for header in &section.headers {
             blocks.push(render_markdown_header_footer(
                 "머리말",
@@ -2184,6 +2335,26 @@ fn render_markdown_document_with_asset_prefix(
     }
 
     blocks.join("\n\n")
+}
+
+fn render_markdown_master_page(
+    master_page: &MasterPage,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
+    let content = master_page
+        .blocks
+        .iter()
+        .map(|block| render_markdown_block(block, resources, image_asset_prefix))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let label = render_markdown_text("[바탕쪽]");
+
+    if content.is_empty() {
+        label
+    } else {
+        format!("{label}\n\n{content}")
+    }
 }
 
 fn render_markdown_block(
@@ -2963,11 +3134,11 @@ mod tests {
     use crate::ir::{
         Alignment, BinaryResource, BinaryResourceKind, Chart, Color, ConversionWarning, Equation,
         EquationKind, HeaderFooter, HeaderFooterPlacement, IR_VERSION, Image, ImageCrop,
-        ImageResource, Indent, LengthPt, LengthPx, Link, ListInfo, ListKind, Metadata, Note,
-        NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource,
-        ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table,
-        TableCell, TableCellStyle, TableRow, TableStyle, TextRun, TextStyle, UnknownInline,
-        WarningCode,
+        ImageResource, Indent, LengthPt, LengthPx, Link, ListInfo, ListKind, ListMarkerLayout,
+        MasterPage, Metadata, Note, NoteId, NoteKind, NoteStore, Paragraph, ParagraphRole,
+        ParagraphStyle, Percent, Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind,
+        Spacing, StyleSheet, Table, TableCell, TableCellStyle, TableRow, TableStyle, TextRun,
+        TextShadow, TextStyle, UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -3702,6 +3873,7 @@ mod tests {
                     marker: None,
                     marker_format: None,
                     number: Some(1),
+                    ..Default::default()
                 }),
             }),
             Block::Paragraph(Paragraph {
@@ -3719,6 +3891,7 @@ mod tests {
                     marker: None,
                     marker_format: None,
                     number: Some(2),
+                    ..Default::default()
                 }),
             }),
         ]);
@@ -3748,6 +3921,16 @@ mod tests {
                 marker: Some("chapter 3 & \"appendix\"".to_string()),
                 marker_format: Some("chapter ^1 & \"appendix\"".to_string()),
                 number: Some(3),
+                source_definition_id: Some(4),
+                marker_layout: Some(ListMarkerLayout {
+                    raw_attributes: 5,
+                    raw_width_adjust: 4,
+                    raw_text_distance: 8,
+                    source_char_shape_id: Some(6),
+                    image_bullet_id: None,
+                    image_data: [0; 4],
+                    check_marker: None,
+                }),
             }),
         })]);
 
@@ -3755,7 +3938,7 @@ mod tests {
         let markdown = render_markdown_document(&document);
 
         assert!(html.contains(
-            "<li value=\"3\" data-marker-format=\"chapter ^1 &amp; &quot;appendix&quot;\" data-marker=\"chapter 3 &amp; &quot;appendix&quot;\">chapter</li>"
+            "<li value=\"3\" data-marker-format=\"chapter ^1 &amp; &quot;appendix&quot;\" data-marker=\"chapter 3 &amp; &quot;appendix&quot;\" data-source-definition-id=\"4\" data-marker-attributes=\"5\" data-marker-width-adjust=\"4\" data-marker-text-distance=\"8\" data-marker-char-shape-id=\"6\">chapter</li>"
         ));
         assert!(html.contains("li[data-marker]::marker"));
         assert_eq!(markdown, "chapter 3 & \"appendix\" chapter");
@@ -3779,6 +3962,7 @@ mod tests {
                     marker: Some("-".to_string()),
                     marker_format: None,
                     number: None,
+                    ..Default::default()
                 }),
             }),
             Block::Paragraph(Paragraph {
@@ -3796,6 +3980,7 @@ mod tests {
                     marker: Some("-".to_string()),
                     marker_format: None,
                     number: None,
+                    ..Default::default()
                 }),
             }),
             Block::Paragraph(Paragraph {
@@ -3813,6 +3998,7 @@ mod tests {
                     marker: Some("-".to_string()),
                     marker_format: None,
                     number: None,
+                    ..Default::default()
                 }),
             }),
         ]);
@@ -3874,6 +4060,7 @@ mod tests {
                 marker: None,
                 marker_format: None,
                 number: Some(3),
+                ..Default::default()
             }),
         })]);
 
@@ -4331,17 +4518,40 @@ mod tests {
     fn renders_html_advanced_text_style_decorations() {
         let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
             role: ParagraphRole::Body,
-            inlines: vec![Inline::Text(TextRun {
-                text: "x".to_string(),
-                style: TextStyle {
-                    superscript: true,
-                    emphasis_dot: true,
-                    emboss: true,
-                    outline: true,
-                    ..Default::default()
-                },
-                style_ref: None,
-            })],
+            inlines: vec![
+                Inline::Text(TextRun {
+                    text: "x".to_string(),
+                    style: TextStyle {
+                        superscript: true,
+                        emphasis_dot: true,
+                        emphasis_mark_type: Some(2),
+                        emboss: true,
+                        outline: true,
+                        ..Default::default()
+                    },
+                    style_ref: None,
+                }),
+                Inline::Text(TextRun {
+                    text: "shadow".to_string(),
+                    style: TextStyle {
+                        shadow: true,
+                        shadow_details: Some(TextShadow {
+                            kind: 2,
+                            offset_x_percent: 25,
+                            offset_y_percent: -50,
+                            color: Some(Color {
+                                r: 0x11,
+                                g: 0x22,
+                                b: 0x33,
+                                a: 255,
+                            }),
+                            raw_color: 0x00332211,
+                        }),
+                        ..Default::default()
+                    },
+                    style_ref: None,
+                }),
+            ],
             style: ParagraphStyle::default(),
             style_ref: None,
             list: None,
@@ -4350,9 +4560,15 @@ mod tests {
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
         assert!(html.contains("vertical-align: super"));
-        assert!(html.contains("text-emphasis: dot"));
+        assert!(html.contains("text-emphasis: &quot;○&quot;"));
+        assert!(html.contains("data-emphasis-mark-type=\"2\""));
         assert!(html.contains("-webkit-text-stroke: 1px currentColor"));
         assert!(html.contains("text-shadow:"));
+        assert!(html.contains("text-shadow: 0.25em -0.5em 0 #112233"));
+        assert!(html.contains("data-shadow-kind=\"2\""));
+        assert!(html.contains("data-shadow-offset-x-percent=\"25\""));
+        assert!(html.contains("data-shadow-offset-y-percent=\"-50\""));
+        assert!(html.contains("data-shadow-color-raw=\"3351057\""));
     }
 
     #[test]
@@ -4658,6 +4874,19 @@ mod tests {
                 b: 102,
                 a: 255,
             }),
+            shadow: Some(ShapeShadow {
+                kind: 4,
+                color: Some(Color {
+                    r: 17,
+                    g: 34,
+                    b: 51,
+                    a: 255,
+                }),
+                raw_color: 0x00332211,
+                offset_x: LengthPx(2.0),
+                offset_y: LengthPx(-1.0),
+                transparency: 64,
+            }),
             rotation_degrees: Some(90.0),
             flip_horizontal: Some(true),
             flip_vertical: Some(true),
@@ -4682,6 +4911,7 @@ mod tests {
 
         assert!(html.contains("background-color: #445566"));
         assert!(html.contains("border: 2px dotted #112233"));
+        assert!(html.contains("box-shadow: 2px -1px rgba(17, 34, 51,"));
         assert!(html.contains("transform: rotate(90deg) scaleX(-1) scaleY(-1)"));
         assert!(html.contains("display: inline-block"));
         assert!(html.contains("display: inline-flex"));
@@ -5241,6 +5471,7 @@ mod tests {
                     marker: Some("-".to_string()),
                     marker_format: None,
                     number: None,
+                    ..Default::default()
                 }),
             }),
             Block::Paragraph(Paragraph {
@@ -5258,6 +5489,7 @@ mod tests {
                     marker: None,
                     marker_format: None,
                     number: Some(2),
+                    ..Default::default()
                 }),
             }),
         ]);
@@ -5274,6 +5506,28 @@ mod tests {
             ir_version: IR_VERSION,
             metadata: Metadata::default(),
             sections: vec![Section {
+                master_pages: vec![MasterPage {
+                    placement: HeaderFooterPlacement::OddPage,
+                    is_extension: true,
+                    overlap: true,
+                    raw_extension_flags: 0x1234,
+                    text_width: LengthPx(100.0),
+                    text_height: LengthPx(20.0),
+                    text_reference_mask: 3,
+                    number_reference_mask: 5,
+                    raw_list_header: vec![7, 8, 9],
+                    blocks: vec![Block::Paragraph(Paragraph {
+                        role: ParagraphRole::Body,
+                        inlines: vec![Inline::Text(TextRun {
+                            text: "master".to_string(),
+                            style: TextStyle::default(),
+                            style_ref: None,
+                        })],
+                        style: ParagraphStyle::default(),
+                        style_ref: None,
+                        list: None,
+                    })],
+                }],
                 headers: vec![HeaderFooter {
                     placement: HeaderFooterPlacement::Default,
                     blocks: vec![Block::Paragraph(Paragraph {
@@ -5322,9 +5576,12 @@ mod tests {
         };
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
+        let markdown = render_markdown_document(&document);
 
+        assert!(html.contains("<section class=\"master-page\" data-placement=\"odd_page\" data-extension=\"true\" data-overlap=\"true\" data-extension-flags=\"4660\" data-text-width-px=\"100\" data-text-height-px=\"20\" data-text-reference-mask=\"3\" data-number-reference-mask=\"5\"><p>master</p>"));
         assert!(html.contains("<header data-placement=\"default\"><p>header</p>"));
         assert!(html.contains("<footer data-placement=\"even_page\"><p>footer</p>"));
+        assert!(markdown.contains("[바탕쪽]\n\nmaster"));
     }
 
     #[test]

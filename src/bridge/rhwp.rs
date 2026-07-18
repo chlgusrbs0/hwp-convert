@@ -13,7 +13,9 @@ use rhwp::model::control::{
 use rhwp::model::document::{
     Document as RhwpDocument, Section as RhwpSection, SectionDef as RhwpSectionDef,
 };
-use rhwp::model::header_footer::HeaderFooterApply as RhwpHeaderFooterApply;
+use rhwp::model::header_footer::{
+    HeaderFooterApply as RhwpHeaderFooterApply, MasterPage as RhwpMasterPage,
+};
 use rhwp::model::image::{ImageEffect as RhwpImageEffect, Picture};
 use rhwp::model::page::{
     ColumnDef as RhwpColumnDef, ColumnDirection as RhwpColumnDirection,
@@ -46,14 +48,15 @@ use crate::ir::{
     GradientColor, HeaderFooter, HeaderFooterPlacement, HorizontalObjectAlignment,
     HorizontalRelativeTo, Image, ImageCrop, ImageEffect as IrImageEffect, ImageFillMode,
     ImagePlacement, ImageResource, ImageTextWrap, Inline, LengthPt, LengthPx, Link, ListInfo,
-    ListKind, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
-    NumberingKind, ObjectPlacement, PageBinding, PageBorderFillLayout, PageLayout, Paragraph,
-    ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, RawSectionRecord, Resource,
-    ResourceId, ResourceStore, ScriptTextStyle, Section, SectionLayout, Shape, ShapeGeometry,
-    ShapeKind, ShapePoint, Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table,
-    TableCell, TableCellStyle, TablePageBreak, TableRow, TableStyle, TableZone,
-    TextDecorationStyle, TextRun, TextScript, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
-    VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    ListKind, ListMarkerLayout, MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId,
+    NoteKind, NoteLayout, NoteStore, NumberingKind, ObjectPlacement, PageBinding,
+    PageBorderFillLayout, PageLayout, Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId,
+    Percent, RawSectionRecord, Resource, ResourceId, ResourceStore, ScriptTextStyle, Section,
+    SectionLayout, Shape, ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow, Spacing, StyleSheet,
+    TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle, TablePageBreak,
+    TableRow, TableStyle, TableZone, TextDecorationStyle, TextRun, TextScript, TextShadow,
+    TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
+    VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -69,10 +72,11 @@ fn map_vertical_align(value: RhwpVerticalAlign) -> Option<VerticalAlign> {
 }
 
 /// Parse a source document with `rhwp` and bridge the resulting model into the
-/// local `Document` IR. For `.hwpx`, section XML fallback remains available
-/// when parsing fails or when the mapped body is structurally empty. A
-/// successful HWPX parse is also compared with the section XML fallback so
-/// partial rHWP data loss is either recovered conservatively or reported.
+/// local `Document` IR. For `.hwpx`, the frozen legacy section XML fallback
+/// remains available when parsing fails or when the mapped body is
+/// structurally empty. A successful HWPX parse is also compared with that
+/// fallback to preserve established recovery behavior. This path must not be
+/// extended with semantics absent from the pinned rHWP public model.
 pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
     let (input_kind, bytes) = hwpx::read_input_bytes(input_path)?;
 
@@ -142,7 +146,10 @@ fn document_from_hwpx_fallback(mut document: Document, source: HwpxTextFallbackS
 fn document_has_blocks(document: &Document) -> bool {
     !document.notes.notes.is_empty()
         || document.sections.iter().any(|section| {
-            !section.blocks.is_empty() || !section.headers.is_empty() || !section.footers.is_empty()
+            !section.blocks.is_empty()
+                || !section.headers.is_empty()
+                || !section.footers.is_empty()
+                || !section.master_pages.is_empty()
         })
 }
 
@@ -223,10 +230,22 @@ impl<'a> BridgeContext<'a> {
             })
             .unwrap_or(&section.section_def);
 
+        if !layout_source.master_pages.is_empty() {
+            self.add_warning_once(
+                "rhwp master-page content and metadata were preserved in Section IR; semantic exporters linearize the content and do not reproduce repeated page-background placement.",
+            );
+        }
+        let master_pages = layout_source
+            .master_pages
+            .iter()
+            .map(|master_page| self.map_master_page(master_page))
+            .collect();
+
         Section {
             blocks,
             headers,
             footers,
+            master_pages,
             layout: Some(map_section_layout(layout_source)),
         }
     }
@@ -775,6 +794,21 @@ impl<'a> BridgeContext<'a> {
         }
     }
 
+    fn map_master_page(&mut self, master_page: &RhwpMasterPage) -> MasterPage {
+        MasterPage {
+            placement: map_header_footer_placement(master_page.apply_to),
+            is_extension: master_page.is_extension,
+            overlap: master_page.overlap,
+            raw_extension_flags: master_page.ext_flags,
+            text_width: LengthPx(master_page.text_width as f32 / 75.0),
+            text_height: LengthPx(master_page.text_height as f32 / 75.0),
+            text_reference_mask: master_page.text_ref,
+            number_reference_mask: master_page.num_ref,
+            raw_list_header: master_page.raw_list_header.clone(),
+            blocks: self.map_blocks_from_paragraphs(&master_page.paragraphs, 0),
+        }
+    }
+
     fn map_blocks_from_paragraphs(
         &mut self,
         paragraphs: &[RhwpParagraph],
@@ -1063,7 +1097,7 @@ impl<'a> BridgeContext<'a> {
                             para_shape.numbering_id, bullet.bullet_char
                         ));
                     }
-                    self.warn_unmodeled_bullet(bullet, para_shape.numbering_id);
+                    self.warn_bullet_limitations(bullet, para_shape.numbering_id);
                 }
                 Some(ListInfo {
                     kind: ListKind::Unordered,
@@ -1071,6 +1105,18 @@ impl<'a> BridgeContext<'a> {
                     marker,
                     marker_format: None,
                     number: None,
+                    source_definition_id: (para_shape.numbering_id != 0)
+                        .then_some(para_shape.numbering_id),
+                    marker_layout: bullet.as_ref().map(|bullet| ListMarkerLayout {
+                        raw_attributes: bullet.attr,
+                        raw_width_adjust: bullet.width_adjust,
+                        raw_text_distance: bullet.text_distance,
+                        source_char_shape_id: None,
+                        image_bullet_id: (bullet.image_bullet != 0).then_some(bullet.image_bullet),
+                        image_data: bullet.image_data,
+                        check_marker: normalize_bullet_char(bullet.check_bullet_char)
+                            .map(|marker| marker.to_string()),
+                    }),
                 })
             }
             RhwpHeadType::Number | RhwpHeadType::Outline => {
@@ -1090,7 +1136,7 @@ impl<'a> BridgeContext<'a> {
                     .filter(|format| !format.is_empty())
                     .cloned();
                 if let Some(numbering) = numbering.as_ref() {
-                    self.warn_unmodeled_numbering(
+                    self.warn_numbering_limitations(
                         numbering,
                         numbering_id,
                         level,
@@ -1119,15 +1165,29 @@ impl<'a> BridgeContext<'a> {
                     marker,
                     marker_format,
                     number,
+                    source_definition_id: (numbering_id != 0).then_some(numbering_id),
+                    marker_layout: numbering.as_ref().map(|numbering| {
+                        let head = &numbering.heads[level as usize];
+                        ListMarkerLayout {
+                            raw_attributes: head.attr,
+                            raw_width_adjust: head.width_adjust,
+                            raw_text_distance: head.text_distance,
+                            source_char_shape_id: (!matches!(head.char_shape_id, 0 | u32::MAX))
+                                .then_some(head.char_shape_id),
+                            image_bullet_id: None,
+                            image_data: [0; 4],
+                            check_marker: None,
+                        }
+                    }),
                 })
             }
         }
     }
 
-    fn warn_unmodeled_bullet(&mut self, bullet: &rhwp::model::style::Bullet, bullet_id: u16) {
+    fn warn_bullet_limitations(&mut self, bullet: &rhwp::model::style::Bullet, bullet_id: u16) {
         if bullet.image_bullet != 0 {
             self.add_warning_once(&format!(
-                "rhwp bullet id {bullet_id} used image bullet {}; ListInfo preserved only a text marker and omitted the image bullet resource.",
+                "rhwp bullet id {bullet_id} used image bullet {}; ListInfo preserved its public id and image metadata, but semantic exporters use the text marker because rHWP does not expose a resolved bullet image resource here.",
                 bullet.image_bullet
             ));
         }
@@ -1137,19 +1197,19 @@ impl<'a> BridgeContext<'a> {
             || bullet.image_data != [0; 4]
         {
             self.add_warning_once(&format!(
-                "rhwp bullet id {bullet_id} used layout/style metadata attr={}, width_adjust={}, text_distance={}, image_data={:?}; ListInfo omitted those properties.",
+                "rhwp bullet id {bullet_id} used layout/style metadata attr={}, width_adjust={}, text_distance={}, image_data={:?}; ListInfo preserved those values, but semantic exporters do not reproduce exact marker layout.",
                 bullet.attr, bullet.width_adjust, bullet.text_distance, bullet.image_data
             ));
         }
         if normalize_bullet_char(bullet.check_bullet_char).is_some() {
             self.add_warning_once(&format!(
-                "rhwp bullet id {bullet_id} exposed a check-bullet marker {:?}; ListInfo preserved only the primary bullet marker.",
+                "rhwp bullet id {bullet_id} exposed a check-bullet marker {:?}; ListInfo preserved it as alternate marker metadata while semantic exporters use the primary marker.",
                 bullet.check_bullet_char
             ));
         }
     }
 
-    fn warn_unmodeled_numbering(
+    fn warn_numbering_limitations(
         &mut self,
         numbering: &RhwpNumbering,
         numbering_id: u16,
@@ -1179,7 +1239,7 @@ impl<'a> BridgeContext<'a> {
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "-".to_string());
             self.add_warning_once(&format!(
-                "rhwp numbering id {numbering_id} level {level} used layout/style metadata attr={}, width_adjust={}, text_distance={}, char_shape_id={}; ListInfo omitted those properties.",
+                "rhwp numbering id {numbering_id} level {level} used layout/style metadata attr={}, width_adjust={}, text_distance={}, char_shape_id={}; ListInfo preserved those values, but semantic exporters do not reproduce exact marker layout or marker character style.",
                 head.attr,
                 head.width_adjust,
                 head.text_distance,
@@ -1190,10 +1250,7 @@ impl<'a> BridgeContext<'a> {
 
     fn map_control_blocks(&mut self, control: &Control) -> Vec<Block> {
         match control {
-            Control::SectionDef(section_def) => {
-                self.warn_unmodeled_section_details(section_def);
-                Vec::new()
-            }
+            Control::SectionDef(_) => Vec::new(),
             Control::ColumnDef(column_def) => {
                 if column_def_has_layout_effect(column_def) {
                     self.add_warning_once(
@@ -1286,16 +1343,6 @@ impl<'a> BridgeContext<'a> {
                 .into_iter()
                 .collect(),
             _ => Vec::new(),
-        }
-    }
-
-    fn warn_unmodeled_section_details(&mut self, section_def: &RhwpSectionDef) {
-        let details = section_unmodeled_detail_names(section_def);
-        if !details.is_empty() {
-            self.add_warning_once(&format!(
-                "rhwp section page layout was preserved in Section IR, but these section details remain unmodeled: {}.",
-                details.join(", ")
-            ));
         }
     }
 
@@ -1779,6 +1826,7 @@ impl<'a> BridgeContext<'a> {
         let drawing = shape.drawing();
         let border = drawing.and_then(|drawing| map_shape_border_line(&drawing.border_line));
         let fill = drawing.and_then(|drawing| self.map_fill_style(&drawing.fill, "shape fill"));
+        let shadow = drawing.and_then(map_shape_shadow);
         let background_color = match &fill {
             Some(FillStyle::Solid {
                 background_color, ..
@@ -1792,6 +1840,11 @@ impl<'a> BridgeContext<'a> {
         self.add_warning_once(
             "rhwp shape geometry and object placement were preserved in Shape IR; semantic exporters approximate visual layout.",
         );
+        if shadow.is_some() {
+            self.add_warning_once(
+                "rhwp shape shadow type, color, offsets, and transparency were preserved in Shape IR; HTML approximates them with CSS box-shadow while nonvisual exporters do not render the effect.",
+            );
+        }
         if let Some(drawing_details) = drawing.and_then(shape_unmodeled_presentation_details) {
             self.add_warning_once(&format!(
                 "rhwp shape contains presentation details that remain unmodeled: {drawing_details}."
@@ -1831,6 +1884,7 @@ impl<'a> BridgeContext<'a> {
             border,
             background_color,
             fill,
+            shadow,
             rotation_degrees: (shape.shape_attr().rotation_angle != 0)
                 .then(|| shape.shape_attr().rotation_angle as f32),
             flip_horizontal: shape.shape_attr().horz_flip.then_some(true),
@@ -2088,10 +2142,12 @@ impl<'a> BridgeContext<'a> {
             superscript: char_shape.superscript,
             subscript: char_shape.subscript,
             emphasis_dot: char_shape.emphasis_dot != 0,
+            emphasis_mark_type: (char_shape.emphasis_dot != 0).then_some(char_shape.emphasis_dot),
             emboss: char_shape.emboss,
             engrave: char_shape.engrave,
             outline: char_shape.outline_type != 0,
             shadow: char_shape.shadow_type != 0,
+            shadow_details: map_text_shadow(char_shape),
             font_family: self.lookup_font_family(char_shape, context),
             font_size_pt,
             color: color_ref_to_color_option(char_shape.text_color),
@@ -2176,9 +2232,9 @@ impl<'a> BridgeContext<'a> {
                 "rhwp text style used different simultaneous underline and strike decoration styles; JSON preserves both, while HTML CSS can display only one shared decoration style and prefers the underline style.",
             );
         }
-        if char_shape.emphasis_dot > 1 {
+        if char_shape.emphasis_dot > 6 {
             self.add_warning_once(&format!(
-                "rhwp text style used emphasis mark type {}; TextStyle approximated it as a generic dot emphasis.",
+                "rhwp text style used unknown emphasis mark type {}; TextStyle preserved the raw type while HTML falls back to a generic dot emphasis.",
                 char_shape.emphasis_dot
             ));
         }
@@ -2188,9 +2244,14 @@ impl<'a> BridgeContext<'a> {
                 char_shape.outline_type
             ));
         }
-        if char_shape.shadow_type != 0 || char_shape.emboss || char_shape.engrave {
+        if char_shape.shadow_type != 0 {
             self.add_warning_once(
-                "rhwp text effect details such as shadow type, offsets, color, emboss, or engrave are only approximated by generic HTML text shadows.",
+                "rhwp text shadow type, color, and percentage offsets were preserved in TextStyle IR; HTML applies the public color and offsets without inventing blur or type-specific rendering.",
+            );
+        }
+        if char_shape.emboss || char_shape.engrave {
+            self.add_warning_once(
+                "rhwp text emboss or engrave flags were preserved, but HTML approximates those effects with generic text shadows.",
             );
         }
     }
@@ -2458,10 +2519,12 @@ impl<'a> BridgeContext<'a> {
             superscript: char_shape.superscript,
             subscript: char_shape.subscript,
             emphasis_dot: char_shape.emphasis_dot != 0,
+            emphasis_mark_type: (char_shape.emphasis_dot != 0).then_some(char_shape.emphasis_dot),
             emboss: char_shape.emboss,
             engrave: char_shape.engrave,
             outline: char_shape.outline_type != 0,
             shadow: char_shape.shadow_type != 0,
+            shadow_details: map_text_shadow(char_shape),
             font_family: self.lookup_font_family_for_language(char_shape, language_index, context),
             font_size_pt,
             color: color_ref_to_color_option(char_shape.text_color),
@@ -3384,10 +3447,28 @@ fn shape_unmodeled_presentation_details(
     if line_type != 0 && !picture_border_line_type_is_modeled(line_type) {
         details.push(format!("border line type={line_type}"));
     }
-    if drawing.shadow_type != 0 {
-        details.push(format!("shadow_type={}", drawing.shadow_type));
-    }
     (!details.is_empty()).then(|| details.join(", "))
+}
+
+fn map_shape_shadow(drawing: &rhwp::model::shape::DrawingObjAttr) -> Option<ShapeShadow> {
+    (drawing.shadow_type != 0).then(|| ShapeShadow {
+        kind: drawing.shadow_type,
+        color: color_ref_to_color_option(drawing.shadow_color),
+        raw_color: drawing.shadow_color,
+        offset_x: LengthPx(drawing.shadow_offset_x as f32 / 75.0),
+        offset_y: LengthPx(drawing.shadow_offset_y as f32 / 75.0),
+        transparency: drawing.shadow_alpha,
+    })
+}
+
+fn map_text_shadow(char_shape: &RhwpCharShape) -> Option<TextShadow> {
+    (char_shape.shadow_type != 0).then(|| TextShadow {
+        kind: char_shape.shadow_type,
+        offset_x_percent: char_shape.shadow_offset_x,
+        offset_y_percent: char_shape.shadow_offset_y,
+        color: color_ref_to_color_option(char_shape.shadow_color),
+        raw_color: char_shape.shadow_color,
+    })
 }
 
 fn picture_border_line_type_is_modeled(line_type: u8) -> bool {
@@ -3795,14 +3876,6 @@ fn map_page_border_fill_layout(fill: &rhwp::model::page::PageBorderFill) -> Page
     }
 }
 
-fn section_unmodeled_detail_names(section_def: &RhwpSectionDef) -> Vec<&'static str> {
-    let mut details = Vec::new();
-    if !section_def.master_pages.is_empty() {
-        details.push("master pages");
-    }
-    details
-}
-
 fn map_column_layout(column_def: &RhwpColumnDef) -> ColumnLayout {
     ColumnLayout {
         kind: match column_def.column_type {
@@ -4067,6 +4140,7 @@ mod tests {
     use rhwp::model::footnote::Footnote as RhwpFootnote;
     use rhwp::model::header_footer::{
         Footer as RhwpFooter, Header as RhwpHeader, HeaderFooterApply as RhwpHeaderFooterApply,
+        MasterPage as RhwpMasterPage,
     };
     use rhwp::model::image::{
         CropInfo as RhwpCropInfo, ImageAttr, ImageEffect as RhwpImageEffect, Picture,
@@ -4750,6 +4824,11 @@ mod tests {
                     }),
                     ..Default::default()
                 },
+                shadow_type: 4,
+                shadow_color: 0x00332211,
+                shadow_offset_x: 150,
+                shadow_offset_y: -75,
+                shadow_alpha: 64,
                 text_box: Some(RhwpTextBox {
                     vertical_align: RhwpVerticalAlign::Center,
                     margin_left: 75,
@@ -4862,6 +4941,22 @@ mod tests {
                         }),
                     })
                 );
+                assert_eq!(
+                    shape.shadow,
+                    Some(ShapeShadow {
+                        kind: 4,
+                        color: Some(Color {
+                            r: 0x11,
+                            g: 0x22,
+                            b: 0x33,
+                            a: 255,
+                        }),
+                        raw_color: 0x00332211,
+                        offset_x: LengthPx(2.0),
+                        offset_y: LengthPx(-1.0),
+                        transparency: 64,
+                    })
+                );
             }
             other => panic!("expected shape block, got {other:?}"),
         }
@@ -4875,6 +4970,11 @@ mod tests {
             warning
                 .message
                 .contains("shape geometry and object placement were preserved")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("shape shadow type, color, offsets, and transparency were preserved")
         }));
     }
 
@@ -5646,6 +5746,9 @@ mod tests {
                     emboss: true,
                     outline_type: 1,
                     shadow_type: 1,
+                    shadow_offset_x: 25,
+                    shadow_offset_y: -50,
+                    shadow_color: 0x00332211,
                     base_size: 1200,
                     text_color: 0x00010203,
                     shade_color: 0x00040506,
@@ -5715,10 +5818,26 @@ mod tests {
                         assert!(run.style.superscript);
                         assert!(!run.style.subscript);
                         assert!(run.style.emphasis_dot);
+                        assert_eq!(run.style.emphasis_mark_type, Some(1));
                         assert!(run.style.emboss);
                         assert!(!run.style.engrave);
                         assert!(run.style.outline);
                         assert!(run.style.shadow);
+                        assert_eq!(
+                            run.style.shadow_details,
+                            Some(TextShadow {
+                                kind: 1,
+                                offset_x_percent: 25,
+                                offset_y_percent: -50,
+                                color: Some(Color {
+                                    r: 0x11,
+                                    g: 0x22,
+                                    b: 0x33,
+                                    a: 255,
+                                }),
+                                raw_color: 0x00332211,
+                            })
+                        );
                         assert_eq!(run.style.font_family.as_deref(), Some("Noto Sans KR"));
                         assert_eq!(run.style.font_size_pt, Some(LengthPt(12.0)));
                         assert_eq!(
@@ -5881,13 +6000,13 @@ mod tests {
 
         assert_eq!(run.style.font_size_pt, None);
         assert!(run.style.kerning);
+        assert_eq!(run.style.emphasis_mark_type, Some(2));
         assert!(run.style.underline_above);
         assert_eq!(run.style.underline_style, Some(TextDecorationStyle::Dotted));
         assert_eq!(run.style.strike_style, Some(TextDecorationStyle::Dashed));
         for expected in [
             "strike shape 3",
             "different simultaneous underline and strike",
-            "emphasis mark type 2",
             "outline type 2",
             "shadow type",
             "invalid font size -100",
@@ -7253,6 +7372,21 @@ mod tests {
                                 border_fill_id: 3,
                                 ..Default::default()
                             },
+                            master_pages: vec![RhwpMasterPage {
+                                apply_to: RhwpHeaderFooterApply::Odd,
+                                is_extension: true,
+                                overlap: true,
+                                ext_flags: 0x1234,
+                                paragraphs: vec![RhwpParagraph {
+                                    text: "master page".to_string(),
+                                    ..Default::default()
+                                }],
+                                text_width: 7500,
+                                text_height: 1500,
+                                text_ref: 3,
+                                num_ref: 5,
+                                raw_list_header: vec![7, 8, 9],
+                            }],
                             raw_ctrl_extra: vec![1, 2, 3],
                             extra_child_records: vec![rhwp::model::document::RawRecord {
                                 tag_id: 99,
@@ -7334,6 +7468,20 @@ mod tests {
         assert_eq!(layout.raw_control_extension, vec![1, 2, 3]);
         assert_eq!(layout.extra_records[0].tag_id, 99);
         assert_eq!(layout.extra_records[0].data, vec![4, 5, 6]);
+        let master_page = &bridged.sections[0].master_pages[0];
+        assert_eq!(master_page.placement, HeaderFooterPlacement::OddPage);
+        assert!(master_page.is_extension);
+        assert!(master_page.overlap);
+        assert_eq!(master_page.raw_extension_flags, 0x1234);
+        assert_eq!(master_page.text_width, LengthPx(100.0));
+        assert_eq!(master_page.text_height, LengthPx(20.0));
+        assert_eq!(master_page.text_reference_mask, 3);
+        assert_eq!(master_page.number_reference_mask, 5);
+        assert_eq!(master_page.raw_list_header, vec![7, 8, 9]);
+        assert_eq!(
+            crate::util::plain_text::blocks_to_plain_text(&master_page.blocks),
+            "master page"
+        );
         let layout_json = serde_json::to_string(layout).expect("layout should serialize");
         assert!(layout_json.contains(r#""raw_control_extension":"AQID""#));
         assert!(layout_json.contains(r#""data":"BAUG""#));
@@ -7347,6 +7495,11 @@ mod tests {
             warning
                 .message
                 .contains("column layout changes were preserved")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("master-page content and metadata were preserved")
         }));
         assert!(
             !bridged
@@ -7764,7 +7917,7 @@ mod tests {
     }
 
     #[test]
-    fn warns_when_bullet_metadata_cannot_be_modeled() {
+    fn preserves_bullet_definition_metadata_and_warns_for_export_limits() {
         let document = RhwpDocument {
             doc_info: DocInfo {
                 para_shapes: vec![RhwpParaShape {
@@ -7796,19 +7949,35 @@ mod tests {
         };
 
         let bridged = BridgeContext::new(&document).into_document();
+        let list = match &bridged.sections[0].blocks[0] {
+            Block::Paragraph(paragraph) => paragraph.list.as_ref().expect("list info"),
+            other => panic!("expected paragraph block, got {other:?}"),
+        };
+        let layout = list.marker_layout.as_ref().expect("marker layout");
+
+        assert_eq!(list.source_definition_id, Some(1));
+        assert_eq!(layout.raw_attributes, 3);
+        assert_eq!(layout.raw_width_adjust, 100);
+        assert_eq!(layout.raw_text_distance, 200);
+        assert_eq!(layout.image_bullet_id, Some(7));
+        assert_eq!(layout.image_data, [1, 2, 3, 4]);
+        assert_eq!(layout.check_marker.as_deref(), Some("✓"));
 
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("used image bullet 7")
                 && warning
                     .message
-                    .contains("omitted the image bullet resource")
+                    .contains("does not expose a resolved bullet image resource")
         }));
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("width_adjust=100")
                 && warning.message.contains("text_distance=200")
+                && warning.message.contains("preserved those values")
         }));
         assert!(bridged.warnings.iter().any(|warning| {
-            warning.message.contains("check-bullet marker") && warning.message.contains('✓')
+            warning.message.contains("check-bullet marker")
+                && warning.message.contains('✓')
+                && warning.message.contains("alternate marker metadata")
         }));
     }
 
@@ -7871,7 +8040,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_ordered_list_format_and_warns_for_unmodeled_metadata() {
+    fn preserves_ordered_list_format_and_marker_layout_metadata() {
         let mut numbering = RhwpNumbering {
             level_start_numbers: [1, 1, 1, 1, 1, 1, 1],
             ..Default::default()
@@ -7912,13 +8081,26 @@ mod tests {
 
         assert_eq!(list.marker.as_deref(), Some("제I장"));
         assert_eq!(list.marker_format.as_deref(), Some("제^1장"));
+        assert_eq!(list.source_definition_id, Some(1));
+        assert_eq!(
+            list.marker_layout,
+            Some(ListMarkerLayout {
+                raw_attributes: 5,
+                raw_width_adjust: 100,
+                raw_text_distance: 200,
+                source_char_shape_id: Some(3),
+                image_bullet_id: None,
+                image_data: [0; 4],
+                check_marker: None,
+            })
+        );
         assert!(!bridged.warnings.iter().any(|warning| {
             warning.message.contains("format \"제^1장\"")
                 && warning.message.contains("plain number")
         }));
         assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("char_shape_id=3")
-                && warning.message.contains("layout/style metadata")
+                && warning.message.contains("preserved those values")
         }));
     }
 

@@ -1,3 +1,10 @@
+//! Frozen legacy HWPX recovery path.
+//!
+//! This module may receive security, malformed-input, regression, and existing
+//! silent-loss fixes. Do not add new element, control, attribute-alias, style,
+//! or layout coverage here. New conversion features require a typed public
+//! API from the pinned rHWP revision and belong in `bridge` or `render`.
+
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
@@ -667,6 +674,7 @@ impl HwpxFallbackContext {
                     marker,
                     marker_format: None,
                     number: Some(number),
+                    ..Default::default()
                 })
             }
             Some(ListKind::Unordered) => {
@@ -688,6 +696,7 @@ impl HwpxFallbackContext {
                     marker: Some(marker),
                     marker_format: None,
                     number: None,
+                    ..Default::default()
                 })
             }
             _ => None,
@@ -2262,6 +2271,7 @@ fn extract_section_xml_section(xml: &str, context: &mut HwpxFallbackContext) -> 
         blocks,
         headers,
         footers,
+        master_pages: Vec::new(),
         layout: None,
     }
 }
@@ -3138,6 +3148,7 @@ fn extract_hwpx_shape_from_xml(
         border: hwpx_object_border(shape_xml, "shape", context),
         background_color: hwpx_shape_background_color(shape_xml, context),
         fill: None,
+        shadow: None,
         rotation_degrees: transform.rotation_degrees,
         flip_horizontal: transform.flip_horizontal,
         flip_vertical: transform.flip_vertical,

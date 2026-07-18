@@ -13,10 +13,10 @@
 - 이 프로젝트는 Rust CLI다.
 - crate 이름은 `hwp-convert`, library target은 `hwp_convert`, edition은 2024다.
 - rHWP dependency 고정: `github.com/edwardkim/rhwp` rev `bea635bd708274a51ae3f557a71b07683d7c2454` (rhwp v0.7.3).
-- 현재 `IR_VERSION`: `49`.
+- 현재 `IR_VERSION`: `54`.
 - 입력 형식: `.hwp`, `.hwpx`.
 - 출력 형식: `txt`, `json`, `markdown`, `html`, `svg`. PDF는 미구현.
-- 테스트 상태: `cargo test` 통과 — unit test 306개 + fixture smoke 4개. `cargo clippy --all-targets -- -D warnings` 무경고.
+- 테스트 상태: `cargo test` 통과 — unit test 307개 + fixture smoke 4개. `cargo clippy --all-targets -- -D warnings` 무경고.
 - 공식 fixture(10개), `tests/fixtures/` 아래:
   - HWP/HWPX 쌍: `basic_text`, `list`
   - HWP 단독: `equation`, `footnote`, `header_footer`, `image`, `merged_table`, `shape`, `style`, `table`
@@ -87,11 +87,59 @@ $env:HWP_CONVERT_UPDATE_FIXTURE_STATS='1'; cargo test --test fixture_smoke offic
 
 많은 포맷을 얕게 지원하려 하지 말고, 현재 포맷에서 문서 구조와 텍스트를 더 정확히 보존한다.
 
+## rHWP 기능 경계 (강제 규칙)
+
+이 프로젝트의 신규 기능 범위는 **현재 고정된 rHWP revision이 공개 API로 제공하는 정보**까지다. hwp-convert는 rHWP 위의 변환 계층이지 별도의 HWP/HWPX 파서가 아니다.
+
+신규 semantic 또는 visual 지원의 근거로 인정하는 것:
+
+- `rhwp::model`의 공개된 typed field/enum
+- `DocumentCore`의 공개 query/command 결과
+- `rhwp::renderer`의 공개 query 결과
+- rHWP가 공개 API로 제공하는 helper가 계산한 값
+
+근거로 인정하지 않는 것:
+
+- tag 상수만 존재하지만 공개 model에 값이 없는 경우
+- `Unknown` control의 raw bytes를 자체 해석한 결과
+- HWP record 또는 HWPX XML을 hwp-convert가 직접 읽어 새 의미를 만든 결과
+- rHWP private renderer/parser 내부 구현을 복사하거나 우회해서 얻은 값
+- 문서 모양이나 샘플 값만 보고 추론한 의미
+
+따라서 다음을 반드시 지킨다.
+
+1. rHWP 공개 API에 없는 기능을 hwp-convert에서 독자 구현하지 않는다.
+2. HWP/HWPX 원시 record, raw control data, XML 속성을 직접 해석해 신규 기능을 추가하지 않는다.
+3. rHWP가 raw/unknown으로만 제공하는 정보는 semantic 의미를 추측하지 않고 원본 보존, `Unknown`, warning까지만 허용한다.
+4. rHWP가 제공한 값으로 exporter 표현을 근사하는 것은 허용하지만, 근사임을 warning 또는 `docs/STATUS.md`에 기록한다.
+5. 필요한 정보가 공개 API에 없으면 `upstream 필요`로 분류하고 rHWP revision 갱신 또는 upstream 개선을 기다린다.
+
+### 기존 HWPX 폴백의 예외와 동결
+
+`src/hwpx.rs`는 이 규칙이 확정되기 전에 만들어진 legacy 데이터 복구 경로다. 즉시 제거하면 현재 HWPX 입력에서 데이터 손실과 회귀가 생길 수 있으므로 당장은 유지하지만 **신규 기능 경로로 사용하지 않는다**.
+
+허용:
+
+- 기존 fixture가 보장하는 동작의 회귀 수정
+- 보안, panic, 무한 루프, 손상 입력 처리 수정
+- 기존에 복구하던 텍스트/구조가 조용히 사라지는 문제 수정
+- rHWP가 같은 정보를 공개하게 된 뒤 bridge로 이전하고 폴백 코드를 축소하는 작업
+
+금지:
+
+- 새 element/control/attribute alias 파싱
+- 새 semantic node 또는 스타일 정보를 XML에서 직접 복구
+- rHWP가 제공하지 않는 기능을 폴백으로 먼저 구현
+- 폴백 결과만 근거로 HWPX 기능을 "지원"한다고 주장
+- 폴백 범위를 넓히기 위한 parser 리팩터링이나 dependency 추가
+
+예외 수정이 신규 기능인지 회귀 수정인지 애매하면 신규 기능으로 보고 진행하지 않는다. 기존 폴백은 호환성 안전망일 뿐 source of truth가 아니며, rHWP 지원이 늘어날 때마다 축소하는 것이 목표다.
+
 ## 지원 완료의 정의
 
 다음을 모두 갖췄을 때만 "지원한다"고 말한다.
 
-1. rHWP parse 또는 renderer query에서 해당 정보가 나온다.
+1. 현재 pin의 rHWP 공개 typed model 또는 renderer query에서 해당 정보가 나온다.
 2. bridge 또는 render adapter가 그 정보를 받는다.
 3. `Document IR` 또는 `RenderSnapshot`에 정보가 남는다.
 4. exporter가 해당 형식에 맞게 출력한다.
@@ -106,6 +154,8 @@ $env:HWP_CONVERT_UPDATE_FIXTURE_STATS='1'; cargo test --test fixture_smoke offic
 - semantic SVG를 visual fidelity 결과로 설명하지 않는다.
 - fixture 없이 "지원 완료"라고 쓰지 않는다.
 - 문서에 없는 사실을 기억으로 단정하지 않는다.
+- field 단위 근거표 없이 감으로 "rHWP 매핑이 몇 % 완료"라고 단정하지 않는다.
+- `Unknown`/warning으로 발견할 수 있다는 사실을 semantic 지원으로 계산하지 않는다.
 
 ## 작업 원칙
 
@@ -114,7 +164,7 @@ $env:HWP_CONVERT_UPDATE_FIXTURE_STATS='1'; cargo test --test fixture_smoke offic
 - exporter에 rHWP 타입을 직접 들여오지 않는다. rHWP 타입은 `src/bridge`와 `src/render` 뒤에 둔다.
 - `Document IR` 확장은 신중하게 한다. bridge mapping 개선은 보통 `IR_VERSION` bump 없이 가능하다.
 - JSON shape, enum variant, 필수 필드 변경처럼 serialized format이 바뀌면 `IR_VERSION` bump를 검토한다.
-- fallback을 추가할 때는 왜 fallback인지 warning 또는 docs에 남긴다.
+- exporter fallback을 추가할 때는 왜 fallback인지 warning 또는 docs에 남긴다. 새 parser fallback은 추가하지 않는다.
 - 새 fixture를 추가하면 `notes.md`도 함께 쓴다.
 - 테스트가 없는 기능 지원 주장은 하지 않는다.
 
@@ -123,8 +173,8 @@ $env:HWP_CONVERT_UPDATE_FIXTURE_STATS='1'; cargo test --test fixture_smoke offic
 새 문서 요소를 개선할 때:
 
 1. `docs/STATUS.md`에서 해당 요소의 현재 상태를 확인한다.
-2. rHWP가 현재 pin에서 어떤 model/API로 그 요소를 노출하는지 확인한다.
-3. `src/bridge/rhwp.rs`, `src/hwpx.rs`, `src/render/mod.rs` 중 어느 경로가 맞는지 결정한다.
+2. rHWP가 현재 pin에서 어떤 공개 typed model/API로 그 요소를 노출하는지 확인한다. 없으면 구현하지 않고 `upstream 필요`로 기록한다.
+3. semantic 정보는 `src/bridge/rhwp.rs`, visual 정보는 `src/render/mod.rs` 경로를 사용한다. `src/hwpx.rs`를 신규 기능 경로로 선택하지 않는다.
 4. 필요하면 fixture를 먼저 만든다.
 5. bridge 또는 render adapter를 수정한다.
 6. `Document IR`로 이미 표현 가능한지 본다. 부족하면 IR 확장과 backward compatibility를 검토한다.
@@ -202,11 +252,12 @@ commit message 형식: `type(scope): 한국어 설명`
 
 ## 다음 작업자가 바로 할 일
 
-현재 가장 중요한 다음 일은 **실제 문서 fixture 확보**다.
+현재 가장 중요한 다음 일은 **고정된 rHWP 공개 surface를 전수 분류하고 미매핑 정보를 bridge로 옮기는 것**이다.
 
-1. `tests/fixtures/basic_text/`처럼, 나머지 P0 fixture의 실제 `input.hwp`/`input.hwpx`를 채운다.
-2. `cargo test --test fixture_smoke`를 실행한다.
-3. 실패하면 rHWP parse 문제인지 bridge assertion 문제인지 분리한다.
-4. P0 fixture가 쌓이면 rHWP revision update rehearsal을 한다.
+1. rHWP 공개 model/query의 field를 `매핑됨`, `정규화됨`, `warning/unknown`, `render 전용`, `미매핑`, `upstream 필요`로 분류한다.
+2. 미매핑 field 중 실제 데이터 손실 영향이 큰 항목부터 `bridge -> IR -> exporter` 수직 단위로 구현한다.
+3. 해당 값이 실제로 존재하는 HWP fixture 또는 최소 unit test로 회귀를 고정한다.
+4. 나머지 P0 실제 HWP/HWPX fixture를 확보하되, HWPX 폴백 확장으로 통과시키지 않는다.
+5. 공개 surface 분류와 P0 fixture가 안정되면 rHWP revision update rehearsal을 한다.
 
-새 출력 형식 추가보다 이 순서를 우선한다. 자세한 배경은 `docs/ROADMAP.md`.
+새 출력 형식과 독자 parser 기능 추가보다 이 순서를 우선한다. 자세한 배경은 `docs/ROADMAP.md`.
