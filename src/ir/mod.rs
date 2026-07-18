@@ -53,7 +53,8 @@ use serde::{Deserialize, Serialize};
 /// v56: added source document style definitions and relationships.
 /// v57: added alternate and default font metadata.
 /// v58: added structured border-fill diagonal metadata.
-pub const IR_VERSION: u16 = 58;
+/// v59: added table cell text direction metadata.
+pub const IR_VERSION: u16 = 59;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1447,6 +1448,29 @@ pub enum TablePageBreak {
     Row,
 }
 
+/// Text flow inside a table cell, as exposed by rHWP's typed cell model.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TableCellTextDirection {
+    Horizontal,
+    /// Vertical text with Latin characters laid on their side.
+    VerticalLatinRotated,
+    /// Vertical text with Latin characters kept upright.
+    VerticalLatinUpright,
+    Unknown(u8),
+}
+
+impl TableCellTextDirection {
+    pub fn source_value(self) -> u8 {
+        match self {
+            Self::Horizontal => 0,
+            Self::VerticalLatinRotated => 1,
+            Self::VerticalLatinUpright => 2,
+            Self::Unknown(value) => value,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct TableCellStyle {
@@ -1457,6 +1481,8 @@ pub struct TableCellStyle {
     pub background_color: Option<Color>,
     pub fill: Option<FillStyle>,
     pub vertical_align: Option<VerticalAlign>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_direction: Option<TableCellTextDirection>,
     pub width: Option<LengthPx>,
     pub height: Option<LengthPx>,
     pub padding_top: Option<LengthPx>,

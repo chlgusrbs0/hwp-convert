@@ -13,8 +13,9 @@ use crate::ir::{
     FillStyle, HeaderFooter, HeaderFooterPlacement, Image, ImageFillMode, Inline, Link, ListInfo,
     ListKind, MasterPage, Note, NoteId, NoteKind, Paragraph, ParagraphRole, ParagraphStyle,
     Resource, ResourceId, ResourceStore, Section, Shape, ShapeGeometry, ShapeShadow, Table,
-    TableCell, TableCellStyle, TableRow, TableStyle, TableZone, TextDecorationStyle, TextRun,
-    TextShadow, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
+    TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle, TableZone,
+    TextDecorationStyle, TextRun, TextShadow, TextStyle, UnknownBlock, UnknownInline,
+    VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -1785,6 +1786,22 @@ fn render_html_table_cell_style(
             vertical_align_to_css(vertical_align)
         ));
     }
+    if let Some(text_direction) = style.text_direction {
+        match text_direction {
+            TableCellTextDirection::Horizontal => {
+                declarations.push("writing-mode: horizontal-tb".to_string());
+            }
+            TableCellTextDirection::VerticalLatinRotated => {
+                declarations.push("writing-mode: vertical-rl".to_string());
+                declarations.push("text-orientation: mixed".to_string());
+            }
+            TableCellTextDirection::VerticalLatinUpright => {
+                declarations.push("writing-mode: vertical-rl".to_string());
+                declarations.push("text-orientation: upright".to_string());
+            }
+            TableCellTextDirection::Unknown(_) => {}
+        }
+    }
     if let Some(width) = style.width {
         declarations.push(format!("width: {}px", width.0));
     }
@@ -2410,9 +2427,16 @@ fn render_html_table_cell(
         .source_border_fill_id
         .or_else(|| fallback_zone.map(|zone| zone.source_border_fill_id));
     let border_fill_metadata = render_html_border_fill_metadata(source_border_fill_id, diagonal);
+    let text_direction_metadata = cell
+        .style
+        .text_direction
+        .map(|direction| format!(" data-text-direction=\"{}\"", direction.source_value()))
+        .unwrap_or_default();
     let tag = if cell.is_header { "th" } else { "td" };
 
-    format!("<{tag}{rowspan}{colspan}{border_fill_metadata}{style}>{content}</{tag}>\n")
+    format!(
+        "<{tag}{rowspan}{colspan}{border_fill_metadata}{text_direction_metadata}{style}>{content}</{tag}>\n"
+    )
 }
 
 fn render_html_table_cell_blocks(
@@ -3281,8 +3305,8 @@ mod tests {
         LengthPx, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId,
         NoteKind, NoteStore, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource,
         ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table,
-        TableCell, TableCellStyle, TableRow, TableStyle, TextBorderFill, TextRun, TextShadow,
-        TextStyle, UnknownInline, WarningCode,
+        TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle, TextBorderFill,
+        TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -4807,6 +4831,7 @@ mod tests {
                     ))],
                     style: TableCellStyle {
                         vertical_align: Some(VerticalAlign::Middle),
+                        text_direction: Some(TableCellTextDirection::VerticalLatinUpright),
                         width: Some(LengthPx(100.0)),
                         height: Some(LengthPx(20.0)),
                         padding_left: Some(LengthPx(2.0)),
@@ -4839,6 +4864,9 @@ mod tests {
 
         assert!(html.contains("<th"));
         assert!(html.contains("vertical-align: middle"));
+        assert!(html.contains("data-text-direction=\"2\""));
+        assert!(html.contains("writing-mode: vertical-rl"));
+        assert!(html.contains("text-orientation: upright"));
         assert!(html.contains("width: 100px"));
         assert!(html.contains("height: 20px"));
         assert!(html.contains("padding-left: 2px"));

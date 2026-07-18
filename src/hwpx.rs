@@ -2745,6 +2745,7 @@ fn extract_table_cell_from_xml(
             background_color,
             fill: None,
             vertical_align,
+            text_direction: None,
             width: hwpx_table_cell_hwp_units_to_px_with_warning(
                 cell_xml,
                 &["cellSz"],

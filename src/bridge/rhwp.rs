@@ -55,9 +55,9 @@ use crate::ir::{
     ResourceId, ResourceStore, ScriptTextStyle, Section, SectionLayout, Shape, ShapeGeometry,
     ShapeKind, ShapePoint, ShapeShadow, SourceStyleDefinition, SourceStyleKind, Spacing,
     StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle,
-    TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill, TextDecorationStyle, TextRun,
-    TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
-    VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    TableCellTextDirection, TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill,
+    TextDecorationStyle, TextRun, TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline,
+    VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1628,6 +1628,17 @@ impl<'a> BridgeContext<'a> {
             }) => *background_color,
             _ => None,
         };
+        let text_direction = match cell.text_direction {
+            0 => None,
+            1 => Some(TableCellTextDirection::VerticalLatinRotated),
+            2 => Some(TableCellTextDirection::VerticalLatinUpright),
+            raw => {
+                self.add_warning_once(&format!(
+                    "rHWP exposed unknown table cell text direction value {raw}; the raw value was preserved without visual approximation."
+                ));
+                Some(TableCellTextDirection::Unknown(raw))
+            }
+        };
 
         TableCell {
             row_span: (cell.row_span as u32).max(1),
@@ -1642,6 +1653,7 @@ impl<'a> BridgeContext<'a> {
                 background_color,
                 fill,
                 vertical_align: map_vertical_align(cell.vertical_align),
+                text_direction,
                 width: hwp_units_to_px_option(cell.width),
                 height: hwp_units_to_px_option(cell.height),
                 padding_top: i16_hwp_units_to_px_option(padding.top),
@@ -4597,6 +4609,7 @@ mod tests {
             col_span: 1,
             is_header: true,
             vertical_align: RhwpVerticalAlign::Center,
+            text_direction: 2,
             width: 7500,
             height: 1500,
             padding: rhwp::model::Padding {
@@ -4656,6 +4669,10 @@ mod tests {
                     header.style.vertical_align,
                     Some(crate::ir::VerticalAlign::Middle)
                 );
+                assert_eq!(
+                    header.style.text_direction,
+                    Some(crate::ir::TableCellTextDirection::VerticalLatinUpright)
+                );
                 assert_eq!(header.style.width, Some(crate::ir::LengthPx(100.0)));
                 assert_eq!(header.style.height, Some(crate::ir::LengthPx(20.0)));
                 assert_eq!(header.style.padding_left, Some(crate::ir::LengthPx(2.0)));
@@ -4664,6 +4681,7 @@ mod tests {
                 let plain = &table.rows[0].cells[1];
                 assert!(!plain.is_header);
                 assert_eq!(plain.style.vertical_align, None);
+                assert_eq!(plain.style.text_direction, None);
                 assert_eq!(plain.style.width, None);
                 assert_eq!(plain.style.padding_left, Some(crate::ir::LengthPx(4.0)));
                 assert_eq!(plain.style.padding_top, Some(crate::ir::LengthPx(3.0)));
