@@ -54,15 +54,16 @@ use crate::ir::{
     Inline, LengthPt, LengthPx, LineSpacingMode, Link, ListInfo, ListKind, ListMarkerLayout,
     MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
     NumberingKind, ObjectBorderMetadata, ObjectCaption, ObjectPlacement, ObjectSizeCriterion,
-    PageBinding, PageBorderFillLayout, PageLayout, Paragraph, ParagraphBreakKind, ParagraphRole,
-    ParagraphStyle, ParagraphStyleId, Percent, RawSectionRecord, Resource, ResourceId,
-    ResourceStore, RubyAnnotation, ScriptTextStyle, Section, SectionLayout, Shape, ShapeConnector,
-    ShapeConnectorKind, ShapeConnectorPoint, ShapeGeometry, ShapeKind, ShapeLineMetadata,
-    ShapePoint, ShapeShadow, ShapeTransform, SourceStyleDefinition, SourceStyleKind, Spacing,
-    StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle,
-    TableCellTextDirection, TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill,
-    TextDecorationStyle, TextDirection, TextRun, TextScript, TextShadow, TextStyle, TextStyleId,
-    UnknownInline, VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    PageBinding, PageBorderFillLayout, PageLayout, Paragraph, ParagraphBreakKind,
+    ParagraphLineSegment, ParagraphRole, ParagraphSourceLayout, ParagraphStyle, ParagraphStyleId,
+    Percent, RawSectionRecord, Resource, ResourceId, ResourceStore, RubyAnnotation,
+    ScriptTextStyle, Section, SectionLayout, Shape, ShapeConnector, ShapeConnectorKind,
+    ShapeConnectorPoint, ShapeGeometry, ShapeKind, ShapeLineMetadata, ShapePoint, ShapeShadow,
+    ShapeTransform, SourceStyleDefinition, SourceStyleKind, Spacing, StyleSheet, TabAlignment,
+    TabDefinition, TabStop, Table, TableCell, TableCellStyle, TableCellTextDirection,
+    TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill, TextDecorationStyle,
+    TextDirection, TextRun, TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline,
+    VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -354,6 +355,7 @@ impl<'a> BridgeContext<'a> {
         };
         style.source_break_type = (paragraph.raw_break_type != 0 || style.break_before.is_some())
             .then_some(paragraph.raw_break_type);
+        style.source_layout = map_paragraph_source_layout(paragraph);
         if style.break_before.is_some() {
             self.add_warning_once(
                 "rhwp paragraph section/page/column break metadata was preserved in Document IR; HTML approximates page or column breaks while linear semantic exporters retain paragraph order without pagination.",
@@ -3146,6 +3148,31 @@ fn map_caption_placement(direction: RhwpCaptionDirection) -> CaptionPlacement {
     }
 }
 
+fn map_paragraph_source_layout(paragraph: &RhwpParagraph) -> Option<ParagraphSourceLayout> {
+    if paragraph.line_segs.is_empty() && paragraph.tab_extended.is_empty() {
+        return None;
+    }
+
+    Some(ParagraphSourceLayout {
+        line_segments: paragraph
+            .line_segs
+            .iter()
+            .map(|segment| ParagraphLineSegment {
+                text_start: segment.text_start,
+                vertical_position: segment.vertical_pos,
+                line_height: segment.line_height,
+                text_height: segment.text_height,
+                baseline_distance: segment.baseline_distance,
+                line_spacing: segment.line_spacing,
+                column_start: segment.column_start,
+                segment_width: segment.segment_width,
+                raw_tag: segment.tag,
+            })
+            .collect(),
+        extended_tabs: paragraph.tab_extended.clone(),
+    })
+}
+
 #[derive(Clone)]
 struct TextSegment {
     start: usize,
@@ -4557,7 +4584,7 @@ mod tests {
         ColumnType as RhwpColumnType,
     };
     use rhwp::model::paragraph::{
-        CharShapeRef, FieldRange, NumberingRestart as RhwpNumberingRestart,
+        CharShapeRef, FieldRange, LineSeg as RhwpLineSeg, NumberingRestart as RhwpNumberingRestart,
         Paragraph as RhwpParagraph,
     };
     use rhwp::model::shape::{
@@ -4579,6 +4606,61 @@ mod tests {
     use rhwp::model::table::{
         Cell as RhwpCell, Table as RhwpTable, VerticalAlign as RhwpVerticalAlign,
     };
+
+    #[test]
+    fn preserves_paragraph_source_layout() {
+        let document = RhwpDocument {
+            sections: vec![RhwpSection {
+                paragraphs: vec![RhwpParagraph {
+                    text: "a\tb".to_string(),
+                    line_segs: vec![RhwpLineSeg {
+                        text_start: 2,
+                        vertical_pos: -300,
+                        line_height: 1200,
+                        text_height: 900,
+                        baseline_distance: 700,
+                        line_spacing: 400,
+                        column_start: 150,
+                        segment_width: 7200,
+                        tag: 0x8000_0003,
+                    }],
+                    tab_extended: vec![[1, 2, 3, 4, 5, 6, 7]],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let bridged = BridgeContext::new(&document).into_document();
+        let Block::Paragraph(paragraph) = &bridged.sections[0].blocks[0] else {
+            panic!("expected paragraph block");
+        };
+        let layout = paragraph
+            .style
+            .source_layout
+            .as_ref()
+            .expect("source paragraph layout");
+
+        assert_eq!(layout.extended_tabs, vec![[1, 2, 3, 4, 5, 6, 7]]);
+        assert_eq!(
+            layout.line_segments,
+            vec![ParagraphLineSegment {
+                text_start: 2,
+                vertical_position: -300,
+                line_height: 1200,
+                text_height: 900,
+                baseline_distance: 700,
+                line_spacing: 400,
+                column_start: 150,
+                segment_width: 7200,
+                raw_tag: 0x8000_0003,
+            }]
+        );
+        let json = serde_json::to_string(layout).expect("serialize paragraph source layout");
+        assert!(json.contains(r#""vertical_position":-300"#));
+        assert!(json.contains(r#""extended_tabs":[[1,2,3,4,5,6,7]]"#));
+    }
 
     #[test]
     fn maps_table_control_into_table_block() {

@@ -58,6 +58,8 @@ HWP 표 셀 필드명은 셀의 구조 메타데이터와 HTML `data-field-name`
 
 HWP 문단의 구역·다단·쪽·단 나누기 종류와 원본 break byte를 문단 메타데이터로 보존한다. HTML은 page/column `break-before`로 근사하고 `data-*`로 원본 종류를 남기지만, 선형 exporter는 별도 페이지 구조를 만들어내지 않는다. 목록 번호 재시작 정보는 기존 목록 상태 계산에 반영한다.
 
+HWP 문단의 rHWP 공개 줄 배치값(텍스트 시작점, 세로 위치, 줄·텍스트 높이, 기준선 거리, 줄간격, 단 시작점, 구간 폭, 원본 tag)과 확장 탭 7개 원시값은 `ParagraphStyle.source_layout`에 HWPUNIT 수치 그대로 보존한다. 현재 semantic exporter는 이를 재배치에 사용하지 않으며 JSON이 구조를 유지한다.
+
 ### 핵심 관찰
 
 1. 가장 안정적인 경로: `text -> paragraph -> simple table/list/link -> JSON/HTML/Markdown/TXT/SVG`.

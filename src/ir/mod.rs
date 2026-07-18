@@ -84,7 +84,8 @@ use serde::{Deserialize, Serialize};
 /// v87: added source shape-component metadata and raw rendering bytes.
 /// v88: added raw table control and table-record extension bytes.
 /// v89: added raw table-cell LIST_HEADER extension bytes.
-pub const IR_VERSION: u16 = 89;
+/// v90: added source paragraph line-segment and extended-tab layout metadata.
+pub const IR_VERSION: u16 = 90;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -733,6 +734,29 @@ pub struct ParagraphStyle {
     pub source_break_type: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tab_definition: Option<TabDefinition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_layout: Option<ParagraphSourceLayout>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ParagraphSourceLayout {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub line_segments: Vec<ParagraphLineSegment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extended_tabs: Vec<[u16; 7]>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParagraphLineSegment {
+    pub text_start: u32,
+    pub vertical_position: i32,
+    pub line_height: i32,
+    pub text_height: i32,
+    pub baseline_distance: i32,
+    pub line_spacing: i32,
+    pub column_start: i32,
+    pub segment_width: i32,
+    pub raw_tag: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
