@@ -14,9 +14,9 @@ use crate::ir::{
     Image, ImageFillMode, Inline, Link, ListInfo, ListKind, MasterPage, Note, NoteId, NoteKind,
     ObjectBorderMetadata, ObjectCaption, Paragraph, ParagraphBreakKind, ParagraphRole,
     ParagraphStyle, Resource, ResourceId, ResourceStore, RubyAnnotation, Section, Shape,
-    ShapeGeometry, ShapeShadow, ShapeTransform, Table, TableCell, TableCellStyle,
-    TableCellTextDirection, TableRow, TableStyle, TableZone, TextDecorationStyle, TextRun,
-    TextShadow, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
+    ShapeGeometry, ShapeShadow, ShapeTransform, Table, TableCell, TableCellStyle, TableRow,
+    TableStyle, TableZone, TextDecorationStyle, TextDirection, TextRun, TextShadow, TextStyle,
+    UnknownBlock, UnknownInline, VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -1604,6 +1604,9 @@ fn render_html_shape_element(
         };
         declarations.push(format!("justify-content: {justify_content}"));
     }
+    if let Some(text_direction) = shape.text_direction {
+        append_text_direction_css(&mut declarations, text_direction);
+    }
     if let Some(max_width) = shape.text_box_max_width {
         declarations.push(format!("max-width: {}px", max_width.0));
     }
@@ -1624,23 +1627,27 @@ fn render_html_shape_element(
         shape.source_common_instance_id,
         shape.source_component_instance_id,
     );
+    let text_direction_metadata = shape
+        .text_direction
+        .map(|direction| format!(" data-text-direction=\"{}\"", direction.source_value()))
+        .unwrap_or_default();
     let line_metadata = render_html_shape_line_metadata(shape);
     let border_metadata = render_html_object_border_metadata(shape.border_metadata.as_ref());
     let style = render_html_style_attr(&declarations.join("; "));
     if !shape.children.is_empty() {
         let content = render_html_blocks(&shape.children, resources, image_asset_prefix);
         format!(
-            "<div class=\"shape-group\"{source_metadata}{transform_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
+            "<div class=\"shape-group\"{source_metadata}{transform_metadata}{text_direction_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
         )
     } else if !shape.content.is_empty() {
         let content = render_html_blocks(&shape.content, resources, image_asset_prefix);
         format!(
-            "<div class=\"shape-placeholder shape-content\"{source_metadata}{transform_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
+            "<div class=\"shape-placeholder shape-content\"{source_metadata}{transform_metadata}{text_direction_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
         )
     } else {
         let content = render_html_fallback_text(&shape_display_text(shape));
         format!(
-            "<p><span class=\"shape-placeholder\"{source_metadata}{transform_metadata}{line_metadata}{border_metadata}{style}>{content}</span></p>\n"
+            "<p><span class=\"shape-placeholder\"{source_metadata}{transform_metadata}{text_direction_metadata}{line_metadata}{border_metadata}{style}>{content}</span></p>\n"
         )
     }
 }
@@ -2138,20 +2145,7 @@ fn render_html_table_cell_style(
         ));
     }
     if let Some(text_direction) = style.text_direction {
-        match text_direction {
-            TableCellTextDirection::Horizontal => {
-                declarations.push("writing-mode: horizontal-tb".to_string());
-            }
-            TableCellTextDirection::VerticalLatinRotated => {
-                declarations.push("writing-mode: vertical-rl".to_string());
-                declarations.push("text-orientation: mixed".to_string());
-            }
-            TableCellTextDirection::VerticalLatinUpright => {
-                declarations.push("writing-mode: vertical-rl".to_string());
-                declarations.push("text-orientation: upright".to_string());
-            }
-            TableCellTextDirection::Unknown(_) => {}
-        }
+        append_text_direction_css(&mut declarations, text_direction);
     }
     if let Some(width) = style.width {
         declarations.push(format!("width: {}px", width.0));
@@ -2181,6 +2175,23 @@ fn render_html_table_cell_style(
     }
 
     declarations.join("; ")
+}
+
+fn append_text_direction_css(declarations: &mut Vec<String>, text_direction: TextDirection) {
+    match text_direction {
+        TextDirection::Horizontal => {
+            declarations.push("writing-mode: horizontal-tb".to_string());
+        }
+        TextDirection::VerticalLatinRotated => {
+            declarations.push("writing-mode: vertical-rl".to_string());
+            declarations.push("text-orientation: mixed".to_string());
+        }
+        TextDirection::VerticalLatinUpright => {
+            declarations.push("writing-mode: vertical-rl".to_string());
+            declarations.push("text-orientation: upright".to_string());
+        }
+        TextDirection::Unknown(_) => {}
+    }
 }
 
 fn render_html_fill_style(
@@ -6003,6 +6014,7 @@ mod tests {
             flip_horizontal: Some(true),
             flip_vertical: Some(true),
             text_vertical_align: Some(crate::ir::VerticalAlign::Middle),
+            text_direction: Some(TextDirection::VerticalLatinUpright),
             text_box_max_width: Some(LengthPx(40.0)),
             padding_top: Some(LengthPx(1.0)),
             padding_right: Some(LengthPx(2.0)),
@@ -6067,6 +6079,9 @@ mod tests {
         assert!(html.contains("padding-bottom: 3px"));
         assert!(html.contains("padding-left: 4px"));
         assert!(html.contains("justify-content: center"));
+        assert!(html.contains("writing-mode: vertical-rl"));
+        assert!(html.contains("text-orientation: upright"));
+        assert!(html.contains("data-text-direction=\"2\""));
         assert!(html.contains("max-width: 40px"));
         assert!(html.contains("border-radius: 25%"));
         assert!(html.contains("data-original-width-px=\"48\""));

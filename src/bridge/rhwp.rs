@@ -61,8 +61,8 @@ use crate::ir::{
     ShapePoint, ShapeShadow, ShapeTransform, SourceStyleDefinition, SourceStyleKind, Spacing,
     StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle,
     TableCellTextDirection, TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill,
-    TextDecorationStyle, TextRun, TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline,
-    VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    TextDecorationStyle, TextDirection, TextRun, TextScript, TextShadow, TextStyle, TextStyleId,
+    UnknownInline, VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1901,6 +1901,17 @@ impl<'a> BridgeContext<'a> {
             _ => None,
         };
         let text_box = drawing.and_then(|drawing| drawing.text_box.as_ref());
+        let text_direction = match text_box.map(|text_box| (text_box.list_attr & 0x07) as u8) {
+            None | Some(0) => None,
+            Some(1) => Some(TextDirection::VerticalLatinRotated),
+            Some(2) => Some(TextDirection::VerticalLatinUpright),
+            Some(raw) => {
+                self.add_warning_once(&format!(
+                    "rHWP exposed unknown shape text-box direction value {raw}; the raw value was preserved without visual approximation."
+                ));
+                Some(TextDirection::Unknown(raw))
+            }
+        };
         let content = text_box
             .map(|text_box| self.map_blocks_from_paragraphs(&text_box.paragraphs, 0))
             .unwrap_or_default();
@@ -1985,6 +1996,7 @@ impl<'a> BridgeContext<'a> {
             flip_vertical: shape.shape_attr().vert_flip.then_some(true),
             text_vertical_align: text_box
                 .and_then(|text_box| map_vertical_align(text_box.vertical_align)),
+            text_direction,
             text_box_max_width: text_box
                 .and_then(|text_box| hwp_units_to_px_option(text_box.max_width)),
             padding_top: text_box
@@ -5300,6 +5312,7 @@ mod tests {
                 shadow_offset_y: -75,
                 shadow_alpha: 64,
                 text_box: Some(RhwpTextBox {
+                    list_attr: 2,
                     vertical_align: RhwpVerticalAlign::Center,
                     max_width: 4500,
                     margin_left: 75,
@@ -5392,6 +5405,10 @@ mod tests {
                     })
                 );
                 assert_eq!(shape.text_vertical_align, Some(VerticalAlign::Middle));
+                assert_eq!(
+                    shape.text_direction,
+                    Some(TextDirection::VerticalLatinUpright)
+                );
                 assert_eq!(shape.text_box_max_width, Some(LengthPx(60.0)));
                 assert_eq!(shape.padding_top, Some(LengthPx(3.0)));
                 assert_eq!(shape.padding_right, Some(LengthPx(2.0)));

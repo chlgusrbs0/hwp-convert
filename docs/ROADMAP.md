@@ -341,6 +341,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - HWP 이미지·도형 테두리 원본 메타데이터 IR 확장: `IR_VERSION` 78 → 79. rHWP 공개 `ShapeBorderLine.outline_style`의 normal·outer·inner·미지 값을 공용 `ObjectBorderMetadata`로 보존하고, 이미지의 `border_opacity` 원시값도 같은 구조에 남긴다. rHWP renderer가 투명도 의미를 적용하지 않으므로 HTML은 두 값을 `data-*`로만 출력하며 CSS 의미를 추정하지 않는다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - HWP 호·곡선 도형 종류 IR 확장: `IR_VERSION` 79 → 80. rHWP 공개 `ShapeObject::Arc`와 `ShapeObject::Curve`를 각각 `ShapeKind::Arc`, `ShapeKind::Curve`로 보존해 타원·다각형과 구분한다. 기존 구조화 `ShapeGeometry::Arc/Curve`와 일치시키고 HTML이 호를 완전한 타원처럼 표시하지 않게 한다. 동결된 HWPX 폴백의 기존 분류는 변경하지 않는다.
 - HWP 개체 원본 인스턴스 ID IR 확장: `IR_VERSION` 80 → 81. rHWP 공개 `CommonObjAttr.instance_id`, 도형 `DrawingObjAttr.inst_id`, 그림 `Picture.instance_id`를 도형·이미지에 보존한다. rHWP가 연결선 `SubjectID`를 도형 component ID와 공통 ID에 대조하므로, 기존 연결선 대상 참조를 실제 대상 개체와 다시 연결할 수 있게 한다. HTML은 이 값을 `data-*` 메타데이터로 남기며 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
+- HWP 도형 글상자 방향 IR 확장: `IR_VERSION` 81 → 82. rHWP renderer가 공개 `TextBox.list_attr`에서 확정한 가로쓰기·세로쓰기/영문 눕힘·세로쓰기/영문 세움 값을 도형에 보존한다. 표 셀과 같은 의미 체계를 공용 `TextDirection`으로 사용하고 기존 Rust 이름은 별칭으로 유지하며, HTML은 `writing-mode`·`text-orientation`과 원본 `data-text-direction`을 출력한다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - raw HWP record, unknown control bytes, HWPX XML을 직접 해석한 독자 기능 구현을 금지했다.
 - `src/hwpx.rs`는 즉시 삭제하지 않되 legacy 호환성 안전망으로 동결하고, 회귀·보안·기존 silent-drop 수정만 허용하기로 결정했다.
 - 신규 정확도 작업은 rHWP 공개 surface를 `mapped`, `normalized`, `warning/unknown`, `render-only`, `unmapped`, `upstream-needed`로 분류한 뒤 진행한다.

@@ -79,7 +79,7 @@ HWP 도형·이미지는 rHWP 공개 공통 개체 인스턴스 ID와 component 
 
 HWP 호와 곡선은 각각 `ShapeKind::Arc`, `ShapeKind::Curve`로 보존해 타원·다각형과 구분하며, 중심·축·호 종류 또는 제어점·segment 종류는 기존 구조화 geometry에 유지한다.
 
-HWP 도형 텍스트 상자는 세로 정렬, 안쪽 여백, 최대 폭과 문단 구조를 보존한다. HTML은 최대 폭을 CSS로 근사하며 정확한 줄 나눔과 페이지 배치는 renderer 경로의 책임이다.
+HWP 도형 텍스트 상자는 세로 정렬, 가로·세로 글자 방향, 안쪽 여백, 최대 폭과 문단 구조를 보존한다. HTML은 세로쓰기 방향과 최대 폭을 CSS로 근사하며 정확한 줄 나눔과 페이지 배치는 renderer 경로의 책임이다.
 
 ### 미지원 control warning 동작
 

@@ -76,7 +76,8 @@ use serde::{Deserialize, Serialize};
 /// v79: added image and shape border source metadata.
 /// v80: distinguished arc and curve shape kinds.
 /// v81: added source instance identifiers for images and shapes.
-pub const IR_VERSION: u16 = 81;
+/// v82: added shape text-box direction and generalized its shared enum.
+pub const IR_VERSION: u16 = 82;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1453,6 +1454,8 @@ pub struct Shape {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_vertical_align: Option<VerticalAlign>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_direction: Option<TextDirection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_box_max_width: Option<LengthPx>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub padding_top: Option<LengthPx>,
@@ -1764,10 +1767,10 @@ pub enum TablePageBreak {
     Row,
 }
 
-/// Text flow inside a table cell, as exposed by rHWP's typed cell model.
+/// Text flow inside table cells and shape text boxes, as exposed by rHWP.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum TableCellTextDirection {
+pub enum TextDirection {
     Horizontal,
     /// Vertical text with Latin characters laid on their side.
     VerticalLatinRotated,
@@ -1776,7 +1779,7 @@ pub enum TableCellTextDirection {
     Unknown(u8),
 }
 
-impl TableCellTextDirection {
+impl TextDirection {
     pub fn source_value(self) -> u8 {
         match self {
             Self::Horizontal => 0,
@@ -1786,6 +1789,8 @@ impl TableCellTextDirection {
         }
     }
 }
+
+pub type TableCellTextDirection = TextDirection;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
@@ -1798,7 +1803,7 @@ pub struct TableCellStyle {
     pub fill: Option<FillStyle>,
     pub vertical_align: Option<VerticalAlign>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_direction: Option<TableCellTextDirection>,
+    pub text_direction: Option<TextDirection>,
     pub width: Option<LengthPx>,
     pub height: Option<LengthPx>,
     pub padding_top: Option<LengthPx>,

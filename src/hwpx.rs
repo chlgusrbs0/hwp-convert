@@ -3176,6 +3176,7 @@ fn extract_hwpx_shape_from_xml(
         flip_horizontal: transform.flip_horizontal,
         flip_vertical: transform.flip_vertical,
         text_vertical_align: text_box_style.vertical_align,
+        text_direction: None,
         text_box_max_width: None,
         padding_top: text_box_style.padding_top,
         padding_right: text_box_style.padding_right,
