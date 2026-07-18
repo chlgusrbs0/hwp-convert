@@ -2757,6 +2757,7 @@ fn extract_table_cell_from_xml(
         source_row,
         source_column,
         field_name: None,
+        raw_list_extension: Vec::new(),
         blocks,
         style: TableCellStyle {
             source_border_fill_id: None,

@@ -1649,6 +1649,7 @@ impl<'a> BridgeContext<'a> {
             source_row: Some(u32::from(cell.row)),
             source_column: Some(u32::from(cell.col)),
             field_name,
+            raw_list_extension: cell.raw_list_extra.clone(),
             blocks,
             style: TableCellStyle {
                 source_border_fill_id,
@@ -4672,6 +4673,7 @@ mod tests {
                 row: 0,
                 col: 0,
                 height: 1500,
+                raw_list_extra: vec![7, 8, 9],
                 paragraphs: vec![RhwpParagraph {
                     text: "cell".to_string(),
                     ..Default::default()
@@ -4723,6 +4725,7 @@ mod tests {
         let table_json = serde_json::to_string(table).expect("serialize table");
         assert!(table_json.contains(r#""raw_control_data":"AQID""#));
         assert!(table_json.contains(r#""raw_record_extension":"BAUG""#));
+        assert!(table_json.contains(r#""raw_list_extension":"BwgJ""#));
         assert_eq!(table.style.margin_left, Some(LengthPx(100.0 / 75.0)));
         assert_eq!(table.style.margin_right, Some(LengthPx(200.0 / 75.0)));
         assert_eq!(table.style.margin_top, Some(LengthPx(4.0)));
@@ -4730,6 +4733,7 @@ mod tests {
         assert_eq!(table.rows[0].height, Some(LengthPx(20.0)));
         assert_eq!(table.rows[0].cells[0].source_row, Some(0));
         assert_eq!(table.rows[0].cells[0].source_column, Some(0));
+        assert_eq!(table.rows[0].cells[0].raw_list_extension, vec![7, 8, 9]);
         assert_eq!(table.style.cell_spacing, Some(LengthPx(1.0)));
         assert!(table.style.repeat_header);
         assert_eq!(table.style.page_break, Some(TablePageBreak::Row));

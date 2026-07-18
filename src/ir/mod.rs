@@ -83,7 +83,8 @@ use serde::{Deserialize, Serialize};
 /// v86: added opaque common-object control extension bytes.
 /// v87: added source shape-component metadata and raw rendering bytes.
 /// v88: added raw table control and table-record extension bytes.
-pub const IR_VERSION: u16 = 88;
+/// v89: added raw table-cell LIST_HEADER extension bytes.
+pub const IR_VERSION: u16 = 89;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1760,6 +1761,8 @@ pub struct TableCell {
     pub source_column: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_name: Option<String>,
+    #[serde(default, with = "base64_bytes", skip_serializing_if = "Vec::is_empty")]
+    pub raw_list_extension: Vec<u8>,
     pub blocks: Vec<Block>,
     pub style: TableCellStyle,
 }
@@ -1775,6 +1778,7 @@ impl Default for TableCell {
             source_row: None,
             source_column: None,
             field_name: None,
+            raw_list_extension: Vec::new(),
             blocks: Vec::new(),
             style: TableCellStyle::default(),
         }
