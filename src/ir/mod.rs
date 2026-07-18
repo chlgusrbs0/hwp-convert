@@ -67,7 +67,8 @@ use serde::{Deserialize, Serialize};
 /// v70: added paragraph section/page/column break metadata.
 /// v71: added structured hidden-comment blocks.
 /// v72: added paragraph line-spacing mode metadata.
-pub const IR_VERSION: u16 = 72;
+/// v73: preserved distribute and split paragraph alignments.
+pub const IR_VERSION: u16 = 73;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -765,6 +766,21 @@ pub enum Alignment {
     Center,
     Right,
     Justify,
+    Distribute,
+    Split,
+}
+
+impl Alignment {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Center => "center",
+            Self::Right => "right",
+            Self::Justify => "justify",
+            Self::Distribute => "distribute",
+            Self::Split => "split",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

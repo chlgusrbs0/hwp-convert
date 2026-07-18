@@ -2336,7 +2336,7 @@ impl<'a> BridgeContext<'a> {
             RhwpAlignment::Distribute | RhwpAlignment::Split
         ) {
             self.add_warning_once(&format!(
-                "rhwp paragraph alignment {:?} is not directly modeled; hwp-convert approximated it as justify.",
+                "rhwp paragraph alignment {:?} was preserved in ParagraphStyle IR; HTML approximates it as justify.",
                 para_shape.alignment
             ));
         }
@@ -3775,9 +3775,9 @@ fn map_alignment(alignment: RhwpAlignment) -> Option<crate::ir::Alignment> {
         RhwpAlignment::Left => crate::ir::Alignment::Left,
         RhwpAlignment::Center => crate::ir::Alignment::Center,
         RhwpAlignment::Right => crate::ir::Alignment::Right,
-        RhwpAlignment::Justify | RhwpAlignment::Distribute | RhwpAlignment::Split => {
-            crate::ir::Alignment::Justify
-        }
+        RhwpAlignment::Justify => crate::ir::Alignment::Justify,
+        RhwpAlignment::Distribute => crate::ir::Alignment::Distribute,
+        RhwpAlignment::Split => crate::ir::Alignment::Split,
     })
 }
 
@@ -6822,7 +6822,7 @@ mod tests {
             Block::Paragraph(paragraph) => {
                 assert_eq!(
                     paragraph.style.alignment,
-                    Some(crate::ir::Alignment::Justify)
+                    Some(crate::ir::Alignment::Distribute)
                 );
                 assert_eq!(paragraph.style.spacing.line_pt, Some(LengthPt(12.0)));
                 assert_eq!(

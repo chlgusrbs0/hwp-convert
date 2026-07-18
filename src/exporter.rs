@@ -1063,11 +1063,12 @@ fn render_html_list_item_open(
         .unwrap_or_default();
     let marker_metadata = render_html_list_marker_metadata(list);
     let line_spacing_metadata = render_html_line_spacing_metadata(&paragraph.style);
+    let alignment_metadata = render_html_alignment_metadata(&paragraph.style);
     let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
     let content = render_html_inlines(&paragraph.inlines, resources, image_asset_prefix);
 
     format!(
-        "<li{value}{marker_format}{marker}{marker_metadata}{line_spacing_metadata}{style}>{content}"
+        "<li{value}{marker_format}{marker}{marker_metadata}{line_spacing_metadata}{alignment_metadata}{style}>{content}"
     )
 }
 
@@ -1236,21 +1237,22 @@ fn render_html_paragraph(
         .map(|raw| format!(" data-source-break-type=\"{raw}\""))
         .unwrap_or_default();
     let line_spacing_metadata = render_html_line_spacing_metadata(&paragraph.style);
+    let alignment_metadata = render_html_alignment_metadata(&paragraph.style);
 
     match &paragraph.role {
         ParagraphRole::Title => {
             format!(
-                "<h1{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{style}>{content}</h1>\n"
+                "<h1{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{alignment_metadata}{style}>{content}</h1>\n"
             )
         }
         ParagraphRole::Heading { level } => {
             let level = (*level).clamp(1, 6);
             format!(
-                "<h{level}{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{style}>{content}</h{level}>\n"
+                "<h{level}{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{alignment_metadata}{style}>{content}</h{level}>\n"
             )
         }
         _ => format!(
-            "<p{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{style}>{content}</p>\n"
+            "<p{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{alignment_metadata}{style}>{content}</p>\n"
         ),
     }
 }
@@ -1261,6 +1263,15 @@ fn render_html_line_spacing_metadata(style: &ParagraphStyle) -> String {
         .line_mode
         .map(|mode| format!(" data-line-spacing-mode=\"{}\"", mode.as_str()))
         .unwrap_or_default()
+}
+
+fn render_html_alignment_metadata(style: &ParagraphStyle) -> String {
+    match style.alignment.as_ref() {
+        Some(alignment @ (Alignment::Distribute | Alignment::Split)) => {
+            format!(" data-alignment=\"{}\"", alignment.as_str())
+        }
+        _ => String::new(),
+    }
 }
 
 fn render_html_paragraph_role_class(role: &ParagraphRole) -> String {
@@ -2298,7 +2309,7 @@ fn alignment_to_css(alignment: &Alignment) -> &'static str {
         Alignment::Left => "left",
         Alignment::Center => "center",
         Alignment::Right => "right",
-        Alignment::Justify => "justify",
+        Alignment::Justify | Alignment::Distribute | Alignment::Split => "justify",
     }
 }
 
@@ -5957,7 +5968,7 @@ mod tests {
                 style_ref: None,
             })],
             style: ParagraphStyle {
-                alignment: Some(Alignment::Center),
+                alignment: Some(Alignment::Distribute),
                 break_before: Some(ParagraphBreakKind::MultiColumn),
                 source_break_type: Some(2),
                 spacing: Spacing {
@@ -5980,7 +5991,8 @@ mod tests {
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
-        assert!(html.contains("text-align: center"));
+        assert!(html.contains("text-align: justify"));
+        assert!(html.contains("data-alignment=\"distribute\""));
         assert!(html.contains("margin-top: 6pt"));
         assert!(html.contains("margin-bottom: 8pt"));
         assert!(html.contains("line-height: 14pt"));
