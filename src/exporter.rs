@@ -1727,10 +1727,26 @@ fn render_html_paragraph_style(style: &ParagraphStyle) -> String {
     declarations.join("; ")
 }
 
-fn render_html_table_style(style: &TableStyle) -> String {
+fn render_html_table_style(
+    style: &TableStyle,
+    resources: &ResourceStore,
+    image_asset_prefix: &str,
+) -> String {
     let mut declarations = Vec::new();
-    if let Some(color) = style.background_color.map(render_css_color) {
+    if let Some(fill) = &style.fill {
+        declarations.extend(render_html_fill_style(fill, resources, image_asset_prefix));
+    } else if let Some(color) = style.background_color.map(render_css_color) {
         declarations.push(format!("background-color: {color}"));
+    }
+    for (border, property) in [
+        (&style.border_top, "border-top"),
+        (&style.border_right, "border-right"),
+        (&style.border_bottom, "border-bottom"),
+        (&style.border_left, "border-left"),
+    ] {
+        if let Some(border) = border {
+            declarations.push(format!("{property}: {}", render_css_border(border)));
+        }
     }
     if let Some(width) = style.width {
         declarations.push(format!("width: {}px", width.0));
@@ -2320,9 +2336,17 @@ fn render_css_transform(
 }
 
 fn render_html_table(table: &Table, resources: &ResourceStore, image_asset_prefix: &str) -> String {
+    let border_fill_metadata = render_html_border_fill_metadata(
+        table.style.source_border_fill_id,
+        table.style.diagonal.as_ref(),
+    );
     let mut html = format!(
-        "<table{}>\n",
-        render_html_style_attr(&render_html_table_style(&table.style))
+        "<table{border_fill_metadata}{}>\n",
+        render_html_style_attr(&render_html_table_style(
+            &table.style,
+            resources,
+            image_asset_prefix,
+        ))
     );
 
     for (index, row) in table.rows.iter().enumerate() {
@@ -4863,6 +4887,37 @@ mod tests {
                 height: Some(LengthPx(36.0)),
             }],
             style: TableStyle {
+                source_border_fill_id: Some(9),
+                diagonal: Some(BorderFillDiagonal {
+                    raw_attributes: 8,
+                    diagonal_type: 1,
+                    width_index: 2,
+                    color: None,
+                    raw_color: 0,
+                }),
+                fill: Some(FillStyle::Solid {
+                    background_color: Some(Color {
+                        r: 0xEE,
+                        g: 0xFF,
+                        b: 0xEE,
+                        a: 255,
+                    }),
+                    background_color_raw: 0x00EEFFEE,
+                    pattern_color: None,
+                    pattern_color_raw: 0,
+                    pattern_type: 0,
+                    alpha: 0,
+                }),
+                border_left: Some(Border {
+                    width: LengthPx(1.0),
+                    style: BorderStyle::Solid,
+                    color: Some(Color {
+                        r: 0x22,
+                        g: 0x33,
+                        b: 0x44,
+                        a: 255,
+                    }),
+                }),
                 cell_spacing: Some(LengthPx(3.0)),
                 repeat_header: true,
                 page_break: Some(crate::ir::TablePageBreak::Row),
@@ -4874,6 +4929,10 @@ mod tests {
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
         assert!(html.contains("<th"));
+        assert!(html.contains("<table data-border-fill-id=\"9\""));
+        assert!(html.contains("data-diagonal-attributes=\"8\""));
+        assert!(html.contains("background-color: #eeffee"));
+        assert!(html.contains("border-left: 1px solid #223344"));
         assert!(html.contains("vertical-align: middle"));
         assert!(html.contains("data-text-direction=\"2\""));
         assert!(html.contains("data-list-header-width-ref=\"6\""));

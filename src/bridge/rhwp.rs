@@ -1468,12 +1468,32 @@ impl<'a> BridgeContext<'a> {
                     .and_then(i16_hwp_units_to_px_option),
             });
         }
+        let source_border_fill_id = self
+            .lookup_border_fill(table.border_fill_id)
+            .is_some()
+            .then_some(table.border_fill_id);
+        let [border_left, border_right, border_top, border_bottom] =
+            self.map_borders(table.border_fill_id, "table borders");
+        let fill = self.border_fill_style(table.border_fill_id, "table background");
+        let diagonal = self.map_border_fill_diagonal(table.border_fill_id, "table diagonal");
+        let background_color = match &fill {
+            Some(FillStyle::Solid {
+                background_color, ..
+            }) => *background_color,
+            _ => None,
+        };
 
         Table {
             rows,
             style: TableStyle {
-                background_color: self
-                    .border_fill_background_color(table.border_fill_id, "table background"),
+                source_border_fill_id,
+                diagonal,
+                background_color,
+                fill,
+                border_top,
+                border_right,
+                border_bottom,
+                border_left,
                 width: hwp_units_to_px_option(table.common.width),
                 height: hwp_units_to_px_option(table.common.height),
                 margin_top: i16_hwp_units_to_px_option(table.outer_margin_top),
@@ -1604,6 +1624,10 @@ impl<'a> BridgeContext<'a> {
             );
         }
 
+        let source_border_fill_id = self
+            .lookup_border_fill(cell.border_fill_id)
+            .is_some()
+            .then_some(cell.border_fill_id);
         let [border_left, border_right, border_top, border_bottom] =
             self.map_borders(cell.border_fill_id, "table cell borders");
         let padding = if cell.apply_inner_margin {
@@ -1657,7 +1681,7 @@ impl<'a> BridgeContext<'a> {
             source_column: Some(u32::from(cell.col)),
             blocks,
             style: TableCellStyle {
-                source_border_fill_id: (cell.border_fill_id != 0).then_some(cell.border_fill_id),
+                source_border_fill_id,
                 diagonal,
                 background_color,
                 fill,
@@ -6919,6 +6943,12 @@ mod tests {
         let document = RhwpDocument {
             doc_info: DocInfo {
                 border_fills: vec![RhwpBorderFill {
+                    attr: 8,
+                    borders: [RhwpBorderLine {
+                        line_type: RhwpBorderLineType::Solid,
+                        width: 3,
+                        color: 0x00332211,
+                    }; 4],
                     fill: Fill {
                         fill_type: FillType::Solid,
                         solid: Some(SolidFill {
@@ -6964,6 +6994,29 @@ mod tests {
                         b: 0,
                         a: 255,
                     })
+                );
+                assert_eq!(table.style.source_border_fill_id, Some(0));
+                assert!(matches!(table.style.fill, Some(FillStyle::Solid { .. })));
+                assert_eq!(
+                    table
+                        .style
+                        .border_top
+                        .as_ref()
+                        .and_then(|border| border.color),
+                    Some(Color {
+                        r: 0x11,
+                        g: 0x22,
+                        b: 0x33,
+                        a: 255,
+                    })
+                );
+                assert_eq!(
+                    table
+                        .style
+                        .diagonal
+                        .as_ref()
+                        .map(|diagonal| diagonal.raw_attributes),
+                    Some(8)
                 );
                 assert_eq!(
                     table.rows[0].cells[0].style.background_color,
@@ -7088,6 +7141,10 @@ mod tests {
                         a: 255,
                     })
                 );
+                assert!(matches!(
+                    table.style.fill,
+                    Some(FillStyle::Solid { alpha: 128, .. })
+                ));
                 let cell_style = &table.rows[0].cells[0].style;
                 assert_eq!(cell_style.background_color, None);
                 assert_eq!(
@@ -7142,7 +7199,7 @@ mod tests {
                 && warning.message.contains("approximated")
         }));
         assert!(
-            bridged
+            !bridged
                 .warnings
                 .iter()
                 .any(|warning| warning.message.contains("fill opacity 128"))

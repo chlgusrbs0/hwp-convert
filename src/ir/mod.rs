@@ -55,7 +55,8 @@ use serde::{Deserialize, Serialize};
 /// v58: added structured border-fill diagonal metadata.
 /// v59: added table cell text direction metadata.
 /// v60: added table cell source list attributes and protection metadata.
-pub const IR_VERSION: u16 = 60;
+/// v61: added structured table border-fill metadata.
+pub const IR_VERSION: u16 = 61;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1435,7 +1436,16 @@ pub struct TableZone {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct TableStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_border_fill_id: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagonal: Option<BorderFillDiagonal>,
     pub background_color: Option<Color>,
+    pub fill: Option<FillStyle>,
+    pub border_top: Option<Border>,
+    pub border_right: Option<Border>,
+    pub border_bottom: Option<Border>,
+    pub border_left: Option<Border>,
     pub width: Option<LengthPx>,
     pub height: Option<LengthPx>,
     pub margin_top: Option<LengthPx>,

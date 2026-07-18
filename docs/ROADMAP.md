@@ -320,6 +320,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - HWP BorderFill 대각선 IR 확장: `IR_VERSION` 57 → 58. rHWP 공개 `BorderFill.attr`과 `DiagonalLine`의 종류·굵기 인덱스·색상 원시값을 글자, 표 셀, table zone에 보존한다. HTML은 임의로 선 방향을 재구성하지 않고 표 셀 `data-*` 메타데이터와 warning을 남긴다.
 - HWP 표 셀 글자 방향 IR 확장: `IR_VERSION` 58 → 59. rHWP 공개 `Cell.text_direction`의 가로, 세로/영문 눕힘, 세로/영문 세움 값을 구조화한다. HTML은 세로쓰기와 영문 방향을 CSS로 반영하고 원본 값을 `data-text-direction`으로 남기며, 미지 값은 원시값과 warning만 보존한다.
 - HWP 표 셀 보호 IR 확장: `IR_VERSION` 59 → 60. rHWP 공개 `Cell.list_header_width_ref` 원시값을 보존하고, rHWP query가 `cellProtect`로 공개하는 bit 1만 셀 보호 여부로 정규화한다. HTML은 두 값을 `data-*`로 남기며 정적 출력에서 편집 보호를 동작처럼 가장하지 않는다.
+- HWP 표 BorderFill IR 확장: `IR_VERSION` 60 → 61. rHWP 공개 `Table.border_fill_id`의 원본 참조, 단색·그라데이션·이미지 채우기, 4면 테두리와 대각선 정보를 표 스타일에 보존한다. HTML은 채우기와 테두리를 CSS로 출력하고 원본 참조·대각선은 `data-*`로 남긴다.
 - raw HWP record, unknown control bytes, HWPX XML을 직접 해석한 독자 기능 구현을 금지했다.
 - `src/hwpx.rs`는 즉시 삭제하지 않되 legacy 호환성 안전망으로 동결하고, 회귀·보안·기존 silent-drop 수정만 허용하기로 결정했다.
 - 신규 정확도 작업은 rHWP 공개 surface를 `mapped`, `normalized`, `warning/unknown`, `render-only`, `unmapped`, `upstream-needed`로 분류한 뒤 진행한다.

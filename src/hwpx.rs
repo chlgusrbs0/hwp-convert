@@ -2469,7 +2469,14 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
     Some(Table {
         rows,
         style: TableStyle {
+            source_border_fill_id: None,
+            diagonal: None,
             background_color,
+            fill: None,
+            border_top: None,
+            border_right: None,
+            border_bottom: None,
+            border_left: None,
             width,
             height,
             margin_top,
