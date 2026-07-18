@@ -2736,6 +2736,8 @@ fn extract_table_cell_from_xml(
         row_span: hwpx_table_cell_span(cell_xml, HWPX_TABLE_CELL_ROW_SPAN_ATTRIBUTES),
         col_span: hwpx_table_cell_span(cell_xml, HWPX_TABLE_CELL_COL_SPAN_ATTRIBUTES),
         is_header,
+        is_protected: false,
+        source_list_header_width_ref: None,
         source_row,
         source_column,
         blocks,

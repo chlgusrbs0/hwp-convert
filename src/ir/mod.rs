@@ -54,7 +54,8 @@ use serde::{Deserialize, Serialize};
 /// v57: added alternate and default font metadata.
 /// v58: added structured border-fill diagonal metadata.
 /// v59: added table cell text direction metadata.
-pub const IR_VERSION: u16 = 59;
+/// v60: added table cell source list attributes and protection metadata.
+pub const IR_VERSION: u16 = 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1387,6 +1388,10 @@ pub struct TableCell {
     #[serde(default)]
     pub is_header: bool,
     #[serde(default)]
+    pub is_protected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_list_header_width_ref: Option<u16>,
+    #[serde(default)]
     pub source_row: Option<u32>,
     #[serde(default)]
     pub source_column: Option<u32>,
@@ -1400,6 +1405,8 @@ impl Default for TableCell {
             row_span: 1,
             col_span: 1,
             is_header: false,
+            is_protected: false,
+            source_list_header_width_ref: None,
             source_row: None,
             source_column: None,
             blocks: Vec::new(),

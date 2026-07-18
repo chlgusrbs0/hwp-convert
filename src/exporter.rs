@@ -2432,10 +2432,19 @@ fn render_html_table_cell(
         .text_direction
         .map(|direction| format!(" data-text-direction=\"{}\"", direction.source_value()))
         .unwrap_or_default();
+    let source_list_metadata = cell
+        .source_list_header_width_ref
+        .map(|value| format!(" data-list-header-width-ref=\"{value}\""))
+        .unwrap_or_default();
+    let protection_metadata = if cell.is_protected {
+        " data-cell-protected=\"true\""
+    } else {
+        ""
+    };
     let tag = if cell.is_header { "th" } else { "td" };
 
     format!(
-        "<{tag}{rowspan}{colspan}{border_fill_metadata}{text_direction_metadata}{style}>{content}</{tag}>\n"
+        "<{tag}{rowspan}{colspan}{border_fill_metadata}{text_direction_metadata}{source_list_metadata}{protection_metadata}{style}>{content}</{tag}>\n"
     )
 }
 
@@ -4826,6 +4835,8 @@ mod tests {
             rows: vec![TableRow {
                 cells: vec![TableCell {
                     is_header: true,
+                    is_protected: true,
+                    source_list_header_width_ref: Some(0x06),
                     blocks: vec![Block::Paragraph(Paragraph::from_plain_text(
                         "H".to_string(),
                     ))],
@@ -4865,6 +4876,8 @@ mod tests {
         assert!(html.contains("<th"));
         assert!(html.contains("vertical-align: middle"));
         assert!(html.contains("data-text-direction=\"2\""));
+        assert!(html.contains("data-list-header-width-ref=\"6\""));
+        assert!(html.contains("data-cell-protected=\"true\""));
         assert!(html.contains("writing-mode: vertical-rl"));
         assert!(html.contains("text-orientation: upright"));
         assert!(html.contains("width: 100px"));

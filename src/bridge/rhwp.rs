@@ -1639,11 +1639,20 @@ impl<'a> BridgeContext<'a> {
                 Some(TableCellTextDirection::Unknown(raw))
             }
         };
+        let is_protected = (cell.list_header_width_ref & 0x02) != 0;
+        if is_protected {
+            self.add_warning_once(
+                "rHWP table cell protection was preserved in Document IR and HTML metadata; static semantic exporters do not enforce edit protection.",
+            );
+        }
 
         TableCell {
             row_span: (cell.row_span as u32).max(1),
             col_span: (cell.col_span as u32).max(1),
             is_header: cell.is_header,
+            is_protected,
+            source_list_header_width_ref: (cell.list_header_width_ref != 0)
+                .then_some(cell.list_header_width_ref),
             source_row: Some(u32::from(cell.row)),
             source_column: Some(u32::from(cell.col)),
             blocks,
@@ -4608,6 +4617,7 @@ mod tests {
             row_span: 1,
             col_span: 1,
             is_header: true,
+            list_header_width_ref: 0x06,
             vertical_align: RhwpVerticalAlign::Center,
             text_direction: 2,
             width: 7500,
@@ -4665,6 +4675,8 @@ mod tests {
             Block::Table(table) => {
                 let header = &table.rows[0].cells[0];
                 assert!(header.is_header);
+                assert!(header.is_protected);
+                assert_eq!(header.source_list_header_width_ref, Some(0x06));
                 assert_eq!(
                     header.style.vertical_align,
                     Some(crate::ir::VerticalAlign::Middle)
@@ -4680,6 +4692,8 @@ mod tests {
 
                 let plain = &table.rows[0].cells[1];
                 assert!(!plain.is_header);
+                assert!(!plain.is_protected);
+                assert_eq!(plain.source_list_header_width_ref, None);
                 assert_eq!(plain.style.vertical_align, None);
                 assert_eq!(plain.style.text_direction, None);
                 assert_eq!(plain.style.width, None);
