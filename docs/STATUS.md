@@ -48,6 +48,8 @@ HWP 이미지 캡션은 호환용 평문과 함께 `ObjectCaption` 문단 블록
 
 HWP 덧말과 글자 겹침은 문단 내부의 구조화된 inline으로 보존한다. 덧말 텍스트·정렬 원시값과 글자 겹침의 문자·테두리 종류·내부 크기·확장·글자 모양 참조가 JSON에 남고, HTML은 `data-*` 메타데이터와 읽을 수 있는 fallback을 출력한다. rHWP 공개 모델에는 덧말이 붙는 기준 글자 범위가 없으므로 그 관계는 재구성하지 않는다.
 
+HWP 양식 개체는 종류·이름·캡션·텍스트·크기·전경/배경색·선택값·활성 상태·임의 속성을 구조화된 `DocumentControl`로 보존한다. HTML은 원본 메타데이터가 있는 정적 표현을 출력하고 다른 semantic exporter는 읽을 수 있는 fallback을 유지한다. 변환 결과에서 입력·선택 동작 자체는 재현하지 않는다.
+
 ### 핵심 관찰
 
 1. 가장 안정적인 경로: `text -> paragraph -> simple table/list/link -> JSON/HTML/Markdown/TXT/SVG`.
@@ -57,7 +59,7 @@ HWP 덧말과 글자 겹침은 문단 내부의 구조화된 inline으로 보존
 
 ### 미지원 control warning 동작
 
-`src/bridge/rhwp.rs`는 parser가 노출하지만 아직 완전히 매핑하지 못한 known control에 대해 `ConversionWarning`을 기록한다. 현재 대상: auto number, new number, page number position, page hide, hidden comment, non-hyperlink fields, form objects. 이름 있는 bookmark는 `Anchor` inline으로 보존하고, 복구 가능한 command string이 있는 non-hyperlink field는 `UnknownInline` fallback text로 남긴다. 덧말과 글자 겹침은 전용 structured inline으로 보존한다. 복구 가능한 텍스트가 있는 unsupported control과 paragraph 내용이 있는 hidden comment는 `UnknownBlock` fallback text로 남긴다.
+`src/bridge/rhwp.rs`는 parser가 노출하지만 아직 완전히 매핑하지 못한 known control에 대해 `ConversionWarning`을 기록한다. 현재 대상: auto number, new number, page number position, page hide, hidden comment, non-hyperlink fields. 이름 있는 bookmark는 `Anchor` inline으로 보존하고, 복구 가능한 command string이 있는 non-hyperlink field는 `UnknownInline` fallback text로 남긴다. 덧말과 글자 겹침은 전용 structured inline, 양식 개체는 structured `DocumentControl`로 보존한다. 복구 가능한 텍스트가 있는 unsupported control과 paragraph 내용이 있는 hidden comment는 `UnknownBlock` fallback text로 남긴다.
 
 ### HTML list 렌더링
 

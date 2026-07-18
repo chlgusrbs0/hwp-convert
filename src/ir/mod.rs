@@ -62,7 +62,8 @@ use serde::{Deserialize, Serialize};
 /// v65: added source table dimensions and record attributes.
 /// v66: added structured image caption content while retaining legacy text.
 /// v67: added structured ruby annotation and character-overlap inlines.
-pub const IR_VERSION: u16 = 67;
+/// v68: added structured form-object controls.
+pub const IR_VERSION: u16 = 68;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -323,6 +324,22 @@ pub enum DocumentControl {
         hide_page_number: bool,
         fallback_text: String,
     },
+    Form {
+        kind: FormControlKind,
+        name: String,
+        caption: String,
+        text: String,
+        width: LengthPx,
+        height: LengthPx,
+        foreground_color: Option<Color>,
+        foreground_color_raw: u32,
+        background_color: Option<Color>,
+        background_color_raw: u32,
+        value: i32,
+        enabled: bool,
+        properties: std::collections::BTreeMap<String, String>,
+        fallback_text: String,
+    },
 }
 
 impl DocumentControl {
@@ -331,7 +348,30 @@ impl DocumentControl {
             Self::AutoNumber { fallback_text, .. }
             | Self::NewNumber { fallback_text, .. }
             | Self::PageNumberPosition { fallback_text, .. }
-            | Self::PageVisibility { fallback_text, .. } => fallback_text,
+            | Self::PageVisibility { fallback_text, .. }
+            | Self::Form { fallback_text, .. } => fallback_text,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FormControlKind {
+    PushButton,
+    CheckBox,
+    ComboBox,
+    RadioButton,
+    Edit,
+}
+
+impl FormControlKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PushButton => "push_button",
+            Self::CheckBox => "check_box",
+            Self::ComboBox => "combo_box",
+            Self::RadioButton => "radio_button",
+            Self::Edit => "edit",
         }
     }
 }

@@ -1125,10 +1125,7 @@ fn render_html_block(block: &Block, resources: &ResourceStore, image_asset_prefi
             render_html_paragraph(paragraph, resources, image_asset_prefix)
         }
         Block::ColumnLayout(_) => String::new(),
-        Block::DocumentControl(control) => format!(
-            "<p>{}</p>\n",
-            render_html_fallback_text(control.fallback_text())
-        ),
+        Block::DocumentControl(control) => render_html_document_control(control),
         Block::Table(table) => render_html_table(table, resources, image_asset_prefix),
         Block::Image(image) => render_html_image(image, resources, image_asset_prefix),
         Block::Equation(equation) => render_html_equation(equation),
@@ -1139,6 +1136,64 @@ fn render_html_block(block: &Block, resources: &ResourceStore, image_asset_prefi
             format!("<p>{content}</p>\n")
         }
     }
+}
+
+fn render_html_document_control(control: &crate::ir::DocumentControl) -> String {
+    let crate::ir::DocumentControl::Form {
+        kind,
+        name,
+        caption,
+        text,
+        width,
+        height,
+        foreground_color,
+        foreground_color_raw,
+        background_color,
+        background_color_raw,
+        value,
+        enabled,
+        properties,
+        fallback_text,
+        ..
+    } = control
+    else {
+        return format!(
+            "<p>{}</p>\n",
+            render_html_fallback_text(control.fallback_text())
+        );
+    };
+
+    let mut declarations = vec!["display: inline-block".to_string()];
+    if width.0 > 0.0 {
+        declarations.push(format!("width: {}px", width.0));
+    }
+    if height.0 > 0.0 {
+        declarations.push(format!("height: {}px", height.0));
+    }
+    if let Some(color) = foreground_color {
+        declarations.push(format!("color: {}", render_css_color(*color)));
+    }
+    if let Some(color) = background_color {
+        declarations.push(format!("background-color: {}", render_css_color(*color)));
+    }
+    let style = render_html_style_attr(&declarations.join("; "));
+    let properties = serde_json::to_string(properties).unwrap_or_else(|_| "{}".to_string());
+
+    format!(
+        "<p><span class=\"form-control\" data-form-kind=\"{}\" data-name=\"{}\" data-caption=\"{}\" data-text=\"{}\" data-width-px=\"{}\" data-height-px=\"{}\" data-value=\"{}\" data-enabled=\"{}\" data-foreground-color-raw=\"{}\" data-background-color-raw=\"{}\" data-properties=\"{}\"{style}>{}</span></p>\n",
+        kind.as_str(),
+        escape_html(name),
+        escape_html(caption),
+        escape_html(text),
+        width.0,
+        height.0,
+        value,
+        enabled,
+        foreground_color_raw,
+        background_color_raw,
+        escape_html(&properties),
+        render_html_fallback_text(fallback_text),
+    )
 }
 
 fn render_html_paragraph(
@@ -3589,14 +3644,14 @@ mod tests {
     use super::*;
     use crate::ir::{
         Alignment, BinaryResource, BinaryResourceKind, Border, BorderFillDiagonal, BorderStyle,
-        CharacterOverlap, Chart, Color, ConversionWarning, Equation, EquationKind, FillStyle,
-        HeaderFooter, HeaderFooterPlacement, IR_VERSION, Image, ImageCrop, ImageResource, Indent,
-        LengthPt, LengthPx, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage, Metadata, Note,
-        NoteId, NoteKind, NoteStore, ObjectCaption, Paragraph, ParagraphRole, ParagraphStyle,
-        Percent, Resource, ResourceId, ResourceStore, RubyAnnotation, Section, Shape, ShapeKind,
-        Spacing, StyleSheet, Table, TableCaption, TableCell, TableCellStyle,
-        TableCellTextDirection, TableRow, TableStyle, TextBorderFill, TextRun, TextShadow,
-        TextStyle, UnknownInline, WarningCode,
+        CharacterOverlap, Chart, Color, ConversionWarning, DocumentControl, Equation, EquationKind,
+        FillStyle, FormControlKind, HeaderFooter, HeaderFooterPlacement, IR_VERSION, Image,
+        ImageCrop, ImageResource, Indent, LengthPt, LengthPx, Link, ListInfo, ListKind,
+        ListMarkerLayout, MasterPage, Metadata, Note, NoteId, NoteKind, NoteStore, ObjectCaption,
+        Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource, ResourceId, ResourceStore,
+        RubyAnnotation, Section, Shape, ShapeKind, Spacing, StyleSheet, Table, TableCaption,
+        TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle, TextBorderFill,
+        TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -4230,6 +4285,53 @@ mod tests {
             plain_text::to_plain_text(&document),
             "[ruby: note <one>]AB&"
         );
+    }
+
+    #[test]
+    fn renders_structured_form_control_metadata() {
+        let document = document_with_blocks(vec![Block::DocumentControl(DocumentControl::Form {
+            kind: FormControlKind::CheckBox,
+            name: "agree <all>".to_string(),
+            caption: "Agree & continue".to_string(),
+            text: String::new(),
+            width: LengthPx(20.0),
+            height: LengthPx(10.0),
+            foreground_color: Some(Color {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 255,
+            }),
+            foreground_color_raw: 0x00030201,
+            background_color: Some(Color {
+                r: 4,
+                g: 5,
+                b: 6,
+                a: 255,
+            }),
+            background_color_raw: 0x00060504,
+            value: 1,
+            enabled: false,
+            properties: std::collections::BTreeMap::from([(
+                "required".to_string(),
+                "yes".to_string(),
+            )]),
+            fallback_text: "[form: agree]".to_string(),
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+        let markdown = render_markdown_document(&document);
+
+        assert!(html.contains("data-form-kind=\"check_box\""));
+        assert!(html.contains("data-name=\"agree &lt;all&gt;\""));
+        assert!(html.contains("data-caption=\"Agree &amp; continue\""));
+        assert!(html.contains("data-enabled=\"false\""));
+        assert!(html.contains("data-properties=\"{&quot;required&quot;:&quot;yes&quot;}\""));
+        assert!(html.contains("color: #010203"));
+        assert!(html.contains("background-color: #040506"));
+        assert!(html.contains("[form: agree]"));
+        assert_eq!(markdown, "[form: agree]");
+        assert_eq!(plain_text::to_plain_text(&document), "[form: agree]");
     }
 
     #[test]

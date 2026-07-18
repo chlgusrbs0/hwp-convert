@@ -45,11 +45,11 @@ use crate::ir::{
     BinaryResource, BinaryResourceKind, Block, Border, BorderFillDiagonal, BorderStyle,
     CaptionLayout, CaptionPlacement, CharacterOverlap, Color, ColumnDirection as IrColumnDirection,
     ColumnLayout, ColumnLayoutKind, ConversionWarning, Document, DocumentControl, DocumentField,
-    Equation, EquationKind, FieldKind, FillStyle, FontFallback, GradientColor, HeaderFooter,
-    HeaderFooterPlacement, HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
-    ImageEffect as IrImageEffect, ImageFillMode, ImagePlacement, ImageResource, ImageTextWrap,
-    Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage,
-    NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
+    Equation, EquationKind, FieldKind, FillStyle, FontFallback, FormControlKind, GradientColor,
+    HeaderFooter, HeaderFooterPlacement, HorizontalObjectAlignment, HorizontalRelativeTo, Image,
+    ImageCrop, ImageEffect as IrImageEffect, ImageFillMode, ImagePlacement, ImageResource,
+    ImageTextWrap, Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, ListMarkerLayout,
+    MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
     NumberingKind, ObjectCaption, ObjectPlacement, PageBinding, PageBorderFillLayout, PageLayout,
     Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, RawSectionRecord,
     Resource, ResourceId, ResourceStore, RubyAnnotation, ScriptTextStyle, Section, SectionLayout,
@@ -1359,10 +1359,12 @@ impl<'a> BridgeContext<'a> {
                 self.map_hidden_comment_block(comment).into_iter().collect()
             }
             Control::Field(_) => Vec::new(),
-            Control::Form(form) => self
-                .warn_unsupported_control_with_fallback("form", form_fallback_text(form))
-                .into_iter()
-                .collect(),
+            Control::Form(form) => {
+                self.add_warning_once(
+                    "rhwp form-object fields were preserved in structured DocumentControl IR; semantic exporters retain a static representation and do not reproduce interactive behavior.",
+                );
+                vec![Block::DocumentControl(map_form_control(form))]
+            }
             _ => Vec::new(),
         }
     }
@@ -1371,23 +1373,6 @@ impl<'a> BridgeContext<'a> {
         self.add_warning_once(
             "rhwp page and numbering controls were preserved in structured DocumentControl IR; semantic exporters retain fallback text without page-aware placement.",
         );
-    }
-
-    fn warn_unsupported_control_with_fallback(
-        &mut self,
-        kind: &str,
-        fallback_text: String,
-    ) -> Option<Block> {
-        self.add_warning_once(&format!(
-            "rhwp exposed unsupported control `{kind}`; hwp-convert preserved fallback text as an unknown block."
-        ));
-
-        Some(Block::Unknown(crate::ir::UnknownBlock {
-            kind: kind.to_string(),
-            fallback_text: Some(fallback_text),
-            message: Some("Unsupported rHWP control preserved as fallback text.".to_string()),
-            source: Some("rhwp".to_string()),
-        }))
     }
 
     fn map_hidden_comment_block(&mut self, comment: &RhwpHiddenComment) -> Option<Block> {
@@ -4234,6 +4219,35 @@ fn form_fallback_text(form: &RhwpFormObject) -> String {
         form.width,
         form.height
     )
+}
+
+fn map_form_control(form: &RhwpFormObject) -> DocumentControl {
+    DocumentControl::Form {
+        kind: match form.form_type {
+            RhwpFormType::PushButton => FormControlKind::PushButton,
+            RhwpFormType::CheckBox => FormControlKind::CheckBox,
+            RhwpFormType::ComboBox => FormControlKind::ComboBox,
+            RhwpFormType::RadioButton => FormControlKind::RadioButton,
+            RhwpFormType::Edit => FormControlKind::Edit,
+        },
+        name: form.name.clone(),
+        caption: form.caption.clone(),
+        text: form.text.clone(),
+        width: LengthPx(form.width as f32 / 75.0),
+        height: LengthPx(form.height as f32 / 75.0),
+        foreground_color: color_ref_to_color_option(form.fore_color),
+        foreground_color_raw: form.fore_color,
+        background_color: color_ref_to_color_option(form.back_color),
+        background_color_raw: form.back_color,
+        value: form.value,
+        enabled: form.enabled,
+        properties: form
+            .properties
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        fallback_text: form_fallback_text(form),
+    }
 }
 
 fn form_type_name(form_type: RhwpFormType) -> &'static str {
@@ -7802,12 +7816,18 @@ mod tests {
                         Control::Form(Box::new(RhwpFormObject {
                             form_type: RhwpFormType::Edit,
                             name: "field1".to_string(),
+                            caption: "input".to_string(),
                             text: "value".to_string(),
                             width: 100,
                             height: 200,
+                            fore_color: 0x00332211,
+                            back_color: 0x00665544,
                             value: 1,
                             enabled: true,
-                            ..Default::default()
+                            properties: std::collections::HashMap::from([(
+                                "required".to_string(),
+                                "yes".to_string(),
+                            )]),
                         })),
                     ],
                     ..Default::default()
@@ -7828,9 +7848,36 @@ mod tests {
                 ..
             })
         ));
-        assert!(
-            matches!(&blocks[2], Block::Unknown(unknown) if unknown.kind == "form" && unknown.fallback_text.as_deref() == Some("[form: type=edit, name=field1, text=value, value=1, enabled=true, size=100x200]"))
-        );
+        assert!(matches!(
+            &blocks[2],
+            Block::DocumentControl(DocumentControl::Form {
+                kind: FormControlKind::Edit,
+                name,
+                caption,
+                text,
+                width,
+                height,
+                foreground_color: Some(Color { r: 0x11, g: 0x22, b: 0x33, a: 255 }),
+                foreground_color_raw: 0x00332211,
+                background_color: Some(Color { r: 0x44, g: 0x55, b: 0x66, a: 255 }),
+                background_color_raw: 0x00665544,
+                value: 1,
+                enabled: true,
+                properties,
+                fallback_text,
+            }) if name == "field1"
+                && caption == "input"
+                && text == "value"
+                && width.0 == 100.0 / 75.0
+                && height.0 == 200.0 / 75.0
+                && properties.get("required").map(String::as_str) == Some("yes")
+                && fallback_text == "[form: type=edit, name=field1, text=input, value=1, enabled=true, size=100x200]"
+        ));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("do not reproduce interactive behavior")
+        }));
     }
 
     #[test]
