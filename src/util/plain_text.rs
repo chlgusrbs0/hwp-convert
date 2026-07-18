@@ -345,6 +345,12 @@ fn inline_text_to_plain_text(inlines: &[Inline]) -> String {
                 }
             }
             Inline::Field(field) => text.push_str(&field.fallback_text),
+            Inline::Ruby(ruby) => {
+                text.push_str("[ruby: ");
+                text.push_str(&ruby.text);
+                text.push(']');
+            }
+            Inline::CharacterOverlap(overlap) => text.push_str(&overlap.characters),
             Inline::FootnoteRef { note_id } => {
                 text.push_str(&format!("{FOOTNOTE_REF_LABEL}: {}]", note_id.as_str()));
             }

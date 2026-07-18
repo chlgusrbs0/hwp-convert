@@ -9,13 +9,13 @@ use serde::{Deserialize, Serialize};
 use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
 use crate::ir::{
-    Alignment, Block, Border, BorderStyle, CaptionLayout, CaptionPlacement, Chart, Color, Document,
-    Equation, EquationKind, FillStyle, HeaderFooter, HeaderFooterPlacement, Image, ImageFillMode,
-    Inline, Link, ListInfo, ListKind, MasterPage, Note, NoteId, NoteKind, ObjectCaption, Paragraph,
-    ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape,
-    ShapeGeometry, ShapeShadow, Table, TableCell, TableCellStyle, TableCellTextDirection, TableRow,
-    TableStyle, TableZone, TextDecorationStyle, TextRun, TextShadow, TextStyle, UnknownBlock,
-    UnknownInline, VerticalAlign,
+    Alignment, Block, Border, BorderStyle, CaptionLayout, CaptionPlacement, CharacterOverlap,
+    Chart, Color, Document, Equation, EquationKind, FillStyle, HeaderFooter, HeaderFooterPlacement,
+    Image, ImageFillMode, Inline, Link, ListInfo, ListKind, MasterPage, Note, NoteId, NoteKind,
+    ObjectCaption, Paragraph, ParagraphRole, ParagraphStyle, Resource, ResourceId, ResourceStore,
+    RubyAnnotation, Section, Shape, ShapeGeometry, ShapeShadow, Table, TableCell, TableCellStyle,
+    TableCellTextDirection, TableRow, TableStyle, TableZone, TextDecorationStyle, TextRun,
+    TextShadow, TextStyle, UnknownBlock, UnknownInline, VerticalAlign,
 };
 use crate::util::plain_text;
 
@@ -396,6 +396,7 @@ fn collect_inline_unknown_warnings(inlines: &[Inline], warnings: &mut Vec<String
         match inline {
             Inline::Link(link) => collect_inline_unknown_warnings(&link.inlines, warnings),
             Inline::Field(_) => {}
+            Inline::Ruby(_) | Inline::CharacterOverlap(_) => {}
             Inline::Unknown(unknown) => {
                 if let Some(message) = &unknown.message {
                     push_warning_once(
@@ -1203,6 +1204,10 @@ fn render_html_inlines(
             Inline::Field(field) => {
                 content.push_str(&render_html_fallback_text(&field.fallback_text));
             }
+            Inline::Ruby(ruby) => content.push_str(&render_html_ruby_annotation(ruby)),
+            Inline::CharacterOverlap(overlap) => {
+                content.push_str(&render_html_character_overlap(overlap))
+            }
             Inline::FootnoteRef { note_id } => {
                 content.push_str(&render_html_note_ref(note_id, NoteKind::Footnote));
             }
@@ -1222,6 +1227,31 @@ fn render_html_inlines(
     }
 
     content
+}
+
+fn render_html_ruby_annotation(ruby: &RubyAnnotation) -> String {
+    format!(
+        "<span class=\"ruby-annotation\" data-alignment=\"{}\">[ruby: {}]</span>",
+        ruby.alignment,
+        escape_html(&ruby.text)
+    )
+}
+
+fn render_html_character_overlap(overlap: &CharacterOverlap) -> String {
+    let shape_ids = overlap
+        .character_shape_ids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "<span class=\"character-overlap\" data-border-type=\"{}\" data-inner-char-size-percent=\"{}\" data-expansion=\"{}\" data-character-shape-ids=\"{}\">{}</span>",
+        overlap.border_type,
+        overlap.inner_char_size_percent,
+        overlap.expansion,
+        shape_ids,
+        escape_html(&overlap.characters)
+    )
 }
 
 fn render_html_fallback_text(text: &str) -> String {
@@ -2766,6 +2796,12 @@ fn render_markdown_inlines(inlines: &[Inline]) -> String {
             Inline::Field(field) => {
                 content.push_str(&render_markdown_text(&field.fallback_text));
             }
+            Inline::Ruby(ruby) => {
+                content.push_str(&render_markdown_text(&format!("[ruby: {}]", ruby.text)));
+            }
+            Inline::CharacterOverlap(overlap) => {
+                content.push_str(&render_markdown_text(&overlap.characters));
+            }
             Inline::FootnoteRef { note_id } => content.push_str(&render_markdown_note_ref(note_id)),
             Inline::EndnoteRef { note_id } => content.push_str(&render_markdown_note_ref(note_id)),
             Inline::Anchor { id } => {
@@ -3145,6 +3181,8 @@ fn markdown_link_label_inline(inline: &Inline) -> String {
         Inline::Tab => "\t".to_string(),
         Inline::Link(link) => render_markdown_link_label(link),
         Inline::Field(field) => escape_markdown_image_alt(&field.fallback_text),
+        Inline::Ruby(ruby) => escape_markdown_image_alt(&format!("[ruby: {}]", ruby.text)),
+        Inline::CharacterOverlap(overlap) => escape_markdown_image_alt(&overlap.characters),
         Inline::FootnoteRef { note_id } => render_markdown_note_ref(note_id),
         Inline::EndnoteRef { note_id } => render_markdown_note_ref(note_id),
         Inline::Anchor { id } => {
@@ -3551,13 +3589,14 @@ mod tests {
     use super::*;
     use crate::ir::{
         Alignment, BinaryResource, BinaryResourceKind, Border, BorderFillDiagonal, BorderStyle,
-        Chart, Color, ConversionWarning, Equation, EquationKind, FillStyle, HeaderFooter,
-        HeaderFooterPlacement, IR_VERSION, Image, ImageCrop, ImageResource, Indent, LengthPt,
-        LengthPx, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId,
-        NoteKind, NoteStore, ObjectCaption, Paragraph, ParagraphRole, ParagraphStyle, Percent,
-        Resource, ResourceId, ResourceStore, Section, Shape, ShapeKind, Spacing, StyleSheet, Table,
-        TableCaption, TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle,
-        TextBorderFill, TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
+        CharacterOverlap, Chart, Color, ConversionWarning, Equation, EquationKind, FillStyle,
+        HeaderFooter, HeaderFooterPlacement, IR_VERSION, Image, ImageCrop, ImageResource, Indent,
+        LengthPt, LengthPx, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage, Metadata, Note,
+        NoteId, NoteKind, NoteStore, ObjectCaption, Paragraph, ParagraphRole, ParagraphStyle,
+        Percent, Resource, ResourceId, ResourceStore, RubyAnnotation, Section, Shape, ShapeKind,
+        Spacing, StyleSheet, Table, TableCaption, TableCell, TableCellStyle,
+        TableCellTextDirection, TableRow, TableStyle, TextBorderFill, TextRun, TextShadow,
+        TextStyle, UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -4153,6 +4192,44 @@ mod tests {
         assert!(svg.contains(">before</text>"));
         assert!(svg.contains("> </text>"));
         assert!(svg.contains(">after</text>"));
+    }
+
+    #[test]
+    fn renders_structured_ruby_and_character_overlap_inlines() {
+        let document = document_with_blocks(vec![Block::Paragraph(Paragraph {
+            role: ParagraphRole::Body,
+            inlines: vec![
+                Inline::Ruby(RubyAnnotation {
+                    text: "note <one>".to_string(),
+                    alignment: 2,
+                }),
+                Inline::CharacterOverlap(CharacterOverlap {
+                    characters: "AB&".to_string(),
+                    border_type: 3,
+                    inner_char_size_percent: 80,
+                    expansion: 1,
+                    character_shape_ids: vec![4, 5],
+                }),
+            ],
+            style: ParagraphStyle::default(),
+            style_ref: None,
+            list: None,
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+        let markdown = render_markdown_document(&document);
+
+        assert!(html.contains("class=\"ruby-annotation\" data-alignment=\"2\""));
+        assert!(html.contains("[ruby: note &lt;one&gt;]"));
+        assert!(html.contains("class=\"character-overlap\""));
+        assert!(html.contains("data-character-shape-ids=\"4,5\""));
+        assert!(html.contains(">AB&amp;</span>"));
+        assert!(markdown.contains("ruby: note <one>"));
+        assert!(markdown.ends_with("AB&"));
+        assert_eq!(
+            plain_text::to_plain_text(&document),
+            "[ruby: note <one>]AB&"
+        );
     }
 
     #[test]

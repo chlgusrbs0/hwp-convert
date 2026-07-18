@@ -232,6 +232,7 @@ struct SemanticCoverage {
     links: usize,
     anchors: usize,
     note_refs: usize,
+    special_inlines: usize,
     unknown_inlines: usize,
     headers: usize,
     footers: usize,
@@ -354,6 +355,7 @@ impl SemanticCoverage {
                     self.count_inlines(&link.inlines);
                 }
                 Inline::Field(_) => {}
+                Inline::Ruby(_) | Inline::CharacterOverlap(_) => self.special_inlines += 1,
                 Inline::Anchor { .. } => self.anchors += 1,
                 Inline::FootnoteRef { .. } | Inline::EndnoteRef { .. } => self.note_refs += 1,
                 Inline::Unknown(_) => self.unknown_inlines += 1,
@@ -376,6 +378,7 @@ impl SemanticCoverage {
             && self.links == 0
             && self.anchors == 0
             && self.note_refs == 0
+            && self.special_inlines == 0
             && self.unknown_inlines == 0
             && self.headers == 0
             && self.footers == 0
@@ -393,7 +396,7 @@ impl SemanticCoverage {
     }
 
     fn additional_labels(&self, other: &Self) -> Vec<&'static str> {
-        const LABELS: [Option<&str>; 29] = [
+        const LABELS: [Option<&str>; 30] = [
             Some("sections"),
             Some("paragraphs"),
             Some("styled paragraphs"),
@@ -416,6 +419,7 @@ impl SemanticCoverage {
             Some("links"),
             Some("anchors"),
             Some("note refs"),
+            Some("ruby/character overlap inlines"),
             None,
             Some("headers"),
             Some("footers"),
@@ -433,7 +437,7 @@ impl SemanticCoverage {
             .collect()
     }
 
-    fn values(&self) -> [usize; 29] {
+    fn values(&self) -> [usize; 30] {
         [
             self.sections,
             self.paragraphs,
@@ -457,6 +461,7 @@ impl SemanticCoverage {
             self.links,
             self.anchors,
             self.note_refs,
+            self.special_inlines,
             self.unknown_inlines,
             self.headers,
             self.footers,
@@ -615,6 +620,8 @@ fn collect_inlines_text(inlines: &[Inline], chunks: &mut Vec<String>) {
                 }
             }
             Inline::Field(field) => push_text(Some(&field.fallback_text), chunks),
+            Inline::Ruby(ruby) => push_text(Some(&ruby.text), chunks),
+            Inline::CharacterOverlap(overlap) => push_text(Some(&overlap.characters), chunks),
             Inline::Unknown(_) => {}
             Inline::LineBreak | Inline::Tab => chunks.push(" ".to_string()),
             Inline::Anchor { .. } | Inline::FootnoteRef { .. } | Inline::EndnoteRef { .. } => {}

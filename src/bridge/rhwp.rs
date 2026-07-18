@@ -43,21 +43,21 @@ use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_r
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
     BinaryResource, BinaryResourceKind, Block, Border, BorderFillDiagonal, BorderStyle,
-    CaptionLayout, CaptionPlacement, Color, ColumnDirection as IrColumnDirection, ColumnLayout,
-    ColumnLayoutKind, ConversionWarning, Document, DocumentControl, DocumentField, Equation,
-    EquationKind, FieldKind, FillStyle, FontFallback, GradientColor, HeaderFooter,
+    CaptionLayout, CaptionPlacement, CharacterOverlap, Color, ColumnDirection as IrColumnDirection,
+    ColumnLayout, ColumnLayoutKind, ConversionWarning, Document, DocumentControl, DocumentField,
+    Equation, EquationKind, FieldKind, FillStyle, FontFallback, GradientColor, HeaderFooter,
     HeaderFooterPlacement, HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
     ImageEffect as IrImageEffect, ImageFillMode, ImagePlacement, ImageResource, ImageTextWrap,
     Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage,
     NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
     NumberingKind, ObjectCaption, ObjectPlacement, PageBinding, PageBorderFillLayout, PageLayout,
     Paragraph, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent, RawSectionRecord,
-    Resource, ResourceId, ResourceStore, ScriptTextStyle, Section, SectionLayout, Shape,
-    ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow, SourceStyleDefinition, SourceStyleKind,
-    Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle,
-    TableCellTextDirection, TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill,
-    TextDecorationStyle, TextRun, TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline,
-    VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    Resource, ResourceId, ResourceStore, RubyAnnotation, ScriptTextStyle, Section, SectionLayout,
+    Shape, ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow, SourceStyleDefinition,
+    SourceStyleKind, Spacing, StyleSheet, TabAlignment, TabDefinition, TabStop, Table, TableCell,
+    TableCellStyle, TableCellTextDirection, TablePageBreak, TableRow, TableStyle, TableZone,
+    TextBorderFill, TextDecorationStyle, TextRun, TextScript, TextShadow, TextStyle, TextStyleId,
+    UnknownInline, VerticalAlign, VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -395,6 +395,7 @@ impl<'a> BridgeContext<'a> {
         let mut imprecise_note_placement = false;
         let mut imprecise_link_placement = false;
         let mut imprecise_field_placement = false;
+        let mut imprecise_special_inline_placement = false;
 
         for (index, control) in paragraph.controls.iter().enumerate() {
             if consumed_control_idxs.contains(&index) {
@@ -539,6 +540,39 @@ impl<'a> BridgeContext<'a> {
                         });
                     }
                 }
+                Control::Ruby(ruby) => {
+                    let preferred = control_positions.get(index).copied().flatten();
+                    imprecise_special_inline_placement |= preferred.is_none();
+                    insertions.push(InlineInsertion {
+                        position: preferred,
+                        control_idx: index,
+                        inline: Inline::Ruby(RubyAnnotation {
+                            text: ruby.ruby_text.clone(),
+                            alignment: ruby.alignment,
+                        }),
+                    });
+                    self.add_warning_once(
+                        "rhwp ruby annotation metadata was preserved as a structured inline, but rhwp does not expose the annotated base-text range; semantic exporters retain the annotation without reconstructing that relationship.",
+                    );
+                }
+                Control::CharOverlap(overlap) => {
+                    let preferred = control_positions.get(index).copied().flatten();
+                    imprecise_special_inline_placement |= preferred.is_none();
+                    insertions.push(InlineInsertion {
+                        position: preferred,
+                        control_idx: index,
+                        inline: Inline::CharacterOverlap(CharacterOverlap {
+                            characters: overlap.chars.iter().collect(),
+                            border_type: overlap.border_type,
+                            inner_char_size_percent: overlap.inner_char_size,
+                            expansion: overlap.expansion,
+                            character_shape_ids: overlap.char_shape_ids.clone(),
+                        }),
+                    });
+                    self.add_warning_once(
+                        "rhwp character-overlap content and source metadata were preserved as a structured inline; semantic exporters linearize the overlapped characters.",
+                    );
+                }
                 _ => {}
             }
         }
@@ -633,6 +667,12 @@ impl<'a> BridgeContext<'a> {
         if imprecise_field_placement {
             self.add_warning_once(
                 "Some rhwp field controls could not be placed from paragraph offsets, so bridge fallback used uniquely matching text or appended their fallback text after paragraph text.",
+            );
+        }
+
+        if imprecise_special_inline_placement {
+            self.add_warning_once(
+                "Some rhwp ruby/character-overlap control positions could not be recovered from paragraph offsets, so those structured inlines were appended after paragraph text.",
             );
         }
 
@@ -1308,42 +1348,7 @@ impl<'a> BridgeContext<'a> {
                 ))]
             }
             Control::Bookmark(_) => Vec::new(),
-            Control::Ruby(ruby) => self
-                .warn_unsupported_visible_control(
-                    "ruby",
-                    non_empty_string(&ruby.ruby_text)
-                        .map(|text| format!("[ruby: text={text}, alignment={}]", ruby.alignment))
-                        .unwrap_or_else(|| format!("[ruby: alignment={}]", ruby.alignment)),
-                )
-                .into_iter()
-                .collect(),
-            Control::CharOverlap(overlap) => {
-                let chars = overlap.chars.iter().collect::<String>();
-                self.warn_unsupported_visible_control(
-                    "char_overlap",
-                    non_empty_string(&chars)
-                        .map(|text| {
-                            format!(
-                                "[char overlap: text={text}, border_type={}, inner_char_size={}, expansion={}, char_shape_ids={:?}]",
-                                overlap.border_type,
-                                overlap.inner_char_size,
-                                overlap.expansion,
-                                overlap.char_shape_ids
-                            )
-                        })
-                        .unwrap_or_else(|| {
-                            format!(
-                                "[char overlap: border_type={}, inner_char_size={}, expansion={}, char_shape_ids={:?}]",
-                                overlap.border_type,
-                                overlap.inner_char_size,
-                                overlap.expansion,
-                                overlap.char_shape_ids
-                            )
-                        }),
-                )
-                .into_iter()
-                .collect()
-            }
+            Control::Ruby(_) | Control::CharOverlap(_) => Vec::new(),
             Control::PageHide(page_hide) => {
                 self.warn_structured_document_control();
                 vec![Block::DocumentControl(map_page_visibility_control(
@@ -1366,25 +1371,6 @@ impl<'a> BridgeContext<'a> {
         self.add_warning_once(
             "rhwp page and numbering controls were preserved in structured DocumentControl IR; semantic exporters retain fallback text without page-aware placement.",
         );
-    }
-
-    fn warn_unsupported_visible_control(
-        &mut self,
-        kind: &str,
-        fallback_text: String,
-    ) -> Option<Block> {
-        self.add_warning_once(&format!(
-            "rhwp exposed unsupported visible control `{kind}`; hwp-convert preserved fallback text as an unknown block."
-        ));
-
-        Some(Block::Unknown(crate::ir::UnknownBlock {
-            kind: kind.to_string(),
-            fallback_text: Some(fallback_text),
-            message: Some(
-                "Unsupported visible rHWP control preserved as fallback text.".to_string(),
-            ),
-            source: Some("rhwp".to_string()),
-        }))
     }
 
     fn warn_unsupported_control_with_fallback(
@@ -7626,7 +7612,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_visible_unsupported_controls_as_unknown_blocks() {
+    fn preserves_ruby_and_character_overlap_as_structured_inlines() {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
@@ -7654,16 +7640,36 @@ mod tests {
         let bridged = BridgeContext::new(&document).into_document();
         let blocks = &bridged.sections[0].blocks;
 
-        assert!(
-            matches!(&blocks[1], Block::Unknown(unknown) if unknown.kind == "ruby" && unknown.fallback_text.as_deref() == Some("[ruby: text=덧말, alignment=2]"))
-        );
-        assert!(
-            matches!(&blocks[2], Block::Unknown(unknown) if unknown.kind == "char_overlap" && unknown.fallback_text.as_deref() == Some("[char overlap: text=겹침, border_type=3, inner_char_size=80, expansion=1, char_shape_ids=[4, 5]]"))
+        let Block::Paragraph(paragraph) = &blocks[0] else {
+            panic!("expected paragraph block");
+        };
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(
+            &paragraph.inlines[1],
+            Inline::Ruby(ruby) if ruby.text == "덧말" && ruby.alignment == 2
+        ));
+        assert!(matches!(
+            &paragraph.inlines[2],
+            Inline::CharacterOverlap(overlap)
+                if overlap.characters == "겹침"
+                    && overlap.border_type == 3
+                    && overlap.inner_char_size_percent == 80
+                    && overlap.expansion == 1
+                    && overlap.character_shape_ids == [4, 5]
+        ));
+        assert_eq!(
+            crate::util::plain_text::to_plain_text(&bridged),
+            "body[ruby: 덧말]겹침"
         );
         assert!(bridged.warnings.iter().any(|warning| {
             warning
                 .message
-                .contains("unsupported visible control `ruby`")
+                .contains("does not expose the annotated base-text range")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("semantic exporters linearize the overlapped characters")
         }));
     }
 

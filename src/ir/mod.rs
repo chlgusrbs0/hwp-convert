@@ -61,7 +61,8 @@ use serde::{Deserialize, Serialize};
 /// v64: added structured shape caption blocks and layout metadata.
 /// v65: added source table dimensions and record attributes.
 /// v66: added structured image caption content while retaining legacy text.
-pub const IR_VERSION: u16 = 66;
+/// v67: added structured ruby annotation and character-overlap inlines.
+pub const IR_VERSION: u16 = 67;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -411,9 +412,26 @@ pub enum Inline {
     Anchor { id: String },
     Link(Link),
     Field(DocumentField),
+    Ruby(RubyAnnotation),
+    CharacterOverlap(CharacterOverlap),
     FootnoteRef { note_id: NoteId },
     EndnoteRef { note_id: NoteId },
     Unknown(UnknownInline),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RubyAnnotation {
+    pub text: String,
+    pub alignment: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CharacterOverlap {
+    pub characters: String,
+    pub border_type: u8,
+    pub inner_char_size_percent: i8,
+    pub expansion: u8,
+    pub character_shape_ids: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

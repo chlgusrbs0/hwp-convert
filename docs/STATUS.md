@@ -46,6 +46,8 @@
 
 HWP 이미지 캡션은 호환용 평문과 함께 `ObjectCaption` 문단 블록을 보존하므로 링크·필드·스타일이 JSON에서 사라지지 않는다. HTML/Markdown/TXT/SVG는 구조화된 캡션을 우선하고 원본 앞뒤 순서를 유지한다. HWPX 폴백은 기존 평문 캡션만 유지하며 신규 구조화는 추가하지 않는다.
 
+HWP 덧말과 글자 겹침은 문단 내부의 구조화된 inline으로 보존한다. 덧말 텍스트·정렬 원시값과 글자 겹침의 문자·테두리 종류·내부 크기·확장·글자 모양 참조가 JSON에 남고, HTML은 `data-*` 메타데이터와 읽을 수 있는 fallback을 출력한다. rHWP 공개 모델에는 덧말이 붙는 기준 글자 범위가 없으므로 그 관계는 재구성하지 않는다.
+
 ### 핵심 관찰
 
 1. 가장 안정적인 경로: `text -> paragraph -> simple table/list/link -> JSON/HTML/Markdown/TXT/SVG`.
@@ -55,7 +57,7 @@ HWP 이미지 캡션은 호환용 평문과 함께 `ObjectCaption` 문단 블록
 
 ### 미지원 control warning 동작
 
-`src/bridge/rhwp.rs`는 parser가 노출하지만 아직 완전히 매핑하지 못한 known control에 대해 `ConversionWarning`을 기록한다. 현재 대상: auto number, new number, page number position, page hide, hidden comment, non-hyperlink fields, form objects. 이름 있는 bookmark는 `Anchor` inline으로 보존하고, 복구 가능한 command string이 있는 non-hyperlink field는 `UnknownInline` fallback text로 남긴다. 자동번호·쪽번호 fallback에는 형식과 장식 문자를, ruby·글자겹침 fallback에는 정렬·테두리·크기·글자속성 참조를 함께 남긴다. 복구 가능한 텍스트가 있는 visible unsupported control과 paragraph 내용이 있는 hidden comment는 `UnknownBlock` fallback text로 남긴다.
+`src/bridge/rhwp.rs`는 parser가 노출하지만 아직 완전히 매핑하지 못한 known control에 대해 `ConversionWarning`을 기록한다. 현재 대상: auto number, new number, page number position, page hide, hidden comment, non-hyperlink fields, form objects. 이름 있는 bookmark는 `Anchor` inline으로 보존하고, 복구 가능한 command string이 있는 non-hyperlink field는 `UnknownInline` fallback text로 남긴다. 덧말과 글자 겹침은 전용 structured inline으로 보존한다. 복구 가능한 텍스트가 있는 unsupported control과 paragraph 내용이 있는 hidden comment는 `UnknownBlock` fallback text로 남긴다.
 
 ### HTML list 렌더링
 
