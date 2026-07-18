@@ -91,7 +91,7 @@ pub fn read_document(input_path: &Path) -> Result<Document, Box<dyn Error>> {
 
     match rhwp::parse_document(&bytes) {
         Ok(parsed) => {
-            let bridged = BridgeContext::new(&parsed).into_document();
+            let bridged = BridgeContext::new_for_input(&parsed, input_kind).into_document();
             if document_has_blocks(&bridged) {
                 if input_kind == InputKind::Hwpx {
                     Ok(reconcile_partial_hwpx_document(&bytes, bridged))
@@ -171,6 +171,7 @@ fn empty_document_error() -> io::Error {
 
 struct BridgeContext<'a> {
     source: &'a RhwpDocument,
+    input_kind: InputKind,
     resources: ResourceStore,
     notes: NoteStore,
     warnings: Vec<ConversionWarning>,
@@ -180,9 +181,15 @@ struct BridgeContext<'a> {
 }
 
 impl<'a> BridgeContext<'a> {
+    #[cfg(test)]
     fn new(source: &'a RhwpDocument) -> Self {
+        Self::new_for_input(source, InputKind::Hwp)
+    }
+
+    fn new_for_input(source: &'a RhwpDocument, input_kind: InputKind) -> Self {
         Self {
             source,
+            input_kind,
             resources: ResourceStore::default(),
             notes: NoteStore::default(),
             warnings: Vec::new(),
@@ -1455,17 +1462,31 @@ impl<'a> BridgeContext<'a> {
                 .filter(|cell| cell.row == row_index)
                 .collect::<Vec<_>>();
             row_cells.sort_by_key(|cell| cell.col);
+            let source_row_height = table
+                .row_sizes
+                .get(row_index as usize)
+                .copied()
+                .and_then(i16_hwp_units_to_px_option);
+            let row_height = source_row_height.or_else(|| {
+                row_cells
+                    .iter()
+                    .filter(|cell| cell.row_span <= 1)
+                    .map(|cell| cell.height)
+                    .max()
+                    .and_then(hwp_units_to_px_option)
+            });
+            if source_row_height.is_none() && row_height.is_some() {
+                self.add_warning_once(
+                    "rHWP table row size was missing or invalid; hwp-convert derived the row height from non-spanning cell heights.",
+                );
+            }
 
             rows.push(TableRow {
                 cells: row_cells
                     .into_iter()
                     .map(|cell| self.map_table_cell(cell, &table.padding))
                     .collect(),
-                height: table
-                    .row_sizes
-                    .get(row_index as usize)
-                    .copied()
-                    .and_then(i16_hwp_units_to_px_option),
+                height: row_height,
             });
         }
         let source_border_fill_id = self
@@ -1520,6 +1541,10 @@ impl<'a> BridgeContext<'a> {
                 },
                 placement,
             },
+            source_row_count: Some(u32::from(table.row_count)),
+            source_column_count: Some(u32::from(table.col_count)),
+            source_record_attributes: (self.input_kind == InputKind::Hwp)
+                .then_some(table.raw_table_record_attr),
             zones,
             caption,
         }
@@ -4377,6 +4402,7 @@ mod tests {
             col: 0,
             row_span: 1,
             col_span: 1,
+            height: 1500,
             paragraphs: vec![RhwpParagraph {
                 text: "cell text".to_string(),
                 ..Default::default()
@@ -4406,6 +4432,7 @@ mod tests {
             Block::Table(table) => {
                 assert_eq!(table.rows.len(), 1);
                 assert_eq!(table.rows[0].cells.len(), 1);
+                assert_eq!(table.rows[0].height, Some(LengthPx(20.0)));
                 match &table.rows[0].cells[0].blocks[0] {
                     Block::Paragraph(paragraph) => {
                         assert_eq!(paragraph.inlines.len(), 1);
@@ -4419,6 +4446,11 @@ mod tests {
             }
             other => panic!("expected table block, got {other:?}"),
         }
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("derived the row height from non-spanning cell heights")
+        }));
     }
 
     #[test]
@@ -4428,6 +4460,7 @@ mod tests {
             col_count: 1,
             cell_spacing: 75,
             row_sizes: vec![1500],
+            raw_table_record_attr: 6,
             zones: vec![rhwp::model::table::TableZone {
                 start_col: 0,
                 start_row: 0,
@@ -4452,6 +4485,7 @@ mod tests {
             cells: vec![RhwpCell {
                 row: 0,
                 col: 0,
+                height: 1500,
                 paragraphs: vec![RhwpParagraph {
                     text: "cell".to_string(),
                     ..Default::default()
@@ -4495,6 +4529,9 @@ mod tests {
         };
         assert_eq!(table.style.width, Some(LengthPx(100.0)));
         assert_eq!(table.style.height, Some(LengthPx(40.0)));
+        assert_eq!(table.source_row_count, Some(1));
+        assert_eq!(table.source_column_count, Some(1));
+        assert_eq!(table.source_record_attributes, Some(6));
         assert_eq!(table.style.margin_left, Some(LengthPx(100.0 / 75.0)));
         assert_eq!(table.style.margin_right, Some(LengthPx(200.0 / 75.0)));
         assert_eq!(table.style.margin_top, Some(LengthPx(4.0)));

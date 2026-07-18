@@ -13,7 +13,7 @@
 - 이 프로젝트는 Rust CLI다.
 - crate 이름은 `hwp-convert`, library target은 `hwp_convert`, edition은 2024다.
 - rHWP dependency 고정: `github.com/edwardkim/rhwp` rev `bea635bd708274a51ae3f557a71b07683d7c2454` (rhwp v0.7.3).
-- 현재 `IR_VERSION`: `64`.
+- 현재 `IR_VERSION`: `65`.
 - 입력 형식: `.hwp`, `.hwpx`.
 - 출력 형식: `txt`, `json`, `markdown`, `html`, `svg`. PDF는 미구현.
 - 테스트 상태: `cargo test` 통과 — unit test 308개 + fixture smoke 4개. `cargo clippy --all-targets -- -D warnings` 무경고.

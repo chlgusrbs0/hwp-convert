@@ -2488,6 +2488,9 @@ fn extract_table_from_xml(table_xml: &str, context: &mut HwpxFallbackContext) ->
             page_break,
             placement: None,
         },
+        source_row_count: None,
+        source_column_count: None,
+        source_record_attributes: None,
         zones: Vec::new(),
         caption: None,
     })

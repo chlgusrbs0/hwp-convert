@@ -42,6 +42,8 @@
 | unknown element | 부분 | 부분 | 예 | 부분 (`fallback_text` 우선, 없으면 `[unknown: kind]`) | `Control::Unknown`은 `UnknownBlock`으로 감싼다. 일부 known-but-unmapped control은 아직 구조적 보존이 제한적이다. HWPX unsupported control/object는 내부 텍스트가 없을 때도 title/name/description/value 계열 속성을 fallback text로 보존한다. `UnknownInline`은 거의 미사용. |
 | render snapshot | 예 | — | — | — (기본 `--to svg`는 RenderSnapshot이 아님) | experimental visual path (`src/render`). 기본 사용자 경로에 노출 안 됨. fidelity 낮고 이미지/표/도형은 placeholder. |
 
+표의 선언 행·열 수와 HWP `HWPTAG_TABLE` 원본 속성값은 source metadata로 보존하고 HTML `data-*`로 출력한다. `row_sizes`는 공식 HWP 5.0 사양의 `HWPUNIT16 Row Size`에 따라 행 높이로 해석하며, 누락·무효일 때는 단일 행 셀 높이로 보강하고 warning을 남긴다.
+
 ### 핵심 관찰
 
 1. 가장 안정적인 경로: `text -> paragraph -> simple table/list/link -> JSON/HTML/Markdown/TXT/SVG`.

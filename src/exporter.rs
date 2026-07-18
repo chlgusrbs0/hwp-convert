@@ -2459,12 +2459,13 @@ fn render_html_table_element(
     resources: &ResourceStore,
     image_asset_prefix: &str,
 ) -> String {
+    let source_metadata = render_html_table_source_metadata(table);
     let border_fill_metadata = render_html_border_fill_metadata(
         table.style.source_border_fill_id,
         table.style.diagonal.as_ref(),
     );
     let mut html = format!(
-        "<table{border_fill_metadata}{}>\n",
+        "<table{source_metadata}{border_fill_metadata}{}>\n",
         render_html_style_attr(&render_html_table_style(
             &table.style,
             resources,
@@ -2496,6 +2497,27 @@ fn render_html_table_element(
 
     html.push_str("</table>\n");
     html
+}
+
+fn render_html_table_source_metadata(table: &Table) -> String {
+    let mut attributes = Vec::new();
+    if let Some(row_count) = table.source_row_count {
+        attributes.push(format!("data-source-row-count=\"{row_count}\""));
+    }
+    if let Some(column_count) = table.source_column_count {
+        attributes.push(format!("data-source-column-count=\"{column_count}\""));
+    }
+    if let Some(raw_attributes) = table.source_record_attributes {
+        attributes.push(format!(
+            "data-source-record-attributes=\"{raw_attributes}\""
+        ));
+    }
+
+    if attributes.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", attributes.join(" "))
+    }
 }
 
 fn render_html_table_row(
@@ -4817,6 +4839,9 @@ mod tests {
             Block::Table(table) => table,
             other => panic!("expected table block, got {other:?}"),
         };
+        table.source_row_count = Some(2);
+        table.source_column_count = Some(2);
+        table.source_record_attributes = Some(6);
         table.rows[0].cells[0].style.source_border_fill_id = Some(7);
         table.rows[0].cells[0].style.diagonal = Some(BorderFillDiagonal {
             raw_attributes: 8,
@@ -4834,7 +4859,9 @@ mod tests {
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
-        assert!(html.contains("<table>"));
+        assert!(html.contains("<table data-source-row-count=\"2\""));
+        assert!(html.contains("data-source-column-count=\"2\""));
+        assert!(html.contains("data-source-record-attributes=\"6\""));
         assert!(html.contains("<tr>"));
         assert!(html.contains("<td data-border-fill-id=\"7\""));
         assert!(html.contains("data-diagonal-attributes=\"8\""));
