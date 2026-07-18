@@ -3379,6 +3379,7 @@ fn extract_hwpx_image_from_pic_xml(
         ]),
         caption: caption.as_ref().map(|(text, _)| text.clone()),
         caption_placement: caption.map(|(_, placement)| placement),
+        caption_layout: None,
         crop,
         width: hwpx_object_dimension_to_px_with_warning(pic_xml, &["width", "w"], "width", context),
         height: hwpx_object_dimension_to_px_with_warning(

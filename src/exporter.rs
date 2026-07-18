@@ -9,12 +9,12 @@ use serde::{Deserialize, Serialize};
 use crate::bridge;
 use crate::cli::{CliArgs, OutputFormat};
 use crate::ir::{
-    Alignment, Block, Border, BorderStyle, Chart, Color, Document, Equation, EquationKind,
-    FillStyle, HeaderFooter, HeaderFooterPlacement, Image, ImageFillMode, Inline, Link, ListInfo,
-    ListKind, MasterPage, Note, NoteId, NoteKind, Paragraph, ParagraphRole, ParagraphStyle,
-    Resource, ResourceId, ResourceStore, Section, Shape, ShapeGeometry, ShapeShadow, Table,
-    TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle, TableZone,
-    TextDecorationStyle, TextRun, TextShadow, TextStyle, UnknownBlock, UnknownInline,
+    Alignment, Block, Border, BorderStyle, CaptionLayout, Chart, Color, Document, Equation,
+    EquationKind, FillStyle, HeaderFooter, HeaderFooterPlacement, Image, ImageFillMode, Inline,
+    Link, ListInfo, ListKind, MasterPage, Note, NoteId, NoteKind, Paragraph, ParagraphRole,
+    ParagraphStyle, Resource, ResourceId, ResourceStore, Section, Shape, ShapeGeometry,
+    ShapeShadow, Table, TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle,
+    TableZone, TextDecorationStyle, TextRun, TextShadow, TextStyle, UnknownBlock, UnknownInline,
     VerticalAlign,
 };
 use crate::util::plain_text;
@@ -2242,27 +2242,82 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
     });
 
     if let Some(caption) = &image.caption {
+        let (figure_metadata, figure_style, caption_style) =
+            render_html_image_caption_layout(image.caption_layout, image.caption_placement);
         let caption = format!(
-            "<figcaption>{}</figcaption>",
+            "<figcaption{caption_style}>{}</figcaption>",
             render_html_fallback_text(caption)
         );
         return match image.caption_placement {
             Some(crate::ir::CaptionPlacement::Top) => {
-                format!("<figure>{caption}{tag}</figure>\n")
+                format!("<figure{figure_metadata}{figure_style}>{caption}{tag}</figure>\n")
             }
-            Some(crate::ir::CaptionPlacement::Left) => format!(
-                "<figure style=\"display: inline-flex; align-items: center; gap: 0.5em\">{caption}{tag}</figure>\n"
-            ),
-            Some(crate::ir::CaptionPlacement::Right) => format!(
-                "<figure style=\"display: inline-flex; align-items: center; gap: 0.5em\">{tag}{caption}</figure>\n"
-            ),
+            Some(crate::ir::CaptionPlacement::Left) => {
+                format!("<figure{figure_metadata}{figure_style}>{caption}{tag}</figure>\n")
+            }
+            Some(crate::ir::CaptionPlacement::Right) => {
+                format!("<figure{figure_metadata}{figure_style}>{tag}{caption}</figure>\n")
+            }
             Some(crate::ir::CaptionPlacement::Bottom) | None => {
-                format!("<figure>{tag}{caption}</figure>\n")
+                format!("<figure{figure_metadata}{figure_style}>{tag}{caption}</figure>\n")
             }
         };
     }
 
     format!("{tag}\n")
+}
+
+fn render_html_image_caption_layout(
+    layout: Option<CaptionLayout>,
+    placement: Option<crate::ir::CaptionPlacement>,
+) -> (String, String, String) {
+    let Some(layout) = layout else {
+        let legacy_style = match placement {
+            Some(crate::ir::CaptionPlacement::Left | crate::ir::CaptionPlacement::Right) => {
+                " style=\"display: inline-flex; align-items: center; gap: 0.5em\"".to_string()
+            }
+            _ => String::new(),
+        };
+        return (String::new(), legacy_style, String::new());
+    };
+
+    let metadata = format!(" data-caption-include-margin=\"{}\"", layout.include_margin);
+    let mut figure_declarations = Vec::new();
+    match placement {
+        Some(crate::ir::CaptionPlacement::Left | crate::ir::CaptionPlacement::Right) => {
+            figure_declarations.push("display: inline-flex".to_string());
+        }
+        _ if layout.spacing.is_some() => {
+            figure_declarations.push("display: inline-flex".to_string());
+            figure_declarations.push("flex-direction: column".to_string());
+        }
+        _ => {}
+    }
+    if let Some(spacing) = layout.spacing {
+        figure_declarations.push(format!("gap: {}px", spacing.0));
+    }
+
+    let mut caption_declarations = Vec::new();
+    if let Some(width) = layout.width {
+        caption_declarations.push(format!("width: {}px", width.0));
+    }
+    if let Some(max_width) = layout.max_width {
+        caption_declarations.push(format!("max-width: {}px", max_width.0));
+    }
+    caption_declarations.push(format!(
+        "align-self: {}",
+        match layout.vertical_align {
+            VerticalAlign::Top => "flex-start",
+            VerticalAlign::Middle => "center",
+            VerticalAlign::Bottom => "flex-end",
+        }
+    ));
+
+    (
+        metadata,
+        render_html_style_attr(&figure_declarations.join("; ")),
+        render_html_style_attr(&caption_declarations.join("; ")),
+    )
 }
 
 fn render_html_cropped_image(
@@ -4423,14 +4478,25 @@ mod tests {
         let mut document = document_with_image_block("image-1", Some("logo"), Some("png"));
         if let Block::Image(image) = &mut document.sections[0].blocks[0] {
             image.caption = Some("first line\nsecond line".to_string());
-            image.caption_placement = Some(crate::ir::CaptionPlacement::Top);
+            image.caption_placement = Some(crate::ir::CaptionPlacement::Left);
+            image.caption_layout = Some(CaptionLayout {
+                vertical_align: VerticalAlign::Bottom,
+                width: Some(LengthPx(50.0)),
+                spacing: Some(LengthPx(4.0)),
+                max_width: Some(LengthPx(100.0)),
+                include_margin: true,
+            });
         }
 
         let html = render_html_document(Path::new("sample.hwpx"), &document);
 
-        assert!(html.contains("<figcaption>first line<br />second line</figcaption>"));
+        assert!(html.contains("data-caption-include-margin=\"true\""));
+        assert!(html.contains("display: inline-flex; gap: 4px"));
+        assert!(html.contains(
+            "<figcaption style=\"width: 50px; max-width: 100px; align-self: flex-end\">first line<br />second line</figcaption>"
+        ));
         assert!(
-            html.find("<figcaption>").expect("caption should render")
+            html.find("<figcaption ").expect("caption should render")
                 < html.find("<img ").expect("image should render")
         );
     }

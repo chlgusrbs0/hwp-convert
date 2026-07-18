@@ -56,7 +56,8 @@ use serde::{Deserialize, Serialize};
 /// v59: added table cell text direction metadata.
 /// v60: added table cell source list attributes and protection metadata.
 /// v61: added structured table border-fill metadata.
-pub const IR_VERSION: u16 = 61;
+/// v62: added structured image caption layout metadata.
+pub const IR_VERSION: u16 = 62;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1068,6 +1069,8 @@ pub struct Image {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption_placement: Option<CaptionPlacement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption_layout: Option<CaptionLayout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crop: Option<ImageCrop>,
     /// Display hint in px until Layout IR defines document-space units.
     pub width: Option<LengthPx>,
@@ -1121,6 +1124,18 @@ pub enum CaptionPlacement {
     Right,
     Top,
     Bottom,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct CaptionLayout {
+    pub vertical_align: VerticalAlign,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<LengthPx>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spacing: Option<LengthPx>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_width: Option<LengthPx>,
+    pub include_margin: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -26,7 +26,7 @@ use rhwp::model::paragraph::{
 };
 use rhwp::model::shape::{
     Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection,
-    CommonObjAttr as RhwpCommonObjAttr, ShapeObject,
+    CaptionVertAlign as RhwpCaptionVertAlign, CommonObjAttr as RhwpCommonObjAttr, ShapeObject,
 };
 use rhwp::model::style::{
     Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, BorderLine as RhwpBorderLine,
@@ -43,10 +43,10 @@ use rhwp::renderer::{NumberFormat as RhwpNumberFormat, format_number as format_r
 use crate::hwpx::{self, HwpxTextFallbackSource, InputKind};
 use crate::ir::{
     BinaryResource, BinaryResourceKind, Block, Border, BorderFillDiagonal, BorderStyle,
-    CaptionPlacement, Color, ColumnDirection as IrColumnDirection, ColumnLayout, ColumnLayoutKind,
-    ConversionWarning, Document, DocumentControl, DocumentField, Equation, EquationKind, FieldKind,
-    FillStyle, FontFallback, GradientColor, HeaderFooter, HeaderFooterPlacement,
-    HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
+    CaptionLayout, CaptionPlacement, Color, ColumnDirection as IrColumnDirection, ColumnLayout,
+    ColumnLayoutKind, ConversionWarning, Document, DocumentControl, DocumentField, Equation,
+    EquationKind, FieldKind, FillStyle, FontFallback, GradientColor, HeaderFooter,
+    HeaderFooterPlacement, HorizontalObjectAlignment, HorizontalRelativeTo, Image, ImageCrop,
     ImageEffect as IrImageEffect, ImageFillMode, ImagePlacement, ImageResource, ImageTextWrap,
     Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, ListMarkerLayout, MasterPage,
     NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
@@ -1712,6 +1712,30 @@ impl<'a> BridgeContext<'a> {
                 RhwpCaptionDirection::Top => CaptionPlacement::Top,
                 RhwpCaptionDirection::Bottom => CaptionPlacement::Bottom,
             });
+        let caption_layout = picture.caption.as_ref().map(|caption| {
+            if caption.spacing < 0 {
+                self.add_warning_once(&format!(
+                    "rHWP image caption spacing was negative ({} HWPUNIT); hwp-convert preserved the remaining caption layout and omitted the invalid spacing.",
+                    caption.spacing
+                ));
+            }
+            CaptionLayout {
+                vertical_align: match caption.vert_align {
+                    RhwpCaptionVertAlign::Top => VerticalAlign::Top,
+                    RhwpCaptionVertAlign::Center => VerticalAlign::Middle,
+                    RhwpCaptionVertAlign::Bottom => VerticalAlign::Bottom,
+                },
+                width: hwp_units_to_px_option(caption.width),
+                spacing: i16_hwp_units_to_px_option(caption.spacing),
+                max_width: hwp_units_to_px_option(caption.max_width),
+                include_margin: caption.include_margin,
+            }
+        });
+        if caption_layout.is_some() {
+            self.add_warning_once(
+                "rHWP image caption layout was preserved in Document IR; HTML approximates it while other semantic exporters retain caption text without layout.",
+            );
+        }
 
         match self.ensure_image_resource(picture.image_attr.bin_data_id) {
             Some(resource_id) => Block::Image(Image {
@@ -1721,6 +1745,7 @@ impl<'a> BridgeContext<'a> {
                     picture.caption.as_ref().map(|caption| &caption.paragraphs),
                 ),
                 caption_placement,
+                caption_layout,
                 crop: map_picture_crop(picture),
                 width: hwp_units_to_px_option(picture.common.width),
                 height: hwp_units_to_px_option(picture.common.height),
@@ -5561,6 +5586,11 @@ mod tests {
             },
             caption: Some(RhwpCaption {
                 direction: RhwpCaptionDirection::Left,
+                vert_align: RhwpCaptionVertAlign::Bottom,
+                width: 3750,
+                spacing: 300,
+                max_width: 7500,
+                include_margin: true,
                 paragraphs: vec![RhwpParagraph {
                     controls: vec![Control::Field(RhwpField {
                         field_type: RhwpFieldType::ClickHere,
@@ -5569,7 +5599,6 @@ mod tests {
                     })],
                     ..Default::default()
                 }],
-                ..Default::default()
             }),
             ..Default::default()
         };
@@ -5595,6 +5624,16 @@ mod tests {
             Block::Image(image) => {
                 assert_eq!(image.caption.as_deref(), Some("caption field"));
                 assert_eq!(image.caption_placement, Some(CaptionPlacement::Left));
+                assert_eq!(
+                    image.caption_layout,
+                    Some(CaptionLayout {
+                        vertical_align: VerticalAlign::Bottom,
+                        width: Some(LengthPx(50.0)),
+                        spacing: Some(LengthPx(4.0)),
+                        max_width: Some(LengthPx(100.0)),
+                        include_margin: true,
+                    })
+                );
             }
             other => panic!("expected image block, got {other:?}"),
         }
