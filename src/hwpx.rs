@@ -3163,6 +3163,8 @@ fn extract_hwpx_shape_from_xml(
 
     Shape {
         kind: hwpx_shape_kind(tag_name),
+        source_common_instance_id: None,
+        source_component_instance_id: None,
         fallback_text,
         description,
         border: hwpx_object_border(shape_xml, "shape", context),
@@ -3382,6 +3384,8 @@ fn extract_hwpx_image_from_pic_xml(
 
     Some(Image {
         resource_id,
+        source_common_instance_id: None,
+        source_component_instance_id: None,
         alt: first_non_empty_string([
             decoded_root_xml_attribute_value_any(pic_xml, HWPX_DESCRIPTION_ATTRIBUTES),
             first_hwpx_direct_child_element_text(

@@ -1725,6 +1725,10 @@ impl<'a> BridgeContext<'a> {
         match self.ensure_image_resource(picture.image_attr.bin_data_id) {
             Some(resource_id) => Block::Image(Image {
                 resource_id,
+                source_common_instance_id: (picture.common.instance_id != 0)
+                    .then_some(picture.common.instance_id),
+                source_component_instance_id: (picture.instance_id != 0)
+                    .then_some(picture.instance_id),
                 alt: non_empty_string(&picture.common.description),
                 caption,
                 caption_content,
@@ -1961,6 +1965,9 @@ impl<'a> BridgeContext<'a> {
 
         Shape {
             kind,
+            source_common_instance_id: (common.instance_id != 0).then_some(common.instance_id),
+            source_component_instance_id: drawing
+                .and_then(|drawing| (drawing.inst_id != 0).then_some(drawing.inst_id)),
             fallback_text: if fallback_parts.is_empty() {
                 Some("[shape]".to_string())
             } else {
@@ -6149,6 +6156,11 @@ mod tests {
         let rectangle = ShapeObject::Rectangle(RhwpRectangleShape {
             common: rhwp::model::shape::CommonObjAttr {
                 description: "group rect".to_string(),
+                instance_id: 301,
+                ..Default::default()
+            },
+            drawing: RhwpDrawingObjAttr {
+                inst_id: 101,
                 ..Default::default()
             },
             ..Default::default()
@@ -6179,8 +6191,10 @@ mod tests {
             },
             common: rhwp::model::shape::CommonObjAttr {
                 description: "group image".to_string(),
+                instance_id: 202,
                 ..Default::default()
             },
+            instance_id: 404,
             ..Default::default()
         }));
         let group = ShapeObject::Group(RhwpGroupShape {
@@ -6244,6 +6258,8 @@ mod tests {
             Block::Shape(shape)
                 if shape.kind == ShapeKind::Rectangle
                     && shape.fallback_text.as_deref() == Some("group rect")
+                    && shape.source_common_instance_id == Some(301)
+                    && shape.source_component_instance_id == Some(101)
         ));
         assert!(matches!(
             &group.children[1],
@@ -6272,6 +6288,8 @@ mod tests {
             Block::Image(image)
                 if image.resource_id.as_str() == "image-11"
                     && image.alt.as_deref() == Some("group image")
+                    && image.source_common_instance_id == Some(202)
+                    && image.source_component_instance_id == Some(404)
         ));
         let caption = group.caption.as_ref().expect("group caption");
         assert_eq!(caption.placement, CaptionPlacement::Bottom);

@@ -75,7 +75,8 @@ use serde::{Deserialize, Serialize};
 /// v78: added structured image source-transform metadata.
 /// v79: added image and shape border source metadata.
 /// v80: distinguished arc and curve shape kinds.
-pub const IR_VERSION: u16 = 80;
+/// v81: added source instance identifiers for images and shapes.
+pub const IR_VERSION: u16 = 81;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1211,6 +1212,10 @@ mod base64_bytes {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct Image {
     pub resource_id: ResourceId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_common_instance_id: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_component_instance_id: Option<u32>,
     pub alt: Option<String>,
     pub caption: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1423,6 +1428,10 @@ pub enum EquationKind {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct Shape {
     pub kind: ShapeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_common_instance_id: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_component_instance_id: Option<u32>,
     pub fallback_text: Option<String>,
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

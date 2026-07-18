@@ -1620,29 +1620,53 @@ fn render_html_shape_element(
         declarations.push(format!("margin-top: {}px", offset_y.0));
     }
     let transform_metadata = render_html_shape_transform_metadata(shape);
+    let source_metadata = render_html_object_source_metadata(
+        shape.source_common_instance_id,
+        shape.source_component_instance_id,
+    );
     let line_metadata = render_html_shape_line_metadata(shape);
     let border_metadata = render_html_object_border_metadata(shape.border_metadata.as_ref());
     let style = render_html_style_attr(&declarations.join("; "));
     if !shape.children.is_empty() {
         let content = render_html_blocks(&shape.children, resources, image_asset_prefix);
         format!(
-            "<div class=\"shape-group\"{transform_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
+            "<div class=\"shape-group\"{source_metadata}{transform_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
         )
     } else if !shape.content.is_empty() {
         let content = render_html_blocks(&shape.content, resources, image_asset_prefix);
         format!(
-            "<div class=\"shape-placeholder shape-content\"{transform_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
+            "<div class=\"shape-placeholder shape-content\"{source_metadata}{transform_metadata}{line_metadata}{border_metadata}{style}>\n{content}</div>\n"
         )
     } else {
         let content = render_html_fallback_text(&shape_display_text(shape));
         format!(
-            "<p><span class=\"shape-placeholder\"{transform_metadata}{line_metadata}{border_metadata}{style}>{content}</span></p>\n"
+            "<p><span class=\"shape-placeholder\"{source_metadata}{transform_metadata}{line_metadata}{border_metadata}{style}>{content}</span></p>\n"
         )
     }
 }
 
 fn render_html_shape_transform_metadata(shape: &Shape) -> String {
     render_html_object_transform_metadata(shape.transform.as_ref())
+}
+
+fn render_html_object_source_metadata(
+    common_instance_id: Option<u32>,
+    component_instance_id: Option<u32>,
+) -> String {
+    let mut attributes = Vec::new();
+    if let Some(instance_id) = common_instance_id {
+        attributes.push(format!("data-source-common-instance-id=\"{instance_id}\""));
+    }
+    if let Some(instance_id) = component_instance_id {
+        attributes.push(format!(
+            "data-source-component-instance-id=\"{instance_id}\""
+        ));
+    }
+    if attributes.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", attributes.join(" "))
+    }
 }
 
 fn render_html_object_transform_metadata(transform: Option<&ShapeTransform>) -> String {
@@ -2557,8 +2581,12 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
         declarations.push(format!("transform: {transform}"));
     }
     let transform_metadata = render_html_object_transform_metadata(image.transform.as_ref());
+    let source_metadata = render_html_object_source_metadata(
+        image.source_common_instance_id,
+        image.source_component_instance_id,
+    );
     let border_metadata = render_html_object_border_metadata(image.border_metadata.as_ref());
-    let object_metadata = format!("{transform_metadata}{border_metadata}");
+    let object_metadata = format!("{source_metadata}{transform_metadata}{border_metadata}");
     let tag = render_html_cropped_image(image, &src, &alt, &declarations, &object_metadata)
         .unwrap_or_else(|| {
             let style = render_html_style_attr(&declarations.join("; "));
@@ -6107,6 +6135,8 @@ mod tests {
             children: vec![
                 Block::Shape(Shape {
                     kind: ShapeKind::Rectangle,
+                    source_common_instance_id: Some(31),
+                    source_component_instance_id: Some(11),
                     fallback_text: Some("inner shape".to_string()),
                     ..Default::default()
                 }),
@@ -6150,6 +6180,8 @@ mod tests {
         assert!(html.contains("class=\"shape-group\""));
         assert!(html.contains("width: 120px"));
         assert!(html.contains("inner shape"));
+        assert!(html.contains("data-source-common-instance-id=\"31\""));
+        assert!(html.contains("data-source-component-instance-id=\"11\""));
         assert!(html.contains("data-line-started-right-or-bottom=\"true\""));
         assert!(html.contains("data-connector-kind=\"stroke_both\""));
         assert!(html.contains("data-connector-start-subject-id=\"11\""));
