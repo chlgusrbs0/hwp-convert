@@ -27,7 +27,8 @@ use rhwp::model::paragraph::{
 };
 use rhwp::model::shape::{
     Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection,
-    CaptionVertAlign as RhwpCaptionVertAlign, CommonObjAttr as RhwpCommonObjAttr, ShapeObject,
+    CaptionVertAlign as RhwpCaptionVertAlign, CommonObjAttr as RhwpCommonObjAttr,
+    LinkLineType as RhwpLinkLineType, ShapeObject,
 };
 use rhwp::model::style::{
     Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, BorderLine as RhwpBorderLine,
@@ -55,12 +56,13 @@ use crate::ir::{
     NumberingKind, ObjectCaption, ObjectPlacement, PageBinding, PageBorderFillLayout, PageLayout,
     Paragraph, ParagraphBreakKind, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent,
     RawSectionRecord, Resource, ResourceId, ResourceStore, RubyAnnotation, ScriptTextStyle,
-    Section, SectionLayout, Shape, ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow,
-    ShapeTransform, SourceStyleDefinition, SourceStyleKind, Spacing, StyleSheet, TabAlignment,
-    TabDefinition, TabStop, Table, TableCell, TableCellStyle, TableCellTextDirection,
-    TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill, TextDecorationStyle, TextRun,
-    TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
-    VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
+    Section, SectionLayout, Shape, ShapeConnector, ShapeConnectorKind, ShapeConnectorPoint,
+    ShapeGeometry, ShapeKind, ShapeLineMetadata, ShapePoint, ShapeShadow, ShapeTransform,
+    SourceStyleDefinition, SourceStyleKind, Spacing, StyleSheet, TabAlignment, TabDefinition,
+    TabStop, Table, TableCell, TableCellStyle, TableCellTextDirection, TablePageBreak, TableRow,
+    TableStyle, TableZone, TextBorderFill, TextDecorationStyle, TextRun, TextScript, TextShadow,
+    TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
+    VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -1884,12 +1886,22 @@ impl<'a> BridgeContext<'a> {
             .map(|text_box| self.map_blocks_from_paragraphs(&text_box.paragraphs, 0))
             .unwrap_or_default();
         let transform = self.map_shape_transform(shape.shape_attr());
+        let line_metadata = map_shape_line_metadata(shape).map(Box::new);
         self.add_warning_once(
             "rhwp shape geometry and object placement were preserved in Shape IR; semantic exporters approximate visual layout.",
         );
         if shadow.is_some() {
             self.add_warning_once(
                 "rhwp shape shadow type, color, offsets, and transparency were preserved in Shape IR; HTML approximates them with CSS box-shadow while nonvisual exporters do not render the effect.",
+            );
+        }
+        if line_metadata
+            .as_ref()
+            .and_then(|line| line.connector.as_ref())
+            .is_some()
+        {
+            self.add_warning_once(
+                "rhwp line connector type, subject references, and control points were preserved in ShapeLineMetadata IR and HTML metadata; semantic exporters do not bind connector endpoints to positioned shapes.",
             );
         }
         if let Some(drawing_details) = drawing.and_then(shape_unmodeled_presentation_details) {
@@ -1959,6 +1971,7 @@ impl<'a> BridgeContext<'a> {
             offset_y: hwp_units_to_px_option(common.vertical_offset),
             geometry: map_shape_geometry(shape),
             transform,
+            line_metadata,
             placement: map_object_placement(common),
             children: Vec::new(),
             content,
@@ -3603,6 +3616,43 @@ fn map_shape_geometry(shape: &ShapeObject) -> Option<ShapeGeometry> {
     })
 }
 
+fn map_shape_line_metadata(shape: &ShapeObject) -> Option<ShapeLineMetadata> {
+    let ShapeObject::Line(line) = shape else {
+        return None;
+    };
+    Some(ShapeLineMetadata {
+        started_right_or_bottom: line.started_right_or_bottom,
+        connector: line.connector.as_ref().map(|connector| ShapeConnector {
+            kind: match connector.link_type {
+                RhwpLinkLineType::StraightNoArrow => ShapeConnectorKind::StraightNoArrow,
+                RhwpLinkLineType::StraightOneWay => ShapeConnectorKind::StraightOneWay,
+                RhwpLinkLineType::StraightBoth => ShapeConnectorKind::StraightBoth,
+                RhwpLinkLineType::StrokeNoArrow => ShapeConnectorKind::StrokeNoArrow,
+                RhwpLinkLineType::StrokeOneWay => ShapeConnectorKind::StrokeOneWay,
+                RhwpLinkLineType::StrokeBoth => ShapeConnectorKind::StrokeBoth,
+                RhwpLinkLineType::ArcNoArrow => ShapeConnectorKind::ArcNoArrow,
+                RhwpLinkLineType::ArcOneWay => ShapeConnectorKind::ArcOneWay,
+                RhwpLinkLineType::ArcBoth => ShapeConnectorKind::ArcBoth,
+            },
+            start_subject_id: connector.start_subject_id,
+            start_subject_index: connector.start_subject_index,
+            end_subject_id: connector.end_subject_id,
+            end_subject_index: connector.end_subject_index,
+            control_points: connector
+                .control_points
+                .iter()
+                .map(|point| ShapeConnectorPoint {
+                    point: map_shape_point(rhwp::model::Point {
+                        x: point.x,
+                        y: point.y,
+                    }),
+                    point_type: point.point_type,
+                })
+                .collect(),
+        }),
+    })
+}
+
 fn i16_hwp_units_to_px_option(value: i16) -> Option<LengthPx> {
     if value <= 0 {
         None
@@ -4441,9 +4491,11 @@ mod tests {
     };
     use rhwp::model::shape::{
         Caption as RhwpCaption, CaptionDirection as RhwpCaptionDirection,
-        CommonObjAttr as RhwpCommonObjAttr, DrawingObjAttr as RhwpDrawingObjAttr,
-        GroupShape as RhwpGroupShape, RectangleShape as RhwpRectangleShape,
-        ShapeComponentAttr as RhwpShapeComponentAttr, TextBox as RhwpTextBox,
+        CommonObjAttr as RhwpCommonObjAttr, ConnectorControlPoint as RhwpConnectorControlPoint,
+        ConnectorData as RhwpConnectorData, DrawingObjAttr as RhwpDrawingObjAttr,
+        GroupShape as RhwpGroupShape, LineShape as RhwpLineShape, LinkLineType as RhwpLinkLineType,
+        RectangleShape as RhwpRectangleShape, ShapeComponentAttr as RhwpShapeComponentAttr,
+        TextBox as RhwpTextBox,
     };
     use rhwp::model::style::{
         Alignment as RhwpAlignment, BorderFill as RhwpBorderFill, Bullet as RhwpBullet,
@@ -5991,6 +6043,25 @@ mod tests {
             },
             ..Default::default()
         });
+        let connector = ShapeObject::Line(RhwpLineShape {
+            start: rhwp::model::Point { x: 0, y: 0 },
+            end: rhwp::model::Point { x: 1500, y: 750 },
+            started_right_or_bottom: true,
+            connector: Some(RhwpConnectorData {
+                link_type: RhwpLinkLineType::ArcBoth,
+                start_subject_id: 101,
+                start_subject_index: 1,
+                end_subject_id: 202,
+                end_subject_index: 2,
+                control_points: vec![RhwpConnectorControlPoint {
+                    x: 300,
+                    y: 450,
+                    point_type: 7,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
         let picture = ShapeObject::Picture(Box::new(Picture {
             image_attr: ImageAttr {
                 bin_data_id: 11,
@@ -6014,7 +6085,7 @@ mod tests {
                 rotation_angle: 15,
                 ..Default::default()
             },
-            children: vec![rectangle, picture],
+            children: vec![rectangle, connector, picture],
             caption: Some(RhwpCaption {
                 direction: RhwpCaptionDirection::Bottom,
                 vert_align: RhwpCaptionVertAlign::Center,
@@ -6057,7 +6128,7 @@ mod tests {
         assert_eq!(group.height, Some(LengthPx(50.0)));
         assert_eq!(group.rotation_degrees, Some(15.0));
         assert_eq!(group.placement.map(|placement| placement.z_order), Some(4));
-        assert_eq!(group.children.len(), 2);
+        assert_eq!(group.children.len(), 3);
         assert!(matches!(
             &group.children[0],
             Block::Shape(shape)
@@ -6066,6 +6137,28 @@ mod tests {
         ));
         assert!(matches!(
             &group.children[1],
+            Block::Shape(shape)
+                if shape.kind == ShapeKind::Line
+                    && shape.line_metadata == Some(Box::new(ShapeLineMetadata {
+                        started_right_or_bottom: true,
+                        connector: Some(ShapeConnector {
+                            kind: ShapeConnectorKind::ArcBoth,
+                            start_subject_id: 101,
+                            start_subject_index: 1,
+                            end_subject_id: 202,
+                            end_subject_index: 2,
+                            control_points: vec![ShapeConnectorPoint {
+                                point: ShapePoint {
+                                    x: LengthPx(4.0),
+                                    y: LengthPx(6.0),
+                                },
+                                point_type: 7,
+                            }],
+                        }),
+                    }))
+        ));
+        assert!(matches!(
+            &group.children[2],
             Block::Image(image)
                 if image.resource_id.as_str() == "image-11"
                     && image.alt.as_deref() == Some("group image")
@@ -6100,6 +6193,11 @@ mod tests {
             warning
                 .message
                 .contains("shape caption structure and layout")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("line connector type, subject references, and control points")
         }));
     }
 

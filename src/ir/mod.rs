@@ -69,7 +69,8 @@ use serde::{Deserialize, Serialize};
 /// v72: added paragraph line-spacing mode metadata.
 /// v73: preserved distribute and split paragraph alignments.
 /// v74: added structured shape source-transform metadata.
-pub const IR_VERSION: u16 = 74;
+/// v75: added structured shape line-connector metadata.
+pub const IR_VERSION: u16 = 75;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1446,6 +1447,8 @@ pub struct Shape {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<ShapeTransform>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_metadata: Option<Box<ShapeLineMetadata>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<ObjectPlacement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<Block>,
@@ -1453,6 +1456,59 @@ pub struct Shape {
     pub content: Vec<Block>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption: Option<ObjectCaption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ShapeLineMetadata {
+    pub started_right_or_bottom: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connector: Option<ShapeConnector>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ShapeConnector {
+    pub kind: ShapeConnectorKind,
+    pub start_subject_id: u32,
+    pub start_subject_index: u32,
+    pub end_subject_id: u32,
+    pub end_subject_index: u32,
+    pub control_points: Vec<ShapeConnectorPoint>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShapeConnectorKind {
+    StraightNoArrow,
+    StraightOneWay,
+    StraightBoth,
+    StrokeNoArrow,
+    StrokeOneWay,
+    StrokeBoth,
+    ArcNoArrow,
+    ArcOneWay,
+    ArcBoth,
+}
+
+impl ShapeConnectorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StraightNoArrow => "straight_no_arrow",
+            Self::StraightOneWay => "straight_one_way",
+            Self::StraightBoth => "straight_both",
+            Self::StrokeNoArrow => "stroke_no_arrow",
+            Self::StrokeOneWay => "stroke_one_way",
+            Self::StrokeBoth => "stroke_both",
+            Self::ArcNoArrow => "arc_no_arrow",
+            Self::ArcOneWay => "arc_one_way",
+            Self::ArcBoth => "arc_both",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ShapeConnectorPoint {
+    pub point: ShapePoint,
+    pub point_type: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

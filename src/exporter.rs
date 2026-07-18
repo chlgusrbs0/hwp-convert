@@ -1601,19 +1601,22 @@ fn render_html_shape_element(
         declarations.push(format!("margin-top: {}px", offset_y.0));
     }
     let transform_metadata = render_html_shape_transform_metadata(shape);
+    let line_metadata = render_html_shape_line_metadata(shape);
     let style = render_html_style_attr(&declarations.join("; "));
     if !shape.children.is_empty() {
         let content = render_html_blocks(&shape.children, resources, image_asset_prefix);
-        format!("<div class=\"shape-group\"{transform_metadata}{style}>\n{content}</div>\n")
+        format!(
+            "<div class=\"shape-group\"{transform_metadata}{line_metadata}{style}>\n{content}</div>\n"
+        )
     } else if !shape.content.is_empty() {
         let content = render_html_blocks(&shape.content, resources, image_asset_prefix);
         format!(
-            "<div class=\"shape-placeholder shape-content\"{transform_metadata}{style}>\n{content}</div>\n"
+            "<div class=\"shape-placeholder shape-content\"{transform_metadata}{line_metadata}{style}>\n{content}</div>\n"
         )
     } else {
         let content = render_html_fallback_text(&shape_display_text(shape));
         format!(
-            "<p><span class=\"shape-placeholder\"{transform_metadata}{style}>{content}</span></p>\n"
+            "<p><span class=\"shape-placeholder\"{transform_metadata}{line_metadata}{style}>{content}</span></p>\n"
         )
     }
 }
@@ -1659,6 +1662,54 @@ fn render_html_shape_transform_metadata(shape: &Shape) -> String {
     } else {
         format!(" {}", attributes.join(" "))
     }
+}
+
+fn render_html_shape_line_metadata(shape: &Shape) -> String {
+    let Some(line) = &shape.line_metadata else {
+        return String::new();
+    };
+    let mut attributes = vec![format!(
+        "data-line-started-right-or-bottom=\"{}\"",
+        line.started_right_or_bottom
+    )];
+    if let Some(connector) = &line.connector {
+        attributes.push(format!(
+            "data-connector-kind=\"{}\"",
+            connector.kind.as_str()
+        ));
+        attributes.push(format!(
+            "data-connector-start-subject-id=\"{}\"",
+            connector.start_subject_id
+        ));
+        attributes.push(format!(
+            "data-connector-start-subject-index=\"{}\"",
+            connector.start_subject_index
+        ));
+        attributes.push(format!(
+            "data-connector-end-subject-id=\"{}\"",
+            connector.end_subject_id
+        ));
+        attributes.push(format!(
+            "data-connector-end-subject-index=\"{}\"",
+            connector.end_subject_index
+        ));
+        let points = connector
+            .control_points
+            .iter()
+            .map(|point| {
+                format!(
+                    "{},{},{}",
+                    point.point.x.0, point.point.y.0, point.point_type
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(";");
+        if !points.is_empty() {
+            attributes.push(format!("data-connector-control-points=\"{points}\""));
+        }
+    }
+
+    format!(" {}", attributes.join(" "))
 }
 
 fn render_html_chart(chart: &Chart) -> String {
@@ -3774,7 +3825,8 @@ mod tests {
         Image, ImageCrop, ImageResource, Indent, LengthPt, LengthPx, LineSpacingMode, Link,
         ListInfo, ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId, NoteKind,
         NoteStore, ObjectCaption, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource,
-        ResourceId, ResourceStore, RubyAnnotation, Section, Shape, ShapeKind, ShapePoint,
+        ResourceId, ResourceStore, RubyAnnotation, Section, Shape, ShapeConnector,
+        ShapeConnectorKind, ShapeConnectorPoint, ShapeKind, ShapeLineMetadata, ShapePoint,
         ShapeTransform, Spacing, StyleSheet, Table, TableCaption, TableCell, TableCellStyle,
         TableCellTextDirection, TableRow, TableStyle, TextBorderFill, TextRun, TextShadow,
         TextStyle, UnknownInline, WarningCode,
@@ -5961,6 +6013,28 @@ mod tests {
                     fallback_text: Some("inner shape".to_string()),
                     ..Default::default()
                 }),
+                Block::Shape(Shape {
+                    kind: ShapeKind::Line,
+                    fallback_text: Some("connector".to_string()),
+                    line_metadata: Some(Box::new(ShapeLineMetadata {
+                        started_right_or_bottom: true,
+                        connector: Some(ShapeConnector {
+                            kind: ShapeConnectorKind::StrokeBoth,
+                            start_subject_id: 11,
+                            start_subject_index: 1,
+                            end_subject_id: 22,
+                            end_subject_index: 2,
+                            control_points: vec![ShapeConnectorPoint {
+                                point: ShapePoint {
+                                    x: LengthPx(4.0),
+                                    y: LengthPx(8.0),
+                                },
+                                point_type: 3,
+                            }],
+                        }),
+                    })),
+                    ..Default::default()
+                }),
                 Block::Unknown(UnknownBlock {
                     kind: "group_child".to_string(),
                     fallback_text: Some("inner fallback".to_string()),
@@ -5979,6 +6053,10 @@ mod tests {
         assert!(html.contains("class=\"shape-group\""));
         assert!(html.contains("width: 120px"));
         assert!(html.contains("inner shape"));
+        assert!(html.contains("data-line-started-right-or-bottom=\"true\""));
+        assert!(html.contains("data-connector-kind=\"stroke_both\""));
+        assert!(html.contains("data-connector-start-subject-id=\"11\""));
+        assert!(html.contains("data-connector-control-points=\"4,8,3\""));
         assert!(html.contains("inner fallback"));
         assert!(markdown.contains("inner shape"));
         assert!(markdown.contains("inner fallback"));
