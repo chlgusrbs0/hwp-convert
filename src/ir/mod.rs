@@ -82,7 +82,8 @@ use serde::{Deserialize, Serialize};
 /// v85: added equation source instance, object placement, and raw control data.
 /// v86: added opaque common-object control extension bytes.
 /// v87: added source shape-component metadata and raw rendering bytes.
-pub const IR_VERSION: u16 = 87;
+/// v88: added raw table control and table-record extension bytes.
+pub const IR_VERSION: u16 = 88;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1717,6 +1718,10 @@ pub struct Table {
     pub source_column_count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_record_attributes: Option<u32>,
+    #[serde(default, with = "base64_bytes", skip_serializing_if = "Vec::is_empty")]
+    pub raw_control_data: Vec<u8>,
+    #[serde(default, with = "base64_bytes", skip_serializing_if = "Vec::is_empty")]
+    pub raw_record_extension: Vec<u8>,
     #[serde(default)]
     pub zones: Vec<TableZone>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2155,6 +2160,8 @@ mod tests {
         assert_eq!(table.source_row_count, None);
         assert_eq!(table.source_column_count, None);
         assert_eq!(table.source_record_attributes, None);
+        assert!(table.raw_control_data.is_empty());
+        assert!(table.raw_record_extension.is_empty());
         assert!(table.zones.is_empty());
         assert_eq!(table.caption, None);
     }

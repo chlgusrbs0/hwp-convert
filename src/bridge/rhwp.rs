@@ -1524,6 +1524,8 @@ impl<'a> BridgeContext<'a> {
             source_column_count: Some(u32::from(table.col_count)),
             source_record_attributes: (self.input_kind == InputKind::Hwp)
                 .then_some(table.raw_table_record_attr),
+            raw_control_data: table.raw_ctrl_data.clone(),
+            raw_record_extension: table.raw_table_record_extra.clone(),
             zones,
             caption,
         }
@@ -4643,6 +4645,8 @@ mod tests {
             cell_spacing: 75,
             row_sizes: vec![1500],
             raw_table_record_attr: 6,
+            raw_ctrl_data: vec![1, 2, 3],
+            raw_table_record_extra: vec![4, 5, 6],
             zones: vec![rhwp::model::table::TableZone {
                 start_col: 0,
                 start_row: 0,
@@ -4714,6 +4718,11 @@ mod tests {
         assert_eq!(table.source_row_count, Some(1));
         assert_eq!(table.source_column_count, Some(1));
         assert_eq!(table.source_record_attributes, Some(6));
+        assert_eq!(table.raw_control_data, vec![1, 2, 3]);
+        assert_eq!(table.raw_record_extension, vec![4, 5, 6]);
+        let table_json = serde_json::to_string(table).expect("serialize table");
+        assert!(table_json.contains(r#""raw_control_data":"AQID""#));
+        assert!(table_json.contains(r#""raw_record_extension":"BAUG""#));
         assert_eq!(table.style.margin_left, Some(LengthPx(100.0 / 75.0)));
         assert_eq!(table.style.margin_right, Some(LengthPx(200.0 / 75.0)));
         assert_eq!(table.style.margin_top, Some(LengthPx(4.0)));
