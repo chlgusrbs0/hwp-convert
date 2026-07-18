@@ -49,17 +49,17 @@ use crate::ir::{
     Equation, EquationKind, FieldKind, FillStyle, FontFallback, FormControlKind, GradientColor,
     HeaderFooter, HeaderFooterPlacement, HorizontalObjectAlignment, HorizontalRelativeTo, Image,
     ImageCrop, ImageEffect as IrImageEffect, ImageFillMode, ImagePlacement, ImageResource,
-    ImageTextWrap, Inline, LengthPt, LengthPx, Link, ListInfo, ListKind, ListMarkerLayout,
-    MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind, NoteLayout, NoteStore,
-    NumberingKind, ObjectCaption, ObjectPlacement, PageBinding, PageBorderFillLayout, PageLayout,
-    Paragraph, ParagraphBreakKind, ParagraphRole, ParagraphStyle, ParagraphStyleId, Percent,
-    RawSectionRecord, Resource, ResourceId, ResourceStore, RubyAnnotation, ScriptTextStyle,
-    Section, SectionLayout, Shape, ShapeGeometry, ShapeKind, ShapePoint, ShapeShadow,
-    SourceStyleDefinition, SourceStyleKind, Spacing, StyleSheet, TabAlignment, TabDefinition,
-    TabStop, Table, TableCell, TableCellStyle, TableCellTextDirection, TablePageBreak, TableRow,
-    TableStyle, TableZone, TextBorderFill, TextDecorationStyle, TextRun, TextScript, TextShadow,
-    TextStyle, TextStyleId, UnknownInline, VerticalAlign, VerticalObjectAlignment,
-    VerticalRelativeTo, WarningCode,
+    ImageTextWrap, Inline, LengthPt, LengthPx, LineSpacingMode, Link, ListInfo, ListKind,
+    ListMarkerLayout, MasterPage, NamedParagraphStyle, NamedTextStyle, Note, NoteId, NoteKind,
+    NoteLayout, NoteStore, NumberingKind, ObjectCaption, ObjectPlacement, PageBinding,
+    PageBorderFillLayout, PageLayout, Paragraph, ParagraphBreakKind, ParagraphRole, ParagraphStyle,
+    ParagraphStyleId, Percent, RawSectionRecord, Resource, ResourceId, ResourceStore,
+    RubyAnnotation, ScriptTextStyle, Section, SectionLayout, Shape, ShapeGeometry, ShapeKind,
+    ShapePoint, ShapeShadow, SourceStyleDefinition, SourceStyleKind, Spacing, StyleSheet,
+    TabAlignment, TabDefinition, TabStop, Table, TableCell, TableCellStyle, TableCellTextDirection,
+    TablePageBreak, TableRow, TableStyle, TableZone, TextBorderFill, TextDecorationStyle, TextRun,
+    TextScript, TextShadow, TextStyle, TextStyleId, UnknownInline, VerticalAlign,
+    VerticalObjectAlignment, VerticalRelativeTo, WarningCode,
 };
 
 use super::hwpx_reconcile;
@@ -2345,7 +2345,7 @@ impl<'a> BridgeContext<'a> {
             rhwp::model::style::LineSpacingType::SpaceOnly
             | rhwp::model::style::LineSpacingType::Minimum => {
                 self.add_warning_once(&format!(
-                    "rhwp paragraph line spacing mode {:?} is not directly modeled; hwp-convert approximated its numeric value as a fixed point line height.",
+                    "rhwp paragraph line spacing mode {:?} was preserved in ParagraphStyle IR; HTML approximates its numeric value as a fixed point line height.",
                     para_shape.line_spacing_type
                 ));
             }
@@ -2387,6 +2387,12 @@ impl<'a> BridgeContext<'a> {
                     }
                     _ => None,
                 },
+                line_mode: Some(match para_shape.line_spacing_type {
+                    rhwp::model::style::LineSpacingType::Percent => LineSpacingMode::Percent,
+                    rhwp::model::style::LineSpacingType::Fixed => LineSpacingMode::Fixed,
+                    rhwp::model::style::LineSpacingType::SpaceOnly => LineSpacingMode::SpaceOnly,
+                    rhwp::model::style::LineSpacingType::Minimum => LineSpacingMode::Minimum,
+                }),
             },
             indent: crate::ir::Indent {
                 left_pt: i32_hwp_units_to_pt_option(para_shape.margin_left),
@@ -6774,6 +6780,10 @@ mod tests {
             panic!("expected paragraph block");
         };
         assert_eq!(paragraph.style.spacing.line_percent, Some(Percent(160.0)));
+        assert_eq!(
+            paragraph.style.spacing.line_mode,
+            Some(LineSpacingMode::Percent)
+        );
         assert!(
             !bridged
                 .warnings
@@ -6815,6 +6825,10 @@ mod tests {
                     Some(crate::ir::Alignment::Justify)
                 );
                 assert_eq!(paragraph.style.spacing.line_pt, Some(LengthPt(12.0)));
+                assert_eq!(
+                    paragraph.style.spacing.line_mode,
+                    Some(LineSpacingMode::SpaceOnly)
+                );
             }
             other => panic!("expected paragraph block, got {other:?}"),
         }

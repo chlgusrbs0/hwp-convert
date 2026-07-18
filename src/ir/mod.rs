@@ -66,7 +66,8 @@ use serde::{Deserialize, Serialize};
 /// v69: added structured table-cell field names.
 /// v70: added paragraph section/page/column break metadata.
 /// v71: added structured hidden-comment blocks.
-pub const IR_VERSION: u16 = 71;
+/// v72: added paragraph line-spacing mode metadata.
+pub const IR_VERSION: u16 = 72;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -781,6 +782,28 @@ pub struct Spacing {
     pub after_pt: Option<LengthPt>,
     pub line_pt: Option<LengthPt>,
     pub line_percent: Option<Percent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_mode: Option<LineSpacingMode>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LineSpacingMode {
+    Percent,
+    Fixed,
+    SpaceOnly,
+    Minimum,
+}
+
+impl LineSpacingMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Percent => "percent",
+            Self::Fixed => "fixed",
+            Self::SpaceOnly => "space_only",
+            Self::Minimum => "minimum",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

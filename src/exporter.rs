@@ -1062,10 +1062,13 @@ fn render_html_list_item_open(
         .map(|marker| format!(" data-marker=\"{}\"", escape_html(marker)))
         .unwrap_or_default();
     let marker_metadata = render_html_list_marker_metadata(list);
+    let line_spacing_metadata = render_html_line_spacing_metadata(&paragraph.style);
     let style = render_html_style_attr(&render_html_paragraph_style(&paragraph.style));
     let content = render_html_inlines(&paragraph.inlines, resources, image_asset_prefix);
 
-    format!("<li{value}{marker_format}{marker}{marker_metadata}{style}>{content}")
+    format!(
+        "<li{value}{marker_format}{marker}{marker_metadata}{line_spacing_metadata}{style}>{content}"
+    )
 }
 
 fn render_html_list_marker_metadata(list: &ListInfo) -> String {
@@ -1232,19 +1235,32 @@ fn render_html_paragraph(
         .source_break_type
         .map(|raw| format!(" data-source-break-type=\"{raw}\""))
         .unwrap_or_default();
+    let line_spacing_metadata = render_html_line_spacing_metadata(&paragraph.style);
 
     match &paragraph.role {
         ParagraphRole::Title => {
-            format!("<h1{class}{break_metadata}{source_break_metadata}{style}>{content}</h1>\n")
+            format!(
+                "<h1{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{style}>{content}</h1>\n"
+            )
         }
         ParagraphRole::Heading { level } => {
             let level = (*level).clamp(1, 6);
             format!(
-                "<h{level}{class}{break_metadata}{source_break_metadata}{style}>{content}</h{level}>\n"
+                "<h{level}{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{style}>{content}</h{level}>\n"
             )
         }
-        _ => format!("<p{class}{break_metadata}{source_break_metadata}{style}>{content}</p>\n"),
+        _ => format!(
+            "<p{class}{break_metadata}{source_break_metadata}{line_spacing_metadata}{style}>{content}</p>\n"
+        ),
     }
+}
+
+fn render_html_line_spacing_metadata(style: &ParagraphStyle) -> String {
+    style
+        .spacing
+        .line_mode
+        .map(|mode| format!(" data-line-spacing-mode=\"{}\"", mode.as_str()))
+        .unwrap_or_default()
 }
 
 fn render_html_paragraph_role_class(role: &ParagraphRole) -> String {
@@ -3696,12 +3712,12 @@ mod tests {
         Alignment, BinaryResource, BinaryResourceKind, Border, BorderFillDiagonal, BorderStyle,
         CharacterOverlap, Chart, Color, ConversionWarning, DocumentControl, Equation, EquationKind,
         FillStyle, FormControlKind, HeaderFooter, HeaderFooterPlacement, IR_VERSION, Image,
-        ImageCrop, ImageResource, Indent, LengthPt, LengthPx, Link, ListInfo, ListKind,
-        ListMarkerLayout, MasterPage, Metadata, Note, NoteId, NoteKind, NoteStore, ObjectCaption,
-        Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource, ResourceId, ResourceStore,
-        RubyAnnotation, Section, Shape, ShapeKind, Spacing, StyleSheet, Table, TableCaption,
-        TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle, TextBorderFill,
-        TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
+        ImageCrop, ImageResource, Indent, LengthPt, LengthPx, LineSpacingMode, Link, ListInfo,
+        ListKind, ListMarkerLayout, MasterPage, Metadata, Note, NoteId, NoteKind, NoteStore,
+        ObjectCaption, Paragraph, ParagraphRole, ParagraphStyle, Percent, Resource, ResourceId,
+        ResourceStore, RubyAnnotation, Section, Shape, ShapeKind, Spacing, StyleSheet, Table,
+        TableCaption, TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle,
+        TextBorderFill, TextRun, TextShadow, TextStyle, UnknownInline, WarningCode,
     };
     use std::fs::File;
     use std::io::Write;
@@ -5949,6 +5965,7 @@ mod tests {
                     after_pt: Some(LengthPt(8.0)),
                     line_pt: Some(LengthPt(14.0)),
                     line_percent: None,
+                    line_mode: Some(LineSpacingMode::Minimum),
                 },
                 indent: Indent {
                     left_pt: Some(LengthPt(10.0)),
@@ -5972,6 +5989,7 @@ mod tests {
         assert!(html.contains("margin-right: 12pt"));
         assert!(html.contains("data-break-before=\"multi_column\""));
         assert!(html.contains("data-source-break-type=\"2\""));
+        assert!(html.contains("data-line-spacing-mode=\"minimum\""));
         assert!(html.contains("break-before: column"));
     }
 

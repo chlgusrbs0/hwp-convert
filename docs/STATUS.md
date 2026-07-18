@@ -61,6 +61,8 @@ HWP 문단의 구역·다단·쪽·단 나누기 종류와 원본 break byte를 
 3. chart는 bridge 기준 사실상 미지원이다.
 4. unknown element 처리는 제한적이다. 모든 unsupported 정보가 구조적으로 보존되지는 않는다.
 
+HWP 문단 줄 간격은 rHWP가 공개하는 `percent`, `fixed`, `space_only`, `minimum` 모드를 수치와 함께 IR에 보존한다. HTML은 모드를 `data-line-spacing-mode`로 남기며, CSS에서 같은 의미로 표현할 수 없는 `space_only`와 `minimum`은 고정 line-height로 근사하고 warning을 기록한다.
+
 ### 미지원 control warning 동작
 
 `src/bridge/rhwp.rs`는 parser가 노출하지만 아직 완전히 매핑하지 못한 known control에 대해 `ConversionWarning`을 기록한다. 현재 대상: auto number, new number, page number position, page hide, hidden comment, non-hyperlink fields. 이름 있는 bookmark는 `Anchor` inline으로 보존하고, 복구 가능한 command string이 있는 non-hyperlink field는 `UnknownInline` fallback text로 남긴다. 덧말과 글자 겹침은 전용 structured inline, 양식 개체는 structured `DocumentControl`, 숨은 설명글 문단은 structured `HiddenComment` block으로 보존한다. 복구 가능한 텍스트가 있는 그 밖의 unsupported control은 `UnknownBlock` fallback text로 남긴다.

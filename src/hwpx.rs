@@ -962,6 +962,9 @@ fn merge_paragraph_style(base: &mut ParagraphStyle, overlay: ParagraphStyle) {
         base.spacing.line_percent = overlay.spacing.line_percent;
         base.spacing.line_pt = None;
     }
+    if overlay.spacing.line_mode.is_some() {
+        base.spacing.line_mode = overlay.spacing.line_mode;
+    }
     if overlay.indent.left_pt.is_some() {
         base.indent.left_pt = overlay.indent.left_pt;
     }
