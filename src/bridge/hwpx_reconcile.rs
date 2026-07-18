@@ -114,6 +114,9 @@ fn supplement_list_markers(primary: &mut [Block], fallback: &[Block]) -> usize {
                     primary_list.number = fallback_list.number;
                 }
             }
+            Block::HiddenComment(comment) => {
+                recovered += supplement_list_markers(&mut comment.blocks, fallback);
+            }
             Block::Table(table) => {
                 if let Some(caption) = &mut table.caption {
                     recovered += supplement_list_markers(&mut caption.blocks, fallback);
@@ -159,6 +162,9 @@ fn collect_matching_list_info<'a>(
                         .is_some_and(|list| &list.kind == kind && list.level == level) =>
             {
                 matches.push(paragraph.list.as_ref().expect("list checked above"));
+            }
+            Block::HiddenComment(comment) => {
+                collect_matching_list_info(&comment.blocks, text, kind, level, matches);
             }
             Block::Table(table) => {
                 if let Some(caption) = &table.caption {
@@ -228,6 +234,7 @@ struct SemanticCoverage {
     equations: usize,
     shapes: usize,
     charts: usize,
+    hidden_comments: usize,
     unknown_blocks: usize,
     links: usize,
     anchors: usize,
@@ -288,6 +295,10 @@ impl SemanticCoverage {
             Block::Paragraph(paragraph) => self.count_paragraph(paragraph),
             Block::ColumnLayout(_) => {}
             Block::DocumentControl(_) => {}
+            Block::HiddenComment(comment) => {
+                self.hidden_comments += 1;
+                self.count_blocks(&comment.blocks);
+            }
             Block::Table(table) => {
                 self.tables += 1;
                 self.styled_tables += usize::from(table.style != Default::default());
@@ -374,6 +385,7 @@ impl SemanticCoverage {
             && self.equations == 0
             && self.shapes == 0
             && self.charts == 0
+            && self.hidden_comments == 0
             && self.unknown_blocks == 0
             && self.links == 0
             && self.anchors == 0
@@ -396,7 +408,7 @@ impl SemanticCoverage {
     }
 
     fn additional_labels(&self, other: &Self) -> Vec<&'static str> {
-        const LABELS: [Option<&str>; 30] = [
+        const LABELS: [Option<&str>; 31] = [
             Some("sections"),
             Some("paragraphs"),
             Some("styled paragraphs"),
@@ -415,6 +427,7 @@ impl SemanticCoverage {
             Some("equations"),
             Some("shapes"),
             Some("charts"),
+            Some("hidden comments"),
             None,
             Some("links"),
             Some("anchors"),
@@ -437,7 +450,7 @@ impl SemanticCoverage {
             .collect()
     }
 
-    fn values(&self) -> [usize; 30] {
+    fn values(&self) -> [usize; 31] {
         [
             self.sections,
             self.paragraphs,
@@ -457,6 +470,7 @@ impl SemanticCoverage {
             self.equations,
             self.shapes,
             self.charts,
+            self.hidden_comments,
             self.unknown_blocks,
             self.links,
             self.anchors,
@@ -504,6 +518,7 @@ fn collect_blocks_text(blocks: &[Block], chunks: &mut Vec<String>) {
             Block::Paragraph(paragraph) => collect_inlines_text(&paragraph.inlines, chunks),
             Block::ColumnLayout(_) => {}
             Block::DocumentControl(control) => push_text(Some(control.fallback_text()), chunks),
+            Block::HiddenComment(comment) => collect_blocks_text(&comment.blocks, chunks),
             Block::Table(table) => {
                 let caption_before = table.caption.as_ref().is_some_and(|caption| {
                     matches!(

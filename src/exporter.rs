@@ -354,6 +354,9 @@ fn collect_block_unknown_warnings(blocks: &[Block], warnings: &mut Vec<String>) 
             Block::Paragraph(paragraph) => {
                 collect_inline_unknown_warnings(&paragraph.inlines, warnings);
             }
+            Block::HiddenComment(comment) => {
+                collect_block_unknown_warnings(&comment.blocks, warnings);
+            }
             Block::Table(table) => {
                 if let Some(caption) = &table.caption {
                     collect_block_unknown_warnings(&caption.blocks, warnings);
@@ -1127,6 +1130,12 @@ fn render_html_block(block: &Block, resources: &ResourceStore, image_asset_prefi
         }
         Block::ColumnLayout(_) => String::new(),
         Block::DocumentControl(control) => render_html_document_control(control),
+        Block::HiddenComment(comment) => {
+            let content = render_html_blocks(&comment.blocks, resources, image_asset_prefix);
+            format!(
+                "<aside class=\"hidden-comment\" data-kind=\"hidden-comment\"><p class=\"hidden-comment-label\">[hidden comment]</p>\n{content}</aside>\n"
+            )
+        }
         Block::Table(table) => render_html_table(table, resources, image_asset_prefix),
         Block::Image(image) => render_html_image(image, resources, image_asset_prefix),
         Block::Equation(equation) => render_html_equation(equation),
@@ -2837,6 +2846,20 @@ fn render_markdown_block(
         Block::Paragraph(paragraph) => render_markdown_paragraph(paragraph),
         Block::ColumnLayout(_) => String::new(),
         Block::DocumentControl(control) => render_markdown_text(control.fallback_text()),
+        Block::HiddenComment(comment) => {
+            let content = comment
+                .blocks
+                .iter()
+                .map(|block| render_markdown_block(block, resources, image_asset_prefix))
+                .filter(|content| !content.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            if content.is_empty() {
+                render_markdown_text("[hidden comment]")
+            } else {
+                format!("{}\n\n{content}", render_markdown_text("[hidden comment]"))
+            }
+        }
         Block::Table(table) => render_markdown_table(table, resources, image_asset_prefix),
         Block::Image(image) => render_markdown_image(image, resources, image_asset_prefix),
         Block::Equation(equation) => render_markdown_equation(equation),
@@ -4379,6 +4402,37 @@ mod tests {
         assert!(content.contains("\"role\": \"body\""));
         assert!(content.contains("first paragraph"));
         assert!(content.contains("second paragraph"));
+    }
+
+    #[test]
+    fn renders_structured_hidden_comment_content_across_semantic_exports() {
+        let document = document_with_blocks(vec![Block::HiddenComment(crate::ir::HiddenComment {
+            blocks: vec![Block::Paragraph(Paragraph {
+                role: ParagraphRole::Body,
+                inlines: vec![Inline::Link(Link {
+                    url: "https://example.com/?a=1&b=2".to_string(),
+                    title: None,
+                    inlines: vec![Inline::Text(TextRun {
+                        text: "Read more".to_string(),
+                        style: TextStyle::default(),
+                        style_ref: None,
+                    })],
+                })],
+                style: ParagraphStyle::default(),
+                style_ref: None,
+                list: None,
+            })],
+        })]);
+
+        let html = render_html_document(Path::new("sample.hwp"), &document);
+        let markdown = render_markdown_document(&document);
+        let text = plain_text::to_plain_text(&document);
+
+        assert!(html.contains("<aside class=\"hidden-comment\""));
+        assert!(html.contains("href=\"https://example.com/?a=1&amp;b=2\""));
+        assert!(html.contains(">Read more</a>"));
+        assert!(markdown.contains("[Read more](https://example.com/?a=1&b=2)"));
+        assert_eq!(text, "[hidden comment]\nRead more");
     }
 
     #[test]

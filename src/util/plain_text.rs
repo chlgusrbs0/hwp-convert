@@ -68,12 +68,22 @@ pub(crate) fn block_to_plain_text(block: &Block) -> String {
         Block::Paragraph(paragraph) => paragraph_to_plain_text(paragraph),
         Block::ColumnLayout(_) => String::new(),
         Block::DocumentControl(control) => control.fallback_text().to_string(),
+        Block::HiddenComment(comment) => hidden_comment_to_plain_text(comment),
         Block::Table(table) => table_to_plain_text(table),
         Block::Image(image) => image_to_plain_text(image),
         Block::Equation(equation) => equation_to_plain_text(equation),
         Block::Shape(shape) => shape_to_plain_text(shape),
         Block::Chart(chart) => chart_to_plain_text(chart),
         Block::Unknown(unknown) => unknown_block_to_plain_text(unknown),
+    }
+}
+
+fn hidden_comment_to_plain_text(comment: &crate::ir::HiddenComment) -> String {
+    let content = blocks_to_plain_text(&comment.blocks);
+    if content.is_empty() {
+        "[hidden comment]".to_string()
+    } else {
+        format!("[hidden comment]\n{content}")
     }
 }
 

@@ -1421,6 +1421,7 @@ struct DocumentStats {
     equations: usize,
     shapes: usize,
     charts: usize,
+    hidden_comments: usize,
     unknown_blocks: usize,
     text_runs: usize,
     styled_text_runs: usize,
@@ -1478,6 +1479,7 @@ impl DocumentStats {
             || self.equations > 0
             || self.shapes > 0
             || self.charts > 0
+            || self.hidden_comments > 0
             || self.unknown_blocks > 0
             || self.notes > 0
             || self.headers > 0
@@ -1495,6 +1497,10 @@ impl DocumentStats {
             Block::Paragraph(paragraph) => self.count_paragraph(paragraph),
             Block::ColumnLayout(_) => {}
             Block::DocumentControl(_) => {}
+            Block::HiddenComment(comment) => {
+                self.hidden_comments += 1;
+                self.count_blocks(&comment.blocks);
+            }
             Block::Table(table) => {
                 self.tables += 1;
                 self.table_rows += table.rows.len();

@@ -1395,26 +1395,12 @@ impl<'a> BridgeContext<'a> {
 
     fn map_hidden_comment_block(&mut self, comment: &RhwpHiddenComment) -> Option<Block> {
         let blocks = self.map_blocks_from_paragraphs(&comment.paragraphs, 0);
-        let content = crate::util::plain_text::blocks_to_plain_text(&blocks);
-        let fallback_text = if content.is_empty() {
-            "[hidden comment]".to_string()
-        } else {
-            format!("[hidden comment]\n{content}")
-        };
 
         self.add_warning_once(
-            "rhwp exposed hidden comment paragraphs; hwp-convert preserved them as unknown block fallback text.",
+            "rhwp hidden comment paragraphs were preserved in structured HiddenComment IR; semantic exporters linearize them with an explicit label because hidden page placement is not reproduced.",
         );
 
-        Some(Block::Unknown(crate::ir::UnknownBlock {
-            kind: "hidden_comment".to_string(),
-            fallback_text: Some(fallback_text),
-            message: Some(
-                "Hidden comment preserved as fallback text because Document IR does not yet model comments."
-                    .to_string(),
-            ),
-            source: Some("rhwp".to_string()),
-        }))
+        Some(Block::HiddenComment(crate::ir::HiddenComment { blocks }))
     }
 
     fn map_table(&mut self, table: &RhwpTable) -> Table {
@@ -7694,7 +7680,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_hidden_comment_text_as_unknown_block() {
+    fn preserves_hidden_comment_paragraphs_as_structured_block() {
         let document = RhwpDocument {
             sections: vec![RhwpSection {
                 paragraphs: vec![RhwpParagraph {
@@ -7715,14 +7701,18 @@ mod tests {
         let bridged = BridgeContext::new(&document).into_document();
         let blocks = &bridged.sections[0].blocks;
 
-        assert!(
-            matches!(&blocks[1], Block::Unknown(unknown) if unknown.kind == "hidden_comment" && unknown.fallback_text.as_deref() == Some("[hidden comment]\nhidden note"))
+        let Block::HiddenComment(comment) = &blocks[1] else {
+            panic!("expected structured hidden comment");
+        };
+        assert_eq!(
+            crate::util::plain_text::blocks_to_plain_text(&comment.blocks),
+            "hidden note"
         );
         assert!(
             bridged
                 .warnings
                 .iter()
-                .any(|warning| { warning.message.contains("hidden comment paragraphs") })
+                .any(|warning| warning.message.contains("HiddenComment IR"))
         );
     }
 

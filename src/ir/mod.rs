@@ -65,7 +65,8 @@ use serde::{Deserialize, Serialize};
 /// v68: added structured form-object controls.
 /// v69: added structured table-cell field names.
 /// v70: added paragraph section/page/column break metadata.
-pub const IR_VERSION: u16 = 70;
+/// v71: added structured hidden-comment blocks.
+pub const IR_VERSION: u16 = 71;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -281,12 +282,18 @@ pub enum Block {
     Paragraph(Paragraph),
     ColumnLayout(ColumnLayout),
     DocumentControl(DocumentControl),
+    HiddenComment(HiddenComment),
     Table(Table),
     Image(Image),
     Equation(Equation),
     Shape(Shape),
     Chart(Chart),
     Unknown(UnknownBlock),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct HiddenComment {
+    pub blocks: Vec<Block>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
