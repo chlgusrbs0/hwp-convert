@@ -72,7 +72,8 @@ use serde::{Deserialize, Serialize};
 /// v75: added structured shape line-connector metadata.
 /// v76: added shape text-box maximum-width metadata.
 /// v77: added structured paragraph border-fill metadata.
-pub const IR_VERSION: u16 = 77;
+/// v78: added structured image source-transform metadata.
+pub const IR_VERSION: u16 = 78;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1230,6 +1231,8 @@ pub struct Image {
     pub current_width: Option<LengthPx>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_height: Option<LengthPx>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<ShapeTransform>,
     /// Uniform border around the image, if any.
     #[serde(default)]
     pub border: Option<Border>,

@@ -337,6 +337,7 @@ P2: `equation_shape_chart`, `kitchen_sink`.
 - HWP 도형 연결선 IR 확장: `IR_VERSION` 74 → 75. rHWP 공개 `LineShape`와 `ConnectorData`의 시작 방향, 직선·꺾은선·곡선 및 화살표 조합 9종, 시작·끝 대상 ID/인덱스와 제어점을 `ShapeLineMetadata`에 보존한다. HTML은 구조를 `data-*`로 출력하고, semantic exporter가 페이지 좌표계에서 연결 대상을 임의로 재배치하지 않도록 warning을 유지한다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - HWP 도형 텍스트 상자 최대 폭 IR 확장: `IR_VERSION` 75 → 76. rHWP 공개 `TextBox.max_width`를 `Shape.text_box_max_width`에 보존하고 HTML `max-width`로 근사한다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - HWP 문단 BorderFill IR 확장: `IR_VERSION` 76 → 77. rHWP 공개 `ParaShape.border_fill_id`가 참조하는 원본 ID, 단색·gradient·image 채우기와 대각선 정보를 문단 스타일에 보존한다. HTML 문단과 목록 항목은 기존 공용 fill 렌더링 경로와 `data-*` 메타데이터를 사용하며, 기존 단색 `background_color`는 호환성을 위해 유지한다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
+- HWP 이미지 원본 변환 IR 확장: `IR_VERSION` 77 → 78. rHWP 공개 `Picture.shape_attr`의 원본·현재 크기, 그룹 내부 오프셋, 회전 중심과 합성 affine 행렬을 공용 `ShapeTransform`으로 보존한다. 기존 이미지 크기 필드는 호환성을 위해 유지하고, HTML은 전체 페이지 좌표 변환을 임의 적용하지 않은 채 `data-*` 메타데이터를 출력한다. 동결된 HWPX 폴백에는 신규 해석을 추가하지 않는다.
 - raw HWP record, unknown control bytes, HWPX XML을 직접 해석한 독자 기능 구현을 금지했다.
 - `src/hwpx.rs`는 즉시 삭제하지 않되 legacy 호환성 안전망으로 동결하고, 회귀·보안·기존 silent-drop 수정만 허용하기로 결정했다.
 - 신규 정확도 작업은 rHWP 공개 surface를 `mapped`, `normalized`, `warning/unknown`, `render-only`, `unmapped`, `upstream-needed`로 분류한 뒤 진행한다.

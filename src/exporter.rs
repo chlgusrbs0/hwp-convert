@@ -13,9 +13,9 @@ use crate::ir::{
     Chart, Color, Document, Equation, EquationKind, FillStyle, HeaderFooter, HeaderFooterPlacement,
     Image, ImageFillMode, Inline, Link, ListInfo, ListKind, MasterPage, Note, NoteId, NoteKind,
     ObjectCaption, Paragraph, ParagraphBreakKind, ParagraphRole, ParagraphStyle, Resource,
-    ResourceId, ResourceStore, RubyAnnotation, Section, Shape, ShapeGeometry, ShapeShadow, Table,
-    TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle, TableZone,
-    TextDecorationStyle, TextRun, TextShadow, TextStyle, UnknownBlock, UnknownInline,
+    ResourceId, ResourceStore, RubyAnnotation, Section, Shape, ShapeGeometry, ShapeShadow,
+    ShapeTransform, Table, TableCell, TableCellStyle, TableCellTextDirection, TableRow, TableStyle,
+    TableZone, TextDecorationStyle, TextRun, TextShadow, TextStyle, UnknownBlock, UnknownInline,
     VerticalAlign,
 };
 use crate::util::plain_text;
@@ -1641,7 +1641,11 @@ fn render_html_shape_element(
 }
 
 fn render_html_shape_transform_metadata(shape: &Shape) -> String {
-    let Some(transform) = &shape.transform else {
+    render_html_object_transform_metadata(shape.transform.as_ref())
+}
+
+fn render_html_object_transform_metadata(transform: Option<&ShapeTransform>) -> String {
+    let Some(transform) = transform else {
         return String::new();
     };
     let mut attributes = Vec::new();
@@ -2528,10 +2532,12 @@ fn render_html_image(image: &Image, resources: &ResourceStore, image_asset_prefi
     ) {
         declarations.push(format!("transform: {transform}"));
     }
-    let tag = render_html_cropped_image(image, &src, &alt, &declarations).unwrap_or_else(|| {
-        let style = render_html_style_attr(&declarations.join("; "));
-        format!("<img src=\"{src}\" alt=\"{alt}\"{width}{height}{style} />")
-    });
+    let transform_metadata = render_html_object_transform_metadata(image.transform.as_ref());
+    let tag = render_html_cropped_image(image, &src, &alt, &declarations, &transform_metadata)
+        .unwrap_or_else(|| {
+            let style = render_html_style_attr(&declarations.join("; "));
+            format!("<img src=\"{src}\" alt=\"{alt}\"{width}{height}{transform_metadata}{style} />")
+        });
 
     if let Some(caption) = &image.caption_content {
         return render_html_object_caption(
@@ -2659,6 +2665,7 @@ fn render_html_cropped_image(
     src: &str,
     alt: &str,
     declarations: &[String],
+    transform_metadata: &str,
 ) -> Option<String> {
     let crop = image.crop?;
     let display_width = image.width?.0;
@@ -2698,7 +2705,7 @@ fn render_html_cropped_image(
     outer_declarations.push("display: inline-block".to_string());
     let outer_style = render_html_style_attr(&outer_declarations.join("; "));
     Some(format!(
-        "<span{outer_style}><span style=\"position: relative; display: inline-block; overflow: hidden; width: {display_width}px; height: {display_height}px\"><img src=\"{src}\" alt=\"{alt}\" style=\"position: absolute; max-width: none; left: {}px; top: {}px; width: {}px; height: {}px\" /></span></span>",
+        "<span{transform_metadata}{outer_style}><span style=\"position: relative; display: inline-block; overflow: hidden; width: {display_width}px; height: {display_height}px\"><img src=\"{src}\" alt=\"{alt}\" style=\"position: absolute; max-width: none; left: {}px; top: {}px; width: {}px; height: {}px\" /></span></span>",
         -crop.left.0 * scale_x,
         -crop.top.0 * scale_y,
         source_width * scale_x,
@@ -5849,6 +5856,26 @@ mod tests {
             rotation_degrees: Some(90.0),
             flip_horizontal: Some(true),
             flip_vertical: Some(true),
+            transform: Some(ShapeTransform {
+                original_width: Some(LengthPx(400.0)),
+                original_height: Some(LengthPx(200.0)),
+                current_width: Some(LengthPx(300.0)),
+                current_height: Some(LengthPx(150.0)),
+                group_offset_x: Some(LengthPx(1.0)),
+                group_offset_y: Some(LengthPx(-2.0)),
+                rotation_center: Some(ShapePoint {
+                    x: LengthPx(200.0),
+                    y: LengthPx(100.0),
+                }),
+                affine: Some(AffineTransform {
+                    scale_x: 2.0,
+                    shear_x: 0.25,
+                    translate_x: LengthPx(4.0),
+                    shear_y: -0.25,
+                    scale_y: 0.5,
+                    translate_y: LengthPx(5.0),
+                }),
+            }),
             padding_top: Some(LengthPx(1.0)),
             padding_right: Some(LengthPx(2.0)),
             padding_bottom: Some(LengthPx(3.0)),
@@ -5862,6 +5889,11 @@ mod tests {
         assert!(html.contains("filter: grayscale(100%)"));
         assert!(html.contains("opacity: 0.5"));
         assert!(html.contains("transform: rotate(90deg) scaleX(-1) scaleY(-1)"));
+        assert!(html.contains("data-original-width-px=\"400\""));
+        assert!(html.contains("data-group-offset-y-px=\"-2\""));
+        assert!(html.contains("data-rotation-center-x-px=\"200\""));
+        assert!(html.contains("data-affine-shear-x=\"0.25\""));
+        assert!(html.contains("data-affine-translate-y-px=\"5\""));
         assert!(html.contains("padding-top: 1px"));
         assert!(html.contains("padding-right: 2px"));
         assert!(html.contains("padding-bottom: 3px"));

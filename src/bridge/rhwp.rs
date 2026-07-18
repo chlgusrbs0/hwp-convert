@@ -1684,6 +1684,17 @@ impl<'a> BridgeContext<'a> {
 
     fn map_picture_block(&mut self, picture: &Picture) -> Block {
         self.warn_unsupported_picture_transform(picture);
+        let transform = self.map_shape_transform(&picture.shape_attr);
+        if transform.as_ref().is_some_and(|transform| {
+            transform.group_offset_x.is_some()
+                || transform.group_offset_y.is_some()
+                || transform.rotation_center.is_some()
+                || transform.affine.is_some()
+        }) {
+            self.add_warning_once(
+                "rhwp picture source transform and affine matrix were preserved in Image IR and HTML metadata; semantic exporters do not apply the full page-coordinate transform.",
+            );
+        }
         let caption_content = picture.caption.as_ref().map(|caption| ObjectCaption {
             blocks: self.map_caption_blocks(caption),
             placement: map_caption_placement(caption.direction),
@@ -1717,6 +1728,7 @@ impl<'a> BridgeContext<'a> {
                 original_height: hwp_units_to_px_option(picture.shape_attr.original_height),
                 current_width: hwp_units_to_px_option(picture.shape_attr.current_width),
                 current_height: hwp_units_to_px_option(picture.shape_attr.current_height),
+                transform,
                 border: map_image_border(picture),
                 grayscale: matches!(
                     picture.image_attr.effect,
@@ -1790,14 +1802,6 @@ impl<'a> BridgeContext<'a> {
             details.push(format!(
                 "invalid_crop={}/{}/{}/{}",
                 picture.crop.left, picture.crop.top, picture.crop.right, picture.crop.bottom
-            ));
-        }
-        if picture.shape_attr.render_b.abs() > f64::EPSILON
-            || picture.shape_attr.render_c.abs() > f64::EPSILON
-        {
-            details.push(format!(
-                "affine_shear_or_rotation={}/{}",
-                picture.shape_attr.render_b, picture.shape_attr.render_c
             ));
         }
         if map_picture_placement(picture).is_some() {
@@ -5813,12 +5817,19 @@ mod tests {
                 bottom: 40,
             },
             shape_attr: rhwp::model::shape::ShapeComponentAttr {
+                offset_x: 75,
+                offset_y: -150,
                 horz_flip: true,
                 rotation_angle: 90,
+                rotation_center: rhwp::model::Point { x: 15000, y: 7500 },
                 original_width: 30000,
                 original_height: 15000,
                 current_width: 22500,
                 current_height: 11250,
+                render_tx: 300.0,
+                render_ty: 375.0,
+                render_sx: 2.0,
+                render_sy: 0.5,
                 render_b: 0.25,
                 render_c: -0.25,
                 ..Default::default()
@@ -5875,6 +5886,29 @@ mod tests {
         assert_eq!(image.current_width, Some(LengthPx(300.0)));
         assert_eq!(image.current_height, Some(LengthPx(150.0)));
         assert_eq!(
+            image.transform,
+            Some(ShapeTransform {
+                original_width: Some(LengthPx(400.0)),
+                original_height: Some(LengthPx(200.0)),
+                current_width: Some(LengthPx(300.0)),
+                current_height: Some(LengthPx(150.0)),
+                group_offset_x: Some(LengthPx(1.0)),
+                group_offset_y: Some(LengthPx(-2.0)),
+                rotation_center: Some(ShapePoint {
+                    x: LengthPx(200.0),
+                    y: LengthPx(100.0),
+                }),
+                affine: Some(AffineTransform {
+                    scale_x: 2.0,
+                    shear_x: 0.25,
+                    translate_x: LengthPx(4.0),
+                    shear_y: -0.25,
+                    scale_y: 0.5,
+                    translate_y: LengthPx(5.0),
+                }),
+            })
+        );
+        assert_eq!(
             image.placement,
             Some(ImagePlacement {
                 treat_as_character: false,
@@ -5924,10 +5958,13 @@ mod tests {
                 && warning.message.contains("linearize images")
         }));
         assert!(bridged.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("picture source transform and affine matrix")
+                && warning.message.contains("preserved in Image IR")
+        }));
+        assert!(bridged.warnings.iter().any(|warning| {
             warning.message.contains("picture visual properties")
-                && warning
-                    .message
-                    .contains("affine_shear_or_rotation=0.25/-0.25")
                 && warning.message.contains("border_opacity=128")
                 && warning.message.contains("negative_padding=-10/20/30/40")
         }));

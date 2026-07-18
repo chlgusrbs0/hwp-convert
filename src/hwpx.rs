@@ -3429,6 +3429,7 @@ fn extract_hwpx_image_from_pic_xml(
             "current height",
             context,
         ),
+        transform: None,
         border: hwpx_object_border(pic_xml, "picture", context),
         grayscale,
         effect,
